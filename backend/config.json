@@ -1,0 +1,42 @@
+{
+  "listeners": [
+    {
+      "address": "0.0.0.0",
+      "port": 8080,
+      "https": false
+    }
+  ],
+  "db_clients": [
+    {
+      "name": "default",
+      "rdbms": "mysql",
+      "host": "127.0.0.1",
+      "port": 3306,
+      "dbname": "annotated_maps",
+      "user": "annmaps_user",
+      "passwd": "CHANGE_ME",
+      "connection_number": 10,
+      "auto_batch": false
+    }
+  ],
+  "app": {
+    "threads_num": 4,
+    "enable_session": false,
+    "pipelining": false,
+    "log": {
+      "log_path": "./logs",
+      "log_size_limit": 104857600,
+      "log_level": "DEBUG"
+    }
+  },
+  "jwt": {
+    "secret": "CHANGE_ME_USE_A_LONG_RANDOM_STRING",
+    "issuer": "annotated-maps",
+    "access_token_ttl_seconds": 3600,
+    "refresh_token_ttl_seconds": 604800
+  },
+  "upload": {
+    "upload_path": "./uploads",
+    "max_size_bytes": 10485760
+  }
+}

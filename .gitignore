@@ -1,0 +1,35 @@
+# ─── Frontend ─────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.local
+frontend/.env.*.local
+
+# ─── Backend ──────────────────────────────────────────────────────────────────
+backend/build/
+backend/logs/
+backend/uploads/
+# Local config has secrets — never commit it
+# Commit config.json as a template only (secrets are placeholders)
+
+# ─── Database ─────────────────────────────────────────────────────────────────
+*.sql.bak
+
+# ─── Docker ───────────────────────────────────────────────────────────────────
+.docker/
+
+# ─── OS / Editor ──────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Secrets ──────────────────────────────────────────────────────────────────
+.env
+*.pem
+*.key
+secrets/
