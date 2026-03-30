@@ -39,5 +39,9 @@
     "upload_path": "./uploads",
     "max_size_bytes": 10485760
   },
+  "rate_limit": {
+    "max_requests": 10,
+    "window_seconds": 60
+  },
   "frontend_url": "http://localhost:5173"
 }

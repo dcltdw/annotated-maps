@@ -13,9 +13,9 @@ class AuthController : public drogon::HttpController<AuthController> {
 public:
     METHOD_LIST_BEGIN
         ADD_METHOD_TO(AuthController::registerUser,
-                      "/api/v1/auth/register", drogon::Post);
+                      "/api/v1/auth/register", drogon::Post, "RateLimitFilter");
         ADD_METHOD_TO(AuthController::login,
-                      "/api/v1/auth/login",    drogon::Post);
+                      "/api/v1/auth/login",    drogon::Post, "RateLimitFilter");
         ADD_METHOD_TO(AuthController::refresh,
                       "/api/v1/auth/refresh",  drogon::Post, "JwtFilter");
         ADD_METHOD_TO(AuthController::logout,

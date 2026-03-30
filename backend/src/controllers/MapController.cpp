@@ -1,4 +1,5 @@
 #include "MapController.h"
+#include "AuditLog.h"
 #include <drogon/drogon.h>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
@@ -380,7 +381,7 @@ void MapController::setPermission(
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
-        [callback, id, tenantId, callerId, callerOrg, targetId,
+        [callback, req, id, tenantId, callerId, callerOrg, targetId,
          isPublic, canView, canEdit](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -394,7 +395,7 @@ void MapController::setPermission(
                 auto dbCheck = drogon::app().getDbClient();
                 dbCheck->execSqlAsync(
                     "SELECT id FROM users WHERE id=? AND org_id=?",
-                    [callback, id, targetId, canView, canEdit]
+                    [callback, req, id, tenantId, callerId, targetId, canView, canEdit]
                     (const drogon::orm::Result& rc) {
                         if (rc.empty()) {
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -409,7 +410,12 @@ void MapController::setPermission(
                             "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
                             "VALUES (?,?,?,?) "
                             "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
-                            [callback](const drogon::orm::Result&) {
+                            [callback, req, id, tenantId, callerId, targetId, canView, canEdit]
+                            (const drogon::orm::Result&) {
+                                Json::Value detail;
+                                detail["mapId"] = id; detail["targetUserId"] = targetId;
+                                detail["canView"] = canView; detail["canEdit"] = canEdit;
+                                AuditLog::record("permission_change", req, callerId, targetId, tenantId, detail);
                                 Json::Value v; v["updated"] = true;
                                 callback(drogon::HttpResponse::newHttpJsonResponse(v));
                             },
@@ -434,7 +440,12 @@ void MapController::setPermission(
                     "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
                     "VALUES (?, NULL, ?, ?) "
                     "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
-                    [callback](const drogon::orm::Result&) {
+                    [callback, req, id, tenantId, callerId, canView, canEdit]
+                    (const drogon::orm::Result&) {
+                        Json::Value detail;
+                        detail["mapId"] = id; detail["public"] = true;
+                        detail["canView"] = canView; detail["canEdit"] = canEdit;
+                        AuditLog::record("permission_change", req, callerId, 0, tenantId, detail);
                         Json::Value v; v["updated"] = true;
                         callback(drogon::HttpResponse::newHttpJsonResponse(v));
                     },

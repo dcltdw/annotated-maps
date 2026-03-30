@@ -20,6 +20,10 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
 
     const std::string token = authHeader.substr(7);
 
+    int userId = 0;
+    std::string username;
+    int orgId = 0;
+
     try {
         const auto& config = drogon::app().getCustomConfig();
         const std::string secret = config["jwt"]["secret"].asString();
@@ -32,21 +36,13 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
 
         verifier.verify(decoded);
 
-        req->getAttributes()->insert("userId",
-            std::stoi(decoded.get_payload_claim("sub").as_string()));
-        req->getAttributes()->insert("username",
-            decoded.get_payload_claim("username").as_string());
+        userId   = std::stoi(decoded.get_payload_claim("sub").as_string());
+        username = decoded.get_payload_claim("username").as_string();
 
-        // Inject orgId if present (SSO and multi-tenant users)
         try {
-            req->getAttributes()->insert("orgId",
-                std::stoi(decoded.get_payload_claim("orgId").as_string()));
-        } catch (...) {
-            // Personal/legacy tokens without orgId — default to 0
-            req->getAttributes()->insert("orgId", 0);
-        }
+            orgId = std::stoi(decoded.get_payload_claim("orgId").as_string());
+        } catch (...) {}
 
-        nextCb();
     } catch (const std::exception&) {
         Json::Value body;
         body["error"]   = "unauthorized";
@@ -54,5 +50,40 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
         auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
         resp->setStatusCode(drogon::k401Unauthorized);
         failCb(resp);
+        return;
     }
+
+    // Verify the user still exists and is active in the database.
+    // This closes the gap where deleted/suspended users retain access
+    // until their JWT expires.
+    auto db = drogon::app().getDbClient();
+    db->execSqlAsync(
+        "SELECT is_active FROM users WHERE id=? LIMIT 1",
+        [req, userId, username, orgId,
+         failCb = std::move(failCb),
+         nextCb = std::move(nextCb)](const drogon::orm::Result& r) mutable {
+            if (r.empty() || !r[0]["is_active"].as<bool>()) {
+                Json::Value body;
+                body["error"]   = "unauthorized";
+                body["message"] = "Account is deactivated or does not exist";
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+                resp->setStatusCode(drogon::k401Unauthorized);
+                failCb(resp);
+                return;
+            }
+
+            req->getAttributes()->insert("userId",   userId);
+            req->getAttributes()->insert("username", username);
+            req->getAttributes()->insert("orgId",    orgId);
+            nextCb();
+        },
+        [failCb = std::move(failCb)](const drogon::orm::DrogonDbException&) mutable {
+            Json::Value body;
+            body["error"]   = "unauthorized";
+            body["message"] = "Failed to verify account status";
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+            resp->setStatusCode(drogon::k500InternalServerError);
+            failCb(resp);
+        },
+        userId);
 }

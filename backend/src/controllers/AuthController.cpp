@@ -1,4 +1,5 @@
 #include "AuthController.h"
+#include "AuditLog.h"
 #include <drogon/drogon.h>
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
@@ -87,14 +88,14 @@ void AuthController::registerUser(
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "INSERT INTO organizations (name, slug) VALUES (?,?)",
-        [callback, username, email, pwHash, this](const drogon::orm::Result& r) {
+        [callback, req, username, email, pwHash, this](const drogon::orm::Result& r) {
             int orgId = static_cast<int>(r.insertId());
 
             // Step 2: Create personal tenant
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
                 "INSERT INTO tenants (org_id, name, slug) VALUES (?,?,?)",
-                [callback, username, email, pwHash, orgId, this]
+                [callback, req, username, email, pwHash, orgId, this]
                 (const drogon::orm::Result& r2) {
                     int tenantId = static_cast<int>(r2.insertId());
 
@@ -103,7 +104,7 @@ void AuthController::registerUser(
                     db3->execSqlAsync(
                         "INSERT INTO users (username, email, password_hash, org_id) "
                         "VALUES (?,?,?,?)",
-                        [callback, username, email, orgId, tenantId, this]
+                        [callback, req, username, email, orgId, tenantId, this]
                         (const drogon::orm::Result& r3) {
                             int newId = static_cast<int>(r3.insertId());
 
@@ -112,8 +113,9 @@ void AuthController::registerUser(
                             db4->execSqlAsync(
                                 "INSERT INTO tenant_members (tenant_id, user_id, role) "
                                 "VALUES (?,?,?)",
-                                [callback, newId, username, email, orgId, tenantId, this]
+                                [callback, req, newId, username, email, orgId, tenantId, this]
                                 (const drogon::orm::Result&) {
+                                    AuditLog::record("register", req, newId);
                                     std::string token = issueToken(newId, username, orgId);
 
                                     Json::Value tenant;
@@ -204,8 +206,10 @@ void AuthController::login(
         "SELECT id, username, email, password_hash, "
         "       COALESCE(org_id, 0) AS org_id "
         "FROM users WHERE email=? LIMIT 1",
-        [callback, password, this](const drogon::orm::Result& r) {
+        [callback, req, email, password, this](const drogon::orm::Result& r) {
             if (r.empty()) {
+                Json::Value detail; detail["email"] = email;
+                AuditLog::record("login_failure", req, 0, 0, 0, detail);
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
                     errorJson("unauthorized", "Invalid email or password"));
                 resp->setStatusCode(drogon::k401Unauthorized);
@@ -217,6 +221,8 @@ void AuthController::login(
                 ? "" : r[0]["password_hash"].as<std::string>();
 
             if (!verifyPassword(password, storedHash)) {
+                Json::Value detail; detail["email"] = email;
+                AuditLog::record("login_failure", req, r[0]["id"].as<int>(), 0, 0, detail);
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
                     errorJson("unauthorized", "Invalid email or password"));
                 resp->setStatusCode(drogon::k401Unauthorized);
@@ -235,8 +241,9 @@ void AuthController::login(
                 "FROM tenant_members tm "
                 "JOIN tenants t ON t.id = tm.tenant_id "
                 "WHERE tm.user_id = ? ORDER BY tm.created_at ASC",
-                [this, callback, userId, username, userEmail, orgId]
+                [this, callback, req, userId, username, userEmail, orgId]
                 (const drogon::orm::Result& r2) {
+                    AuditLog::record("login_success", req, userId);
                     std::string token = issueToken(userId, username, orgId);
 
                     Json::Value tenants(Json::arrayValue);
