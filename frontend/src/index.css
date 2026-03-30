@@ -2,8 +2,12 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --color-primary: #2563eb;
-  --color-primary-dark: #1d4ed8;
+  /* Tenant branding overrides (set dynamically by useBranding hook) */
+  --brand-primary: #2563eb;
+  --brand-accent: #1d4ed8;
+
+  --color-primary: var(--brand-primary);
+  --color-primary-dark: var(--brand-accent);
   --color-bg: #f8fafc;
   --color-surface: #ffffff;
   --color-border: #e2e8f0;

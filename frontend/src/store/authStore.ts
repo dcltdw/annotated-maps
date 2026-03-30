@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, AuthState, TenantSummary } from '@/types';
+import type { User, AuthState, TenantSummary, TenantBranding } from '@/types';
 
 interface AuthActions {
   setAuth: (
@@ -11,6 +11,7 @@ interface AuthActions {
     tenants: TenantSummary[]
   ) => void;
   setActiveTenant: (tenantId: number) => void;
+  setBranding: (branding: TenantBranding) => void;
   logout: () => void;
 }
 
@@ -20,6 +21,7 @@ const initialState: AuthState = {
   orgId: null,
   tenantId: null,
   tenants: [],
+  branding: {},
   isAuthenticated: false,
 };
 
@@ -32,7 +34,10 @@ export const useAuthStore = create<AuthState & AuthActions>()(
         set({ user, token, orgId, tenantId, tenants, isAuthenticated: true }),
 
       setActiveTenant: (tenantId) =>
-        set({ tenantId }),
+        set({ tenantId, branding: {} }),
+
+      setBranding: (branding) =>
+        set({ branding }),
 
       logout: () =>
         set({ ...initialState }),
@@ -45,6 +50,7 @@ export const useAuthStore = create<AuthState & AuthActions>()(
         orgId: state.orgId,
         tenantId: state.tenantId,
         tenants: state.tenants,
+        branding: state.branding,
       }),
       onRehydrateStorage: () => (state) => {
         if (state?.token && state?.user) {

@@ -4,6 +4,7 @@ import { LoginForm } from '@/components/Auth/LoginForm';
 import { RegisterForm } from '@/components/Auth/RegisterForm';
 import { SsoCallbackPage } from '@/pages/SsoCallbackPage';
 import { useAuthStore } from '@/store/authStore';
+import { useBranding } from '@/hooks/useBranding';
 import { lazy, Suspense } from 'react';
 
 const MapListPage   = lazy(() => import('@/pages/MapListPage').then((m)   => ({ default: m.MapListPage })));
@@ -26,6 +27,8 @@ function LoadingFallback() {
 }
 
 export default function App() {
+  useBranding();
+
   return (
     <BrowserRouter>
       <div className="app-layout">

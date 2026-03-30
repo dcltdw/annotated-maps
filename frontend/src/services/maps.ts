@@ -8,6 +8,7 @@ import type {
   AnnotationMedia,
   MapPermission,
   SetPermissionRequest,
+  TenantBranding,
   PaginatedResponse,
   Tenant,
   TenantMember,
@@ -44,6 +45,16 @@ export const tenantsService = {
 
   async removeMember(tenantId: number, userId: number): Promise<void> {
     await apiClient.delete(`/tenants/${tenantId}/members/${userId}`);
+  },
+
+  async getBranding(tenantId: number): Promise<TenantBranding> {
+    const res = await apiClient.get<TenantBranding>(`/tenants/${tenantId}/branding`);
+    return res.data;
+  },
+
+  async updateBranding(tenantId: number, branding: TenantBranding): Promise<TenantBranding> {
+    const res = await apiClient.put<TenantBranding>(`/tenants/${tenantId}/branding`, branding);
+    return res.data;
   },
 };
 

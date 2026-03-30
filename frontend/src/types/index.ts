@@ -12,6 +12,7 @@ export interface AuthState {
   orgId: number | null;
   tenantId: number | null;
   tenants: TenantSummary[];
+  branding: TenantBranding;
   isAuthenticated: boolean;
 }
 
@@ -59,6 +60,14 @@ export interface Tenant {
   name: string;
   slug: string;
   role: TenantRole;
+}
+
+export interface TenantBranding {
+  logo_url?: string;
+  favicon_url?: string;
+  primary_color?: string;
+  accent_color?: string;
+  display_name?: string;
 }
 
 export interface TenantMember {
