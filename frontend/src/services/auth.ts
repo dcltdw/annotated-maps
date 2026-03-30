@@ -12,12 +12,19 @@ export const authService = {
     return res.data;
   },
 
-  async refreshToken(): Promise<AuthResponse> {
-    const res = await apiClient.post<AuthResponse>('/auth/refresh');
+  async refreshToken(): Promise<{ token: string }> {
+    const res = await apiClient.post<{ token: string }>('/auth/refresh');
     return res.data;
   },
 
   async logout(): Promise<void> {
     await apiClient.post('/auth/logout');
+  },
+
+  // Redirect the browser to the IdP for the given org slug.
+  // This is a full-page navigation, not an API call.
+  ssoInitiate(orgSlug: string): void {
+    const base = import.meta.env.VITE_API_URL ?? '/api/v1';
+    window.location.href = `${base}/auth/sso/${encodeURIComponent(orgSlug)}`;
   },
 };

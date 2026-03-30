@@ -1,11 +1,14 @@
 #include "MapController.h"
 #include <drogon/drogon.h>
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 static int callerUserId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("userId"); }
-    catch (...) { return 0; } // 0 = unauthenticated / public
+    catch (...) { return 0; }
+}
+
+static int callerOrgId(const drogon::HttpRequestPtr& req) {
+    try { return req->getAttributes()->get<int>("orgId"); }
+    catch (...) { return 0; }
 }
 
 static Json::Value errorJson(const std::string& code, const std::string& msg) {
@@ -15,21 +18,18 @@ static Json::Value errorJson(const std::string& code, const std::string& msg) {
     return v;
 }
 
-// ─── GET /api/v1/maps ─────────────────────────────────────────────────────────
+// ─── GET /api/v1/tenants/{tenantId}/maps ──────────────────────────────────────
 
 void MapController::listMaps(
     const drogon::HttpRequestPtr& req,
-    std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId) {
 
-    int userId = callerUserId(req);
+    int userId   = callerUserId(req);
     int page     = std::stoi(req->getParameter("page").empty()     ? "1"  : req->getParameter("page"));
     int pageSize = std::stoi(req->getParameter("pageSize").empty() ? "20" : req->getParameter("pageSize"));
     int offset   = (page - 1) * pageSize;
 
-    // Return maps where:
-    //   (a) caller is the owner, OR
-    //   (b) there is a public (user_id IS NULL) permission with can_view = TRUE, OR
-    //   (c) caller is authenticated and has a specific permission with can_view = TRUE
     const std::string sql = R"(
         SELECT DISTINCT m.id, m.owner_id, u.username AS owner_username,
                m.title, m.description,
@@ -47,9 +47,8 @@ void MapController::listMaps(
                ON mp2.map_id = m.id AND mp2.user_id = ?
         LEFT JOIN map_permissions mp_pub
                ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
-        WHERE m.owner_id = ?
-           OR mp2.can_view = 1
-           OR mp_pub.can_view = 1
+        WHERE m.tenant_id = ?
+          AND (m.owner_id = ? OR mp2.can_view = 1 OR mp_pub.can_view = 1)
         ORDER BY m.updated_at DESC
         LIMIT ? OFFSET ?
     )";
@@ -78,24 +77,24 @@ void MapController::listMaps(
             resp["data"]     = data;
             resp["page"]     = page;
             resp["pageSize"] = pageSize;
-            resp["total"]    = static_cast<int>(r.size()); // approximate
+            resp["total"]    = static_cast<int>(r.size());
             callback(drogon::HttpResponse::newHttpJsonResponse(resp));
         },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            (void)e;
+        [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson("db_error", "Failed to fetch maps"));
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        userId, userId, userId, pageSize, offset);
+        userId, userId, tenantId, userId, pageSize, offset);
 }
 
-// ─── POST /api/v1/maps ────────────────────────────────────────────────────────
+// ─── POST /api/v1/tenants/{tenantId}/maps ─────────────────────────────────────
 
 void MapController::createMap(
     const drogon::HttpRequestPtr& req,
-    std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId) {
 
     int userId = callerUserId(req);
     auto body  = req->getJsonObject();
@@ -115,14 +114,16 @@ void MapController::createMap(
 
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
-        "INSERT INTO maps (owner_id, title, description, center_lat, center_lng, zoom) "
-        "VALUES (?,?,?,?,?,?)",
-        [callback, userId, title, description, centerLat, centerLng, zoom]
+        "INSERT INTO maps (owner_id, tenant_id, title, description, "
+        "                  center_lat, center_lng, zoom) "
+        "VALUES (?,?,?,?,?,?,?)",
+        [callback, userId, tenantId, title, description, centerLat, centerLng, zoom]
         (const drogon::orm::Result& r) {
             int newId = static_cast<int>(r.insertId());
             Json::Value m;
             m["id"]          = newId;
             m["ownerId"]     = userId;
+            m["tenantId"]    = tenantId;
             m["title"]       = title;
             m["description"] = description;
             m["centerLat"]   = centerLat;
@@ -133,22 +134,21 @@ void MapController::createMap(
             resp->setStatusCode(drogon::k201Created);
             callback(resp);
         },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            (void)e;
+        [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson("db_error", "Failed to create map"));
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        userId, title, description, centerLat, centerLng, zoom);
+        userId, tenantId, title, description, centerLat, centerLng, zoom);
 }
 
-// ─── GET /api/v1/maps/{id} ────────────────────────────────────────────────────
+// ─── GET /api/v1/tenants/{tenantId}/maps/{id} ─────────────────────────────────
 
 void MapController::getMap(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id) {
+    int tenantId, int id) {
 
     int userId = callerUserId(req);
     const std::string sql = R"(
@@ -168,7 +168,7 @@ void MapController::getMap(
                ON mp2.map_id = m.id AND mp2.user_id = ?
         LEFT JOIN map_permissions mp_pub
                ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
-        WHERE m.id = ?
+        WHERE m.id = ? AND m.tenant_id = ?
     )";
 
     auto db = drogon::app().getDbClient();
@@ -205,22 +205,21 @@ void MapController::getMap(
             m["permission"]    = perm;
             callback(drogon::HttpResponse::newHttpJsonResponse(m));
         },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            (void)e;
+        [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson("db_error", "Database error"));
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        userId, userId, id);
+        userId, userId, id, tenantId);
 }
 
-// ─── PUT /api/v1/maps/{id} ────────────────────────────────────────────────────
+// ─── PUT /api/v1/tenants/{tenantId}/maps/{id} ─────────────────────────────────
 
 void MapController::updateMap(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id) {
+    int tenantId, int id) {
 
     int userId = callerUserId(req);
     auto body  = req->getJsonObject();
@@ -238,7 +237,7 @@ void MapController::updateMap(
         "title=COALESCE(?,title), description=COALESCE(?,description), "
         "center_lat=COALESCE(?,center_lat), center_lng=COALESCE(?,center_lng), "
         "zoom=COALESCE(?,zoom) "
-        "WHERE id=? AND owner_id=?",
+        "WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -252,8 +251,7 @@ void MapController::updateMap(
             v["updated"] = true;
             callback(drogon::HttpResponse::newHttpJsonResponse(v));
         },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            (void)e;
+        [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson("db_error", "Failed to update map"));
             resp->setStatusCode(drogon::k500InternalServerError);
@@ -266,20 +264,20 @@ void MapController::updateMap(
         (*body).isMember("centerLat") ? &(*body)["centerLat"].asDouble() : nullptr,
         (*body).isMember("centerLng") ? &(*body)["centerLng"].asDouble() : nullptr,
         (*body).isMember("zoom")      ? &(*body)["zoom"].asInt()         : nullptr,
-        id, userId);
+        id, tenantId, userId);
 }
 
-// ─── DELETE /api/v1/maps/{id} ─────────────────────────────────────────────────
+// ─── DELETE /api/v1/tenants/{tenantId}/maps/{id} ──────────────────────────────
 
 void MapController::deleteMap(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id) {
+    int tenantId, int id) {
 
     int userId = callerUserId(req);
     auto db    = drogon::app().getDbClient();
     db->execSqlAsync(
-        "DELETE FROM maps WHERE id=? AND owner_id=?",
+        "DELETE FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -292,28 +290,26 @@ void MapController::deleteMap(
             resp->setStatusCode(drogon::k204NoContent);
             callback(resp);
         },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            (void)e;
+        [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson("db_error", "Failed to delete map"));
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        id, userId);
+        id, tenantId, userId);
 }
 
-// ─── GET /api/v1/maps/{id}/permissions ───────────────────────────────────────
+// ─── GET /api/v1/tenants/{tenantId}/maps/{id}/permissions ─────────────────────
 
 void MapController::listPermissions(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id) {
+    int tenantId, int id) {
 
     int userId = callerUserId(req);
     auto db    = drogon::app().getDbClient();
-    // Verify ownership first
     db->execSqlAsync(
-        "SELECT id FROM maps WHERE id=? AND owner_id=?",
+        "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, id](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -355,18 +351,19 @@ void MapController::listPermissions(
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        id, userId);
+        id, tenantId, userId);
 }
 
-// ─── PUT /api/v1/maps/{id}/permissions ───────────────────────────────────────
+// ─── PUT /api/v1/tenants/{tenantId}/maps/{id}/permissions ─────────────────────
 
 void MapController::setPermission(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id) {
+    int tenantId, int id) {
 
-    int callerId = callerUserId(req);
-    auto body    = req->getJsonObject();
+    int callerId  = callerUserId(req);
+    int callerOrg = callerOrgId(req);
+    auto body = req->getJsonObject();
     if (!body) {
         auto resp = drogon::HttpResponse::newHttpJsonResponse(
             errorJson("bad_request", "Request body required"));
@@ -375,14 +372,16 @@ void MapController::setPermission(
         return;
     }
 
-    bool canView = (*body).get("canView", false).asBool();
-    bool canEdit = (*body).get("canEdit", false).asBool();
+    bool canView  = (*body).get("canView", false).asBool();
+    bool canEdit  = (*body).get("canEdit", false).asBool();
+    bool isPublic = (*body)["userId"].isNull();
+    int  targetId = isPublic ? 0 : (*body)["userId"].asInt();
 
     auto db = drogon::app().getDbClient();
-    // Verify ownership
     db->execSqlAsync(
-        "SELECT id FROM maps WHERE id=? AND owner_id=?",
-        [callback, id, body, canView, canEdit](const drogon::orm::Result& r) {
+        "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
+        [callback, id, tenantId, callerId, callerOrg, targetId,
+         isPublic, canView, canEdit](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
                     errorJson("forbidden", "Only the map owner can set permissions"));
@@ -391,20 +390,50 @@ void MapController::setPermission(
                 return;
             }
 
-            bool   isPublic = (*body)["userId"].isNull();
-            int    targetId = isPublic ? 0 : (*body)["userId"].asInt();
-
-            const std::string upsert = isPublic
-                ? "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
-                  "VALUES (?, NULL, ?, ?) "
-                  "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)"
-                : "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
-                  "VALUES (?, ?, ?, ?) "
-                  "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)";
-
-            auto db2 = drogon::app().getDbClient();
-            if (isPublic) {
-                db2->execSqlAsync(upsert,
+            if (!isPublic && targetId != 0) {
+                auto dbCheck = drogon::app().getDbClient();
+                dbCheck->execSqlAsync(
+                    "SELECT id FROM users WHERE id=? AND org_id=?",
+                    [callback, id, targetId, canView, canEdit]
+                    (const drogon::orm::Result& rc) {
+                        if (rc.empty()) {
+                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                                errorJson("bad_request",
+                                    "Cannot grant access to a user outside your organization"));
+                            resp->setStatusCode(drogon::k400BadRequest);
+                            callback(resp);
+                            return;
+                        }
+                        auto db2 = drogon::app().getDbClient();
+                        db2->execSqlAsync(
+                            "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
+                            "VALUES (?,?,?,?) "
+                            "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
+                            [callback](const drogon::orm::Result&) {
+                                Json::Value v; v["updated"] = true;
+                                callback(drogon::HttpResponse::newHttpJsonResponse(v));
+                            },
+                            [callback](const drogon::orm::DrogonDbException&) {
+                                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                                    errorJson("db_error", "Failed to set permission"));
+                                resp->setStatusCode(drogon::k500InternalServerError);
+                                callback(resp);
+                            },
+                            id, targetId, canView, canEdit);
+                    },
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                            errorJson("db_error", "Database error"));
+                        resp->setStatusCode(drogon::k500InternalServerError);
+                        callback(resp);
+                    },
+                    targetId, callerOrg);
+            } else {
+                auto db2 = drogon::app().getDbClient();
+                db2->execSqlAsync(
+                    "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
+                    "VALUES (?, NULL, ?, ?) "
+                    "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
                     [callback](const drogon::orm::Result&) {
                         Json::Value v; v["updated"] = true;
                         callback(drogon::HttpResponse::newHttpJsonResponse(v));
@@ -416,19 +445,6 @@ void MapController::setPermission(
                         callback(resp);
                     },
                     id, canView, canEdit);
-            } else {
-                db2->execSqlAsync(upsert,
-                    [callback](const drogon::orm::Result&) {
-                        Json::Value v; v["updated"] = true;
-                        callback(drogon::HttpResponse::newHttpJsonResponse(v));
-                    },
-                    [callback](const drogon::orm::DrogonDbException&) {
-                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                            errorJson("db_error", "Failed to set permission"));
-                        resp->setStatusCode(drogon::k500InternalServerError);
-                        callback(resp);
-                    },
-                    id, targetId, canView, canEdit);
             }
         },
         [callback](const drogon::orm::DrogonDbException&) {
@@ -437,21 +453,21 @@ void MapController::setPermission(
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        id, callerId);
+        id, tenantId, callerId);
 }
 
-// ─── DELETE /api/v1/maps/{id}/permissions/{target} ────────────────────────────
+// ─── DELETE /api/v1/tenants/{tenantId}/maps/{id}/permissions/{target} ─────────
 
 void MapController::removePermission(
     const drogon::HttpRequestPtr& req,
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
-    int id, const std::string& target) {
+    int tenantId, int id, const std::string& target) {
 
     int callerId = callerUserId(req);
     auto db      = drogon::app().getDbClient();
 
     db->execSqlAsync(
-        "SELECT id FROM maps WHERE id=? AND owner_id=?",
+        "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, id, target](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -500,5 +516,5 @@ void MapController::removePermission(
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        id, callerId);
+        id, tenantId, callerId);
 }

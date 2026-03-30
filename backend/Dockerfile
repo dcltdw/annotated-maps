@@ -4,10 +4,10 @@ FROM ubuntu:22.04 AS builder
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    build-essential cmake git \
+    build-essential cmake git pkg-config \
     libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev \
     libmysqlclient-dev \
-    # Drogon dependencies
+    libsodium-dev \
     libbrotli-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -38,7 +38,7 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
 FROM ubuntu:22.04 AS runtime
 
 RUN apt-get update && apt-get install -y \
-    libssl3 libjsoncpp25 libmysqlclient21 \
+    libssl3 libjsoncpp25 libmysqlclient21 libsodium23 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

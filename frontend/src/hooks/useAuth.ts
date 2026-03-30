@@ -1,54 +1,40 @@
-import { useState } from 'react';
 import { useAuthStore } from '@/store/authStore';
 import { authService } from '@/services/auth';
 import type { LoginRequest, RegisterRequest } from '@/types';
 
 export function useAuth() {
-  const { user, isAuthenticated, setAuth, logout: storeLogout } = useAuthStore();
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { user, token, orgId, tenantId, tenants, isAuthenticated, setAuth, logout } =
+    useAuthStore();
 
-  const login = async (data: LoginRequest) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await authService.login(data);
-      setAuth(response.user, response.token);
-      return true;
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Login failed. Please check your credentials.';
-      setError(message);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  };
+  async function login(data: LoginRequest) {
+    const resp = await authService.login(data);
+    setAuth(resp.user, resp.token, resp.orgId, resp.tenantId, resp.tenants);
+    return resp;
+  }
 
-  const register = async (data: RegisterRequest) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await authService.register(data);
-      setAuth(response.user, response.token);
-      return true;
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Registration failed. Please try again.';
-      setError(message);
-      return false;
-    } finally {
-      setLoading(false);
-    }
-  };
+  async function register(data: RegisterRequest) {
+    const resp = await authService.register(data);
+    setAuth(resp.user, resp.token, resp.orgId, resp.tenantId, resp.tenants);
+    return resp;
+  }
 
-  const logout = async () => {
+  async function logoutUser() {
     try {
       await authService.logout();
     } finally {
-      storeLogout();
+      logout();
     }
-  };
+  }
 
-  return { user, isAuthenticated, loading, error, login, register, logout };
+  return {
+    user,
+    token,
+    orgId,
+    tenantId,
+    tenants,
+    isAuthenticated,
+    login,
+    register,
+    logout: logoutUser,
+  };
 }

@@ -1,15 +1,25 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, AuthState } from '@/types';
+import type { User, AuthState, TenantSummary } from '@/types';
 
 interface AuthActions {
-  setAuth: (user: User, token: string) => void;
+  setAuth: (
+    user: User,
+    token: string,
+    orgId: number,
+    tenantId: number,
+    tenants: TenantSummary[]
+  ) => void;
+  setActiveTenant: (tenantId: number) => void;
   logout: () => void;
 }
 
 const initialState: AuthState = {
   user: null,
   token: null,
+  orgId: null,
+  tenantId: null,
+  tenants: [],
   isAuthenticated: false,
 };
 
@@ -18,16 +28,24 @@ export const useAuthStore = create<AuthState & AuthActions>()(
     (set) => ({
       ...initialState,
 
-      setAuth: (user: User, token: string) =>
-        set({ user, token, isAuthenticated: true }),
+      setAuth: (user, token, orgId, tenantId, tenants) =>
+        set({ user, token, orgId, tenantId, tenants, isAuthenticated: true }),
+
+      setActiveTenant: (tenantId) =>
+        set({ tenantId }),
 
       logout: () =>
         set({ ...initialState }),
     }),
     {
       name: 'auth-storage',
-      // Only persist token and user, not derived state
-      partialize: (state) => ({ token: state.token, user: state.user }),
+      partialize: (state) => ({
+        token: state.token,
+        user: state.user,
+        orgId: state.orgId,
+        tenantId: state.tenantId,
+        tenants: state.tenants,
+      }),
       onRehydrateStorage: () => (state) => {
         if (state?.token && state?.user) {
           state.isAuthenticated = true;

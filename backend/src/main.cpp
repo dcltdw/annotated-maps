@@ -1,7 +1,14 @@
 #include <drogon/drogon.h>
+#include <sodium.h>
 #include <iostream>
 
 int main(int argc, char* argv[]) {
+    // Initialize libsodium (required before any Argon2id password hashing)
+    if (sodium_init() < 0) {
+        std::cerr << "FATAL: libsodium initialization failed\n";
+        return 1;
+    }
+
     std::string configPath = "config.json";
     if (argc > 1) configPath = argv[1];
 

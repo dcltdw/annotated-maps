@@ -4,12 +4,14 @@ export interface User {
   id: number;
   username: string;
   email: string;
-  createdAt: string;
 }
 
 export interface AuthState {
   user: User | null;
   token: string | null;
+  orgId: number | null;
+  tenantId: number | null;
+  tenants: TenantSummary[];
   isAuthenticated: boolean;
 }
 
@@ -27,6 +29,44 @@ export interface RegisterRequest {
 export interface AuthResponse {
   user: User;
   token: string;
+  orgId: number;
+  tenantId: number;
+  tenants: TenantSummary[];
+}
+
+// ─── Organizations & Tenants ─────────────────────────────────────────────────
+
+export interface Organization {
+  id: number;
+  name: string;
+  slug: string;
+}
+
+export type TenantRole = 'admin' | 'editor' | 'viewer';
+
+export interface TenantSummary {
+  id: number;
+  name: string;
+  slug: string;
+  role: TenantRole;
+}
+
+export interface Tenant {
+  id: number;
+  orgId: number;
+  orgName: string;
+  orgSlug: string;
+  name: string;
+  slug: string;
+  role: TenantRole;
+}
+
+export interface TenantMember {
+  userId: number;
+  username: string;
+  email: string;
+  role: TenantRole;
+  createdAt: string;
 }
 
 // ─── Maps ─────────────────────────────────────────────────────────────────────
@@ -100,14 +140,14 @@ export interface CreateAnnotationRequest {
 export interface MapPermission {
   id: number;
   mapId: number;
-  userId: number | null; // null = public
+  userId: number | null;
   username: string | null;
   canView: boolean;
   canEdit: boolean;
 }
 
 export interface SetPermissionRequest {
-  userId: number | null; // null = public
+  userId: number | null;
   canView: boolean;
   canEdit: boolean;
 }

@@ -4,8 +4,8 @@
 /**
  * AuthController
  *
- * POST /api/v1/auth/register  — create account, return JWT
- * POST /api/v1/auth/login     — verify credentials, return JWT
+ * POST /api/v1/auth/register  — create account + personal org/tenant, return JWT
+ * POST /api/v1/auth/login     — verify credentials (Argon2id), return JWT + tenant list
  * POST /api/v1/auth/refresh   — exchange valid token for fresh one
  * POST /api/v1/auth/logout    — (stateless JWT; client discards token)
  */
@@ -35,5 +35,5 @@ public:
                 std::function<void(const drogon::HttpResponsePtr&)>&&);
 
 private:
-    std::string issueToken(int userId, const std::string& username) const;
+    std::string issueToken(int userId, const std::string& username, int orgId) const;
 };
