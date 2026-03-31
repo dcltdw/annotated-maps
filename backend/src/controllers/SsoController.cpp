@@ -37,6 +37,7 @@ std::string SsoController::issueToken(int userId, const std::string& username,
     auto now = std::chrono::system_clock::now();
     return jwt::create()
         .set_issuer(issuer)
+        .set_audience("annotated-maps")
         .set_subject(std::to_string(userId))
         .set_payload_claim("username", jwt::claim(username))
         .set_payload_claim("orgId",    jwt::claim(std::to_string(orgId)))
@@ -62,10 +63,10 @@ void SsoController::initiate(
         [this, callback, orgSlug](const drogon::orm::Result& r) {
             if (r.empty()) {
                 Json::Value body;
-                body["error"]   = "not_found";
-                body["message"] = "Organization not found or SSO not configured";
+                body["error"]   = "bad_request";
+                body["message"] = "SSO is not available";
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                resp->setStatusCode(drogon::k404NotFound);
+                resp->setStatusCode(drogon::k400BadRequest);
                 callback(resp);
                 return;
             }

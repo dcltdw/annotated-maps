@@ -112,14 +112,64 @@ void TenantController::updateBranding(
         return;
     }
 
-    // Whitelist allowed branding keys
+    // Whitelist allowed branding keys and validate values
     Json::Value branding(Json::objectValue);
-    static const std::vector<std::string> allowedKeys = {
-        "logo_url", "favicon_url", "primary_color", "accent_color", "display_name"
+
+    // Validate hex color: #RGB, #RRGGBB, or #RRGGBBAA
+    auto isHexColor = [](const std::string& s) -> bool {
+        if (s.empty() || s[0] != '#') return false;
+        if (s.size() != 4 && s.size() != 7 && s.size() != 9) return false;
+        for (size_t i = 1; i < s.size(); ++i) {
+            char c = s[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                  (c >= 'A' && c <= 'F')))
+                return false;
+        }
+        return true;
     };
-    for (const auto& key : allowedKeys) {
-        if (body->isMember(key))
-            branding[key] = (*body)[key];
+
+    // Validate URL: must be https://
+    auto isValidUrl = [](const std::string& s) -> bool {
+        return s.substr(0, 8) == "https://";
+    };
+
+    // Colors
+    for (const auto& key : {"primary_color", "accent_color"}) {
+        if (body->isMember(key)) {
+            std::string val = (*body)[key].asString();
+            if (!isHexColor(val)) {
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                    errorJson("bad_request",
+                        std::string(key) + " must be a hex color (e.g. #ff0000)"));
+                resp->setStatusCode(drogon::k400BadRequest);
+                callback(resp);
+                return;
+            }
+            branding[key] = val;
+        }
+    }
+
+    // URLs
+    for (const auto& key : {"logo_url", "favicon_url"}) {
+        if (body->isMember(key)) {
+            std::string val = (*body)[key].asString();
+            if (!val.empty() && !isValidUrl(val)) {
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                    errorJson("bad_request",
+                        std::string(key) + " must be an https:// URL"));
+                resp->setStatusCode(drogon::k400BadRequest);
+                callback(resp);
+                return;
+            }
+            branding[key] = val;
+        }
+    }
+
+    // Display name (plain text, just length-limit it)
+    if (body->isMember("display_name")) {
+        std::string val = (*body)["display_name"].asString();
+        if (val.size() > 255) val = val.substr(0, 255);
+        branding["display_name"] = val;
     }
 
     Json::StreamWriterBuilder wb;

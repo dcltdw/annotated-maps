@@ -19,10 +19,10 @@ services:
     image: mysql:8.2
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: annotated_maps
-      MYSQL_USER: annmaps_user
-      MYSQL_PASSWORD: annmaps_pass
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-annotated_maps}
+      MYSQL_USER: ${MYSQL_USER:-annmaps_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-annmaps_pass}
     ports:
       - "3306:3306"
     volumes:
@@ -30,7 +30,7 @@ services:
       # Auto-run migrations on first start
       - ./database/migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpassword"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
       interval: 10s
       timeout: 5s
       retries: 10

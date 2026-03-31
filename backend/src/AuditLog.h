@@ -18,4 +18,8 @@ void record(const std::string& eventType,
             int tenantId      = 0,
             const Json::Value& detail = Json::nullValue);
 
+// Counters for monitoring. Check via logs or health endpoint.
+uint64_t failureCount();
+uint64_t successCount();
+
 } // namespace AuditLog

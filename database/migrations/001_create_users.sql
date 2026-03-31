@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS users (
     id            BIGINT UNSIGNED     NOT NULL AUTO_INCREMENT,
     username      VARCHAR(64)         NOT NULL,
     email         VARCHAR(255)        NOT NULL,
-    password_hash VARCHAR(64)         NOT NULL,  -- SHA-256 hex (64 chars)
+    password_hash VARCHAR(64)         NOT NULL,  -- widened to VARCHAR(255) in migration 006 for Argon2id
     created_at    TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at    TIMESTAMP           NOT NULL DEFAULT CURRENT_TIMESTAMP
                                                ON UPDATE CURRENT_TIMESTAMP,

@@ -47,6 +47,7 @@ std::string AuthController::issueToken(int userId, const std::string& username,
     auto now = std::chrono::system_clock::now();
     return jwt::create()
         .set_issuer(issuer)
+        .set_audience("annotated-maps")
         .set_subject(std::to_string(userId))
         .set_payload_claim("username", jwt::claim(username))
         .set_payload_claim("orgId",    jwt::claim(std::to_string(orgId)))
@@ -154,8 +155,8 @@ void AuthController::registerUser(
                             bool dup = err.find("Duplicate") != std::string::npos;
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                                 errorJson(dup ? "conflict" : "db_error",
-                                          dup ? "Email or username already exists"
-                                              : "Database error"));
+                                          dup ? "Registration failed"
+                                              : "Registration failed"));
                             resp->setStatusCode(dup ? drogon::k409Conflict
                                                     : drogon::k500InternalServerError);
                             callback(resp);
@@ -175,7 +176,7 @@ void AuthController::registerUser(
             bool dup = err.find("Duplicate") != std::string::npos;
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
                 errorJson(dup ? "conflict" : "db_error",
-                          dup ? "Username already exists" : "Database error"));
+                          "Registration failed"));
             resp->setStatusCode(dup ? drogon::k409Conflict
                                     : drogon::k500InternalServerError);
             callback(resp);

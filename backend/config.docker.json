@@ -14,7 +14,7 @@
       "port": 3306,
       "dbname": "annotated_maps",
       "user": "annmaps_user",
-      "passwd": "annmaps_pass",
+      "passwd": "SET_VIA_ENV_OR_CHANGE_ME",
       "connection_number": 10,
       "auto_batch": false
     }
@@ -40,8 +40,9 @@
     "max_size_bytes": 10485760
   },
   "rate_limit": {
-    "max_requests": 10,
-    "window_seconds": 60
+    "max_requests": 5,
+    "window_seconds": 300
   },
+  "allowed_origins": ["http://localhost:5173"],
   "frontend_url": "http://localhost:5173"
 }

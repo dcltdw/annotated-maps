@@ -1,7 +1,14 @@
 #include "AuditLog.h"
 #include <drogon/drogon.h>
+#include <atomic>
 
 namespace AuditLog {
+
+static std::atomic<uint64_t> sFailureCount{0};
+static std::atomic<uint64_t> sSuccessCount{0};
+
+uint64_t failureCount() { return sFailureCount.load(); }
+uint64_t successCount() { return sSuccessCount.load(); }
 
 static std::string clientIp(const drogon::HttpRequestPtr& req) {
     // Prefer X-Forwarded-For (leftmost entry) when behind a trusted proxy
@@ -44,10 +51,14 @@ void record(const std::string& eventType,
 
     db->execSqlAsync(
         sql,
-        [](const drogon::orm::Result&) { /* success — nothing to do */ },
+        [](const drogon::orm::Result&) {
+            ++sSuccessCount;
+        },
         [eventType](const drogon::orm::DrogonDbException& e) {
+            ++sFailureCount;
             LOG_ERROR << "Audit log insert failed (" << eventType
-                      << "): " << e.base().what();
+                      << "): " << e.base().what()
+                      << " [total failures: " << sFailureCount.load() << "]";
         },
         eventType, userId, targetUserId, tenantId, ip,
         hasDetail ? detailStr : std::string());

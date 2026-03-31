@@ -27,8 +27,13 @@ void MapController::listMaps(
     int tenantId) {
 
     int userId   = callerUserId(req);
-    int page     = std::stoi(req->getParameter("page").empty()     ? "1"  : req->getParameter("page"));
-    int pageSize = std::stoi(req->getParameter("pageSize").empty() ? "20" : req->getParameter("pageSize"));
+    int page     = 1;
+    int pageSize = 20;
+    try { page     = std::stoi(req->getParameter("page")); }     catch (...) {}
+    try { pageSize = std::stoi(req->getParameter("pageSize")); } catch (...) {}
+    if (page < 1) page = 1;
+    if (pageSize < 1) pageSize = 1;
+    if (pageSize > 100) pageSize = 100;
     int offset   = (page - 1) * pageSize;
 
     const std::string sql = R"(
@@ -113,8 +118,22 @@ void MapController::createMap(
     double      centerLng   = (*body).get("centerLng", 0.0).asDouble();
     int         zoom        = (*body).get("zoom", 3).asInt();
 
+    // L4 fix: enforce per-tenant map limit
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
+        "SELECT COUNT(*) AS cnt FROM maps WHERE tenant_id=?",
+        [callback, userId, tenantId, title, description, centerLat, centerLng, zoom]
+        (const drogon::orm::Result& r) {
+            static const int MAX_MAPS_PER_TENANT = 1000;
+            if (!r.empty() && r[0]["cnt"].as<int>() >= MAX_MAPS_PER_TENANT) {
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                    errorJson("limit_exceeded", "Tenant map limit reached"));
+                resp->setStatusCode(drogon::k400BadRequest);
+                callback(resp);
+                return;
+            }
+            auto db2 = drogon::app().getDbClient();
+            db2->execSqlAsync(
         "INSERT INTO maps (owner_id, tenant_id, title, description, "
         "                  center_lat, center_lng, zoom) "
         "VALUES (?,?,?,?,?,?,?)",
@@ -142,6 +161,14 @@ void MapController::createMap(
             callback(resp);
         },
         userId, tenantId, title, description, centerLat, centerLng, zoom);
+        },
+        [callback](const drogon::orm::DrogonDbException&) {
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                errorJson("db_error", "Failed to check map count"));
+            resp->setStatusCode(drogon::k500InternalServerError);
+            callback(resp);
+        },
+        tenantId);
 }
 
 // ─── GET /api/v1/tenants/{tenantId}/maps/{id} ─────────────────────────────────

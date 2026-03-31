@@ -23,7 +23,8 @@ RUN git clone --depth 1 --branch ${DROGON_VERSION} \
     && rm -rf /tmp/drogon
 
 # Install jwt-cpp (header-only)
-RUN git clone --depth 1 https://github.com/Thalhammer/jwt-cpp.git /tmp/jwt-cpp \
+ARG JWT_CPP_VERSION=v0.7.0
+RUN git clone --depth 1 --branch ${JWT_CPP_VERSION} https://github.com/Thalhammer/jwt-cpp.git /tmp/jwt-cpp \
     && cmake -B /tmp/jwt-cpp/build /tmp/jwt-cpp -DCMAKE_BUILD_TYPE=Release \
     && cmake --install /tmp/jwt-cpp/build \
     && rm -rf /tmp/jwt-cpp

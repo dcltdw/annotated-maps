@@ -32,7 +32,8 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
         auto decoded  = jwt::decode(token);
         auto verifier = jwt::verify()
             .allow_algorithm(jwt::algorithm::hs256{secret})
-            .with_issuer(issuer);
+            .with_issuer(issuer)
+            .with_audience(std::set<std::string>{"annotated-maps"});
 
         verifier.verify(decoded);
 

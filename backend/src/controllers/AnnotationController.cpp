@@ -101,8 +101,33 @@ void AnnotationController::createAnnotation(
     std::string title       = (*body)["title"].asString();
     std::string description = (*body).get("description", "").asString();
 
+    // Validate GeoJSON structure
+    const auto& geoObj = (*body)["geoJson"];
+    if (!geoObj.isObject() || !geoObj.isMember("type") || !geoObj.isMember("coordinates")) {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("bad_request", "geoJson must have 'type' and 'coordinates' fields"));
+        resp->setStatusCode(drogon::k400BadRequest);
+        callback(resp);
+        return;
+    }
+    std::string geoType = geoObj["type"].asString();
+    if (geoType != "Point" && geoType != "LineString" && geoType != "Polygon") {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("bad_request", "geoJson.type must be Point, LineString, or Polygon"));
+        resp->setStatusCode(drogon::k400BadRequest);
+        callback(resp);
+        return;
+    }
+    if (!geoObj["coordinates"].isArray() || geoObj["coordinates"].empty()) {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("bad_request", "geoJson.coordinates must be a non-empty array"));
+        resp->setStatusCode(drogon::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
     Json::StreamWriterBuilder wb;
-    std::string geoJsonStr = Json::writeString(wb, (*body)["geoJson"]);
+    std::string geoJsonStr = Json::writeString(wb, geoObj);
 
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
@@ -120,8 +145,22 @@ void AnnotationController::createAnnotation(
                 callback(resp);
                 return;
             }
+            // L4 fix: enforce per-map annotation limit
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
+                "SELECT COUNT(*) AS cnt FROM annotations WHERE map_id=?",
+                [callback, mapId, userId, type, title, description, geoJsonStr]
+                (const drogon::orm::Result& rc) {
+                    static const int MAX_ANNOTATIONS_PER_MAP = 5000;
+                    if (!rc.empty() && rc[0]["cnt"].as<int>() >= MAX_ANNOTATIONS_PER_MAP) {
+                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                            errorJson("limit_exceeded", "Annotation limit reached for this map"));
+                        resp->setStatusCode(drogon::k400BadRequest);
+                        callback(resp);
+                        return;
+                    }
+                    auto db3 = drogon::app().getDbClient();
+                    db3->execSqlAsync(
                 "INSERT INTO annotations (map_id, created_by, type, title, description, geo_json) "
                 "VALUES (?,?,?,?,?,?)",
                 [callback, mapId, userId, type, title, description]
@@ -147,6 +186,14 @@ void AnnotationController::createAnnotation(
                     callback(resp);
                 },
                 mapId, userId, type, title, description, geoJsonStr);
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                        errorJson("db_error", "Failed to check annotation count"));
+                    resp->setStatusCode(drogon::k500InternalServerError);
+                    callback(resp);
+                },
+                mapId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -321,6 +368,15 @@ void AnnotationController::addMedia(
     std::string mediaType = (*body)["mediaType"].asString();
     std::string url       = (*body)["url"].asString();
     std::string caption   = (*body).get("caption", "").asString();
+
+    // Validate URL scheme (prevent javascript:, data:, etc.)
+    if (url.substr(0, 8) != "https://" && url.substr(0, 7) != "http://") {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("bad_request", "url must use http or https scheme"));
+        resp->setStatusCode(drogon::k400BadRequest);
+        callback(resp);
+        return;
+    }
 
     // Verify caller has edit permission before inserting media
     auto db = drogon::app().getDbClient();
