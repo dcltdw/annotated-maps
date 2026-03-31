@@ -46,14 +46,23 @@ INSERT INTO users (id, username, email, password_hash, org_id)
 SELECT password_hash INTO @ph FROM users WHERE id = 41;
 CALL assert_equals('users.password_hash allows NULL', NULL, @ph);
 
--- ─── maps.tenant_id is NOT NULL ──────────────────────────────────────────────
+-- ─── maps.tenant_id rejects NULL ─────────────────────────────────────────────
 
-SET @null_caught = 0;
+DROP PROCEDURE IF EXISTS test_null_tenant;
+DELIMITER $$
+CREATE PROCEDURE test_null_tenant()
 BEGIN
-    DECLARE CONTINUE HANDLER FOR 1048 SET @null_caught = 1;
+    DECLARE CONTINUE HANDLER FOR 1048 BEGIN END;
+    DECLARE CONTINUE HANDLER FOR 1364 BEGIN END;
     INSERT INTO maps (owner_id, tenant_id, title) VALUES (40, NULL, 'NullTenant');
-END;
-CALL assert_true('maps.tenant_id rejects NULL', @null_caught = 1);
+END$$
+DELIMITER ;
+
+SELECT COUNT(*) INTO @before FROM maps;
+CALL test_null_tenant();
+SELECT COUNT(*) INTO @after FROM maps;
+CALL assert_true('maps.tenant_id rejects NULL', @before = @after);
+DROP PROCEDURE IF EXISTS test_null_tenant;
 
 -- ─── sso_providers.provider defaults to oidc ─────────────────────────────────
 

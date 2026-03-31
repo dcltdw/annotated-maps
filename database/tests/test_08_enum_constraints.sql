@@ -20,16 +20,46 @@ UPDATE tenant_members SET role = 'viewer' WHERE tenant_id = 60 AND user_id = 60;
 SELECT role INTO @r FROM tenant_members WHERE tenant_id = 60 AND user_id = 60;
 CALL assert_equals('tenant_members accepts viewer role', 'viewer', @r);
 
--- ─── tenant_members.role rejects invalid values ──────────────────────────────
+-- ─── Helper procedures for invalid enum tests ────────────────────────────────
 
--- MySQL strict mode truncates/errors on invalid ENUM. Use a handler.
-SET @enum_caught = 0;
+DROP PROCEDURE IF EXISTS test_bad_tm_role;
+DROP PROCEDURE IF EXISTS test_bad_ann_type;
+DROP PROCEDURE IF EXISTS test_bad_media_type;
+DROP PROCEDURE IF EXISTS test_bad_sso_provider;
+
+DELIMITER $$
+
+CREATE PROCEDURE test_bad_tm_role()
 BEGIN
-    DECLARE CONTINUE HANDLER FOR SQLWARNING SET @enum_caught = 1;
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @enum_caught = 1;
+    DECLARE CONTINUE HANDLER FOR SQLWARNING BEGIN END;
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
     UPDATE tenant_members SET role = 'superadmin' WHERE tenant_id = 60 AND user_id = 60;
-END;
-CALL assert_true('tenant_members.role rejects invalid enum', @enum_caught = 1);
+END$$
+
+CREATE PROCEDURE test_bad_ann_type()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR SQLWARNING BEGIN END;
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
+    INSERT INTO annotations (map_id, created_by, type, title, geo_json)
+        VALUES (60, 60, 'circle', 'Bad', '{"type":"Point","coordinates":[0,0]}');
+END$$
+
+CREATE PROCEDURE test_bad_media_type()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR SQLWARNING BEGIN END;
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
+    INSERT INTO annotation_media (annotation_id, media_type, url)
+        VALUES (60, 'video', 'https://example.com/v.mp4');
+END$$
+
+CREATE PROCEDURE test_bad_sso_provider()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR SQLWARNING BEGIN END;
+    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION BEGIN END;
+    INSERT INTO sso_providers (org_id, config, provider) VALUES (60, '{}', 'saml');
+END$$
+
+DELIMITER ;
 
 -- ─── annotations.type accepts valid values ───────────────────────────────────
 
@@ -43,34 +73,34 @@ INSERT INTO annotations (id, map_id, created_by, type, title, geo_json)
 SELECT COUNT(*) INTO @cnt FROM annotations WHERE map_id = 60;
 CALL assert_equals('annotations accepts all valid types', '3', CAST(@cnt AS CHAR));
 
--- ─── annotations.type rejects invalid values ─────────────────────────────────
+-- ─── Run invalid enum tests ──────────────────────────────────────────────────
 
-SET @enum_caught = 0;
-BEGIN
-    DECLARE CONTINUE HANDLER FOR SQLWARNING SET @enum_caught = 1;
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @enum_caught = 1;
-    INSERT INTO annotations (map_id, created_by, type, title, geo_json)
-        VALUES (60, 60, 'circle', 'Bad', '{"type":"Point","coordinates":[0,0]}');
-END;
-CALL assert_true('annotations.type rejects invalid enum', @enum_caught = 1);
+-- tenant_members.role: save current value, try invalid, check unchanged
+SELECT role INTO @role_before FROM tenant_members WHERE tenant_id = 60 AND user_id = 60;
+CALL test_bad_tm_role();
+SELECT role INTO @role_after FROM tenant_members WHERE tenant_id = 60 AND user_id = 60;
+CALL assert_equals('tenant_members.role rejects invalid enum', @role_before, @role_after);
 
--- ─── annotation_media.media_type rejects invalid values ──────────────────────
+-- annotations.type
+SELECT COUNT(*) INTO @before FROM annotations WHERE type = 'circle';
+CALL test_bad_ann_type();
+SELECT COUNT(*) INTO @after FROM annotations WHERE type = 'circle';
+CALL assert_true('annotations.type rejects invalid enum', @after = 0);
 
-SET @enum_caught = 0;
-BEGIN
-    DECLARE CONTINUE HANDLER FOR SQLWARNING SET @enum_caught = 1;
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @enum_caught = 1;
-    INSERT INTO annotation_media (annotation_id, media_type, url)
-        VALUES (60, 'video', 'https://example.com/v.mp4');
-END;
-CALL assert_true('annotation_media.media_type rejects invalid enum', @enum_caught = 1);
+-- annotation_media.media_type
+SELECT COUNT(*) INTO @before FROM annotation_media;
+CALL test_bad_media_type();
+SELECT COUNT(*) INTO @after FROM annotation_media WHERE media_type = 'video';
+CALL assert_true('annotation_media.media_type rejects invalid enum', @after = 0);
 
--- ─── sso_providers.provider rejects invalid values ───────────────────────────
+-- sso_providers.provider
+SELECT COUNT(*) INTO @before FROM sso_providers;
+CALL test_bad_sso_provider();
+SELECT COUNT(*) INTO @after FROM sso_providers WHERE org_id = 60;
+CALL assert_true('sso_providers.provider rejects invalid enum', @after = 0);
 
-SET @enum_caught = 0;
-BEGIN
-    DECLARE CONTINUE HANDLER FOR SQLWARNING SET @enum_caught = 1;
-    DECLARE CONTINUE HANDLER FOR SQLEXCEPTION SET @enum_caught = 1;
-    INSERT INTO sso_providers (org_id, config, provider) VALUES (60, '{}', 'saml');
-END;
-CALL assert_true('sso_providers.provider rejects invalid enum', @enum_caught = 1);
+-- Cleanup
+DROP PROCEDURE IF EXISTS test_bad_tm_role;
+DROP PROCEDURE IF EXISTS test_bad_ann_type;
+DROP PROCEDURE IF EXISTS test_bad_media_type;
+DROP PROCEDURE IF EXISTS test_bad_sso_provider;

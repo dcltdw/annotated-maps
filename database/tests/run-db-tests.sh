@@ -24,11 +24,11 @@ REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 MIGRATIONS_DIR="$REPO_DIR/database/migrations"
 TESTS_DIR="$SCRIPT_DIR"
 
-MYSQL_CMD="mysql -h$HOST -P$PORT -u$USER -p$PASS"
-
-# If running inside Docker Compose, use docker exec
-if [ "${USE_DOCKER:-}" = "1" ] || command -v docker &>/dev/null && docker compose ps mysql 2>/dev/null | grep -q "running"; then
-    MYSQL_CMD="docker compose -f $REPO_DIR/docker-compose.yml exec -T mysql mysql -uroot -prootpassword"
+# Use local mysql if available, otherwise run inside the Docker container
+if command -v mysql &>/dev/null; then
+    MYSQL_CMD="mysql -h$HOST -P$PORT -u$USER -p$PASS"
+else
+    MYSQL_CMD="docker compose -f $REPO_DIR/docker-compose.yml exec -T mysql mysql -uroot -p${PASS}"
 fi
 
 cleanup() {
@@ -45,10 +45,11 @@ echo "==> Applying migrations..."
 for file in "$MIGRATIONS_DIR"/*.sql; do
     basename=$(basename "$file")
     printf "  %s " "$basename"
-    if $MYSQL_CMD "$TEST_DB" < "$file" 2>/dev/null; then
+    if migration_output=$($MYSQL_CMD "$TEST_DB" < "$file" 2>&1); then
         echo "ok"
     else
         echo "FAILED"
+        echo "$migration_output"
         echo "FATAL: Migration $basename failed. Aborting."
         exit 1
     fi
@@ -65,7 +66,10 @@ for test_file in "$TESTS_DIR"/test_*.sql; do
     test_name=$(basename "$test_file" .sql)
     printf "  %-50s " "$test_name"
 
-    output=$($MYSQL_CMD "$TEST_DB" < "$test_file" 2>&1) || true
+    # Concatenate helpers + test file, stripping SOURCE lines.
+    # Use --force so errors in one statement don't abort the rest.
+    combined=$(cat "$TESTS_DIR/helpers.sql"; echo ""; sed '/^SOURCE /d' "$test_file")
+    output=$(echo "$combined" | $MYSQL_CMD --force "$TEST_DB" 2>&1) || true
 
     # Count PASS/FAIL lines in output
     test_passes=$(echo "$output" | grep -c "^PASS:" || true)

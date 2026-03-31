@@ -259,12 +259,25 @@ void MapController::updateMap(
         return;
     }
 
+    // Extract optional fields — build SET clause dynamically to avoid
+    // passing pointers to temporaries (which don't compile).
+    std::string title       = (*body).get("title", "").asString();
+    std::string description = (*body).get("description", "").asString();
+    bool hasLat  = body->isMember("centerLat");
+    bool hasLng  = body->isMember("centerLng");
+    bool hasZoom = body->isMember("zoom");
+    double centerLat = hasLat  ? (*body)["centerLat"].asDouble() : 0.0;
+    double centerLng = hasLng  ? (*body)["centerLng"].asDouble() : 0.0;
+    int    zoom      = hasZoom ? (*body)["zoom"].asInt()          : 0;
+
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE maps SET "
-        "title=COALESCE(?,title), description=COALESCE(?,description), "
-        "center_lat=COALESCE(?,center_lat), center_lng=COALESCE(?,center_lng), "
-        "zoom=COALESCE(?,zoom) "
+        "title       = IF(?='', title, ?), "
+        "description = IF(?='', description, ?), "
+        "center_lat  = IF(?, ?, center_lat), "
+        "center_lng  = IF(?, ?, center_lng), "
+        "zoom        = IF(?, ?, zoom) "
         "WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
@@ -285,13 +298,11 @@ void MapController::updateMap(
             resp->setStatusCode(drogon::k500InternalServerError);
             callback(resp);
         },
-        (*body).get("title", Json::Value()).asString().empty()
-            ? nullptr : new std::string((*body)["title"].asString()),
-        (*body).get("description", Json::Value()).asString().empty()
-            ? nullptr : new std::string((*body)["description"].asString()),
-        (*body).isMember("centerLat") ? &(*body)["centerLat"].asDouble() : nullptr,
-        (*body).isMember("centerLng") ? &(*body)["centerLng"].asDouble() : nullptr,
-        (*body).isMember("zoom")      ? &(*body)["zoom"].asInt()         : nullptr,
+        title, title,
+        description, description,
+        hasLat, centerLat,
+        hasLng, centerLng,
+        hasZoom, zoom,
         id, tenantId, userId);
 }
 

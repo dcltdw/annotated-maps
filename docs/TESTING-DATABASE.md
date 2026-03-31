@@ -14,7 +14,7 @@ With the Docker Compose stack running:
 
 The script will:
 1. Create a temporary database (`annotated_maps_test_<pid>`).
-2. Apply all migrations (001-009).
+2. Apply all migrations (001-010).
 3. Run each `test_*.sql` file and report PASS/FAIL per assertion.
 4. Drop the temporary database.
 

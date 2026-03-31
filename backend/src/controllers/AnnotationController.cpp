@@ -277,12 +277,16 @@ void AnnotationController::updateAnnotation(
         return;
     }
 
+    std::string newTitle = (*body).get("title", "").asString();
+    std::string newDesc  = (*body).get("description", "").asString();
+
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE annotations a "
         "JOIN maps m ON m.id=a.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
-        "SET a.title=COALESCE(?,a.title), a.description=COALESCE(?,a.description) "
+        "SET a.title       = IF(?='', a.title, ?), "
+        "    a.description = IF(?='', a.description, ?) "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
         "  AND (m.owner_id=? OR mp.can_edit=1 OR a.created_by=?)",
         [callback, id](const drogon::orm::Result& r) {
@@ -305,10 +309,8 @@ void AnnotationController::updateAnnotation(
             callback(resp);
         },
         userId,
-        (*body).get("title", Json::Value()).asString().empty()
-            ? nullptr : new std::string((*body)["title"].asString()),
-        (*body).get("description", Json::Value()).asString().empty()
-            ? nullptr : new std::string((*body)["description"].asString()),
+        newTitle, newTitle,
+        newDesc, newDesc,
         id, mapId, tenantId, userId, userId);
 }
 

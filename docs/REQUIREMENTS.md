@@ -115,7 +115,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 | `tenant_members` | User-to-tenant mapping with role (`admin`/`editor`/`viewer`). |
 | `sso_providers` | OIDC provider config per organization (JSON: issuer, client_id, client_secret, endpoints). |
 | `maps` | Map records scoped to a tenant via `tenant_id`. |
-| `map_permissions` | Per-map, per-user permission grants. `user_id = NULL` = public access. |
+| `map_permissions` | Per-map, per-user permission grants. `user_id = NULL` = public access. Database triggers enforce at most one public row per map. |
 | `annotations` | GeoJSON annotations on maps (marker, polyline, polygon). |
 | `annotation_media` | Media attachments (image, link) on annotations. |
 | `audit_log` | Security event log. FKs use `ON DELETE SET NULL` so records survive entity deletion. |
@@ -221,6 +221,7 @@ All routes require JWT + TenantFilter.
 | 007 | Create `audit_log` table |
 | 008 | Add `is_active` column to `users` |
 | 009 | Add `branding` JSON column to `tenants` |
+| 010 | Fix NULL uniqueness gap in `map_permissions` via triggers |
 
 ---
 

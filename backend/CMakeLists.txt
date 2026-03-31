@@ -33,10 +33,14 @@ target_include_directories(annotated_maps
     ${LIBSODIUM_INCLUDE_DIRS}
 )
 
+# MariaDB client — needed because Drogon is linked statically
+find_library(MARIADB_LIBRARY NAMES mariadb mariadbclient mysqlclient)
+
 target_link_libraries(annotated_maps
   PRIVATE
     Drogon::Drogon
     ${LIBSODIUM_LIBRARIES}
+    ${MARIADB_LIBRARY}
 )
 
 # ── Install ───────────────────────────────────────────────────────────────────

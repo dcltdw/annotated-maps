@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     build-essential cmake git pkg-config \
     libjsoncpp-dev uuid-dev zlib1g-dev libssl-dev \
-    libmysqlclient-dev \
+    libmariadb-dev \
     libsodium-dev \
     libbrotli-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -17,7 +17,9 @@ RUN git clone --depth 1 --branch ${DROGON_VERSION} \
     https://github.com/drogonframework/drogon.git /tmp/drogon \
     && cd /tmp/drogon \
     && git submodule update --init \
-    && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=OFF \
+    && cmake -B build -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_EXAMPLES=OFF \
+        -DBUILD_MYSQL=ON \
     && cmake --build build -j$(nproc) \
     && cmake --install build \
     && rm -rf /tmp/drogon
@@ -35,11 +37,16 @@ COPY . .
 RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j$(nproc)
 
+# Verify MySQL support is linked
+RUN ldd build/annotated_maps | grep -iE "mariadb|mysql" \
+    || (echo "ERROR: Binary does not link against MariaDB/MySQL library" && exit 1)
+
 # ── Runtime stage ────────────────────────────────────────────────────────────
 FROM ubuntu:22.04 AS runtime
 
 RUN apt-get update && apt-get install -y \
-    libssl3 libjsoncpp25 libmysqlclient21 libsodium23 \
+    libssl3 libjsoncpp25 libmariadb3 libsodium23 \
+    libbrotli1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
