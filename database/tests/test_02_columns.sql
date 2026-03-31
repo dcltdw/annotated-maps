@@ -1,11 +1,9 @@
 -- test_02_columns.sql
--- Verify key columns exist with expected types after all migrations.
+-- Verify key columns exist with expected types and nullability.
 
 SOURCE helpers.sql;
 
-SET @db = DATABASE();
-
--- Helper: check a column exists
+-- Helper: check a column exists with expected nullability
 DROP PROCEDURE IF EXISTS check_column;
 DELIMITER $$
 CREATE PROCEDURE check_column(IN tbl VARCHAR(64), IN col VARCHAR(64), IN expected_nullable VARCHAR(3))
@@ -26,27 +24,27 @@ BEGIN
 END$$
 DELIMITER ;
 
--- users: columns from migrations 001, 006, 008
+-- users
 CALL check_column('users', 'id',            'NO');
 CALL check_column('users', 'username',      'NO');
 CALL check_column('users', 'email',         'NO');
-CALL check_column('users', 'password_hash', 'YES');  -- nullable after migration 006
-CALL check_column('users', 'org_id',        'YES');  -- nullable FK, migration 006
-CALL check_column('users', 'external_id',   'YES');  -- nullable, migration 006
-CALL check_column('users', 'is_active',     'NO');   -- NOT NULL DEFAULT TRUE, migration 008
+CALL check_column('users', 'password_hash', 'YES');
+CALL check_column('users', 'org_id',        'YES');
+CALL check_column('users', 'external_id',   'YES');
+CALL check_column('users', 'is_active',     'NO');
 
--- maps: tenant_id from migration 006
-CALL check_column('maps', 'tenant_id',      'NO');   -- NOT NULL after backfill
+-- maps
+CALL check_column('maps', 'tenant_id',      'NO');
 
--- tenants: branding from migration 009
-CALL check_column('tenants', 'branding',    'YES');  -- nullable JSON
+-- tenants
+CALL check_column('tenants', 'branding',    'YES');
 
--- audit_log: key columns from migration 007
+-- audit_log
 CALL check_column('audit_log', 'event_type',     'NO');
-CALL check_column('audit_log', 'user_id',        'YES');  -- nullable FK
-CALL check_column('audit_log', 'target_user_id', 'YES');  -- nullable FK
-CALL check_column('audit_log', 'tenant_id',      'YES');  -- nullable FK
+CALL check_column('audit_log', 'user_id',        'YES');
+CALL check_column('audit_log', 'target_user_id', 'YES');
+CALL check_column('audit_log', 'tenant_id',      'YES');
 CALL check_column('audit_log', 'ip_address',     'NO');
-CALL check_column('audit_log', 'detail',         'YES');  -- nullable JSON
+CALL check_column('audit_log', 'detail',         'YES');
 
 DROP PROCEDURE IF EXISTS check_column;

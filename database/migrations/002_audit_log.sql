@@ -1,4 +1,5 @@
--- Migration 007: Audit Log
+-- Migration 002: Audit log
+-- Separate from core schema for independent lifecycle management.
 -- Records security-relevant events for compliance and incident investigation.
 
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -16,6 +17,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     KEY idx_audit_event   (event_type),
     KEY idx_audit_created (created_at),
 
+    -- SET NULL so audit records survive entity deletion
     CONSTRAINT fk_audit_user
         FOREIGN KEY (user_id)        REFERENCES users   (id) ON DELETE SET NULL,
     CONSTRAINT fk_audit_target

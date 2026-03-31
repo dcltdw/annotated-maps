@@ -212,16 +212,9 @@ All routes require JWT + TenantFilter.
 
 | Migration | Description |
 |---|---|
-| 001 | Create `users` table |
-| 002 | Create `maps` and `map_permissions` tables |
-| 003 | Create `annotations` and `annotation_media` tables |
-| 004 | Development seed data (placeholder) |
-| 005 | Create `organizations`, `tenants`, `tenant_members`, `sso_providers` tables |
-| 006 | Alter `users` (add `org_id`, `external_id`, nullable `password_hash`) and `maps` (add `tenant_id`); backfill personal orgs/tenants for existing users |
-| 007 | Create `audit_log` table |
-| 008 | Add `is_active` column to `users` |
-| 009 | Add `branding` JSON column to `tenants` |
-| 010 | Fix NULL uniqueness gap in `map_permissions` via triggers |
+| 001 | Core schema: all tables (`organizations`, `users`, `tenants`, `tenant_members`, `sso_providers`, `maps`, `map_permissions` with triggers, `annotations`, `annotation_media`) |
+| 002 | Audit log table |
+| 003 | Development seed data placeholder |
 
 ---
 

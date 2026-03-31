@@ -1,7 +1,7 @@
 # Database Unit Tests
 
 SQL-based tests that verify schema integrity, constraints, cascading behavior,
-defaults, and migration idempotency. Tests run against a disposable MySQL
+defaults, and trigger enforcement. Tests run against a disposable MySQL
 database that is created and dropped automatically.
 
 ## Running the tests
@@ -14,7 +14,7 @@ With the Docker Compose stack running:
 
 The script will:
 1. Create a temporary database (`annotated_maps_test_<pid>`).
-2. Apply all migrations (001-010).
+2. Apply all migrations (001-003).
 3. Run each `test_*.sql` file and report PASS/FAIL per assertion.
 4. Drop the temporary database.
 
@@ -30,7 +30,7 @@ Exit code 0 means all tests passed.
 | `test_04_cascade_behavior.sql` | ON DELETE CASCADE and ON DELETE SET NULL |
 | `test_05_foreign_keys.sql` | Invalid FK references rejected |
 | `test_06_defaults.sql` | Column defaults (`is_active`, `role`, `branding`, etc.) |
-| `test_07_backfill_idempotent.sql` | Migration 006 backfill can run twice safely |
+| `test_07_public_perm_trigger.sql` | Trigger enforces one public permission row per map |
 | `test_08_enum_constraints.sql` | ENUM columns reject invalid values |
 
 ## Writing new tests
@@ -40,7 +40,7 @@ Exit code 0 means all tests passed.
 3. Use `CALL assert_equals(name, expected, actual)` or `CALL assert_true(name, condition)`.
 4. Output lines starting with `PASS:` or `FAIL:` are counted by the runner.
 5. Each test file runs in the same database (shared state), so use unique IDs
-   (e.g., `id = 70+` for test 09) to avoid collisions.
+   (e.g., `id = 80+` for test 09) to avoid collisions.
 
 ## Assertions available
 
