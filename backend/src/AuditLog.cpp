@@ -11,7 +11,6 @@ uint64_t failureCount() { return sFailureCount.load(); }
 uint64_t successCount() { return sSuccessCount.load(); }
 
 static std::string clientIp(const drogon::HttpRequestPtr& req) {
-    // Prefer X-Forwarded-For (leftmost entry) when behind a trusted proxy
     const std::string& xff = req->getHeader("X-Forwarded-For");
     if (!xff.empty()) {
         auto comma = xff.find(',');
@@ -29,7 +28,7 @@ void record(const std::string& eventType,
 
     std::string ip = clientIp(req);
 
-    // Serialize detail to string (NULL if Json::nullValue)
+    // Serialize detail to JSON string, or "null" for SQL NULL
     std::string detailStr;
     bool hasDetail = !detail.isNull();
     if (hasDetail) {
@@ -39,29 +38,33 @@ void record(const std::string& eventType,
 
     auto db = drogon::app().getDbClient();
 
-    // Build SQL with conditional NULLs for the optional FK columns
-    const std::string sql =
-        "INSERT INTO audit_log (event_type, user_id, target_user_id, "
-        "                       tenant_id, ip_address, detail) "
-        "VALUES (?, "
-        "        NULLIF(?, 0), "
-        "        NULLIF(?, 0), "
-        "        NULLIF(?, 0), "
-        "        ?, ?)";
-
-    db->execSqlAsync(
-        sql,
-        [](const drogon::orm::Result&) {
-            ++sSuccessCount;
-        },
-        [eventType](const drogon::orm::DrogonDbException& e) {
-            ++sFailureCount;
-            LOG_ERROR << "Audit log insert failed (" << eventType
-                      << "): " << e.base().what()
-                      << " [total failures: " << sFailureCount.load() << "]";
-        },
-        eventType, userId, targetUserId, tenantId, ip,
-        hasDetail ? detailStr : std::string());
+    if (hasDetail) {
+        db->execSqlAsync(
+            "INSERT INTO audit_log (event_type, user_id, target_user_id, "
+            "                       tenant_id, ip_address, detail) "
+            "VALUES (?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, 0), ?, ?)",
+            [](const drogon::orm::Result&) { ++sSuccessCount; },
+            [eventType](const drogon::orm::DrogonDbException& e) {
+                ++sFailureCount;
+                LOG_ERROR << "Audit log insert failed (" << eventType
+                          << "): " << e.base().what()
+                          << " [total failures: " << sFailureCount.load() << "]";
+            },
+            eventType, userId, targetUserId, tenantId, ip, detailStr);
+    } else {
+        db->execSqlAsync(
+            "INSERT INTO audit_log (event_type, user_id, target_user_id, "
+            "                       tenant_id, ip_address, detail) "
+            "VALUES (?, NULLIF(?, 0), NULLIF(?, 0), NULLIF(?, 0), ?, NULL)",
+            [](const drogon::orm::Result&) { ++sSuccessCount; },
+            [eventType](const drogon::orm::DrogonDbException& e) {
+                ++sFailureCount;
+                LOG_ERROR << "Audit log insert failed (" << eventType
+                          << "): " << e.base().what()
+                          << " [total failures: " << sFailureCount.load() << "]";
+            },
+            eventType, userId, targetUserId, tenantId, ip);
+    }
 }
 
 } // namespace AuditLog

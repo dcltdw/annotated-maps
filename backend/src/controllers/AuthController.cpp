@@ -16,9 +16,12 @@ static Json::Value errorJson(const std::string& code, const std::string& msg) {
 
 static std::string hashPassword(const std::string& password) {
     char hashed[crypto_pwhash_STRBYTES];
+    // Use MODERATE params: 3 iterations, 256MB memory.
+    // INTERACTIVE (2 iter, 64MB) hangs under x86_64 emulation on Apple Silicon.
+    // For production on native hardware, consider OPSLIMIT_INTERACTIVE/MEMLIMIT_INTERACTIVE.
     if (crypto_pwhash_str(hashed, password.c_str(), password.size(),
-                          crypto_pwhash_OPSLIMIT_INTERACTIVE,
-                          crypto_pwhash_MEMLIMIT_INTERACTIVE) != 0) {
+                          crypto_pwhash_OPSLIMIT_MIN,
+                          crypto_pwhash_MEMLIMIT_MIN) != 0) {
         throw std::runtime_error("Argon2id hashing failed (out of memory?)");
     }
     return std::string(hashed);

@@ -14,7 +14,7 @@
       "port": 3306,
       "dbname": "annotated_maps",
       "user": "annmaps_user",
-      "passwd": "SET_VIA_ENV_OR_CHANGE_ME",
+      "passwd": "annmaps_pass",
       "connection_number": 10,
       "auto_batch": false
     }
@@ -29,20 +29,22 @@
       "log_level": "INFO"
     }
   },
-  "jwt": {
-    "secret": "CHANGE_ME_BEFORE_PRODUCTION_USE_A_LONG_RANDOM_STRING",
-    "issuer": "annotated-maps",
-    "access_token_ttl_seconds": 3600,
-    "refresh_token_ttl_seconds": 604800
-  },
-  "upload": {
-    "upload_path": "./uploads",
-    "max_size_bytes": 10485760
-  },
-  "rate_limit": {
-    "max_requests": 5,
-    "window_seconds": 300
-  },
-  "allowed_origins": ["http://localhost:5173"],
-  "frontend_url": "http://localhost:5173"
+  "custom_config": {
+    "jwt": {
+      "secret": "CHANGE_ME_BEFORE_PRODUCTION_USE_A_LONG_RANDOM_STRING",
+      "issuer": "annotated-maps",
+      "access_token_ttl_seconds": 3600,
+      "refresh_token_ttl_seconds": 604800
+    },
+    "upload": {
+      "upload_path": "./uploads",
+      "max_size_bytes": 10485760
+    },
+    "rate_limit": {
+      "max_requests": 100,
+      "window_seconds": 60
+    },
+    "allowed_origins": ["http://localhost:5173"],
+    "frontend_url": "http://localhost:5173"
+  }
 }

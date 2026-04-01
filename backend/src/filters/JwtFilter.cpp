@@ -2,6 +2,7 @@
 #include <drogon/drogon.h>
 #include <jwt-cpp/jwt.h>
 #include <string>
+#include <memory>
 
 void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
                          drogon::FilterCallback&&      failCb,
@@ -33,7 +34,7 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
         auto verifier = jwt::verify()
             .allow_algorithm(jwt::algorithm::hs256{secret})
             .with_issuer(issuer)
-            .with_audience(std::set<std::string>{"annotated-maps"});
+            .with_audience("annotated-maps");
 
         verifier.verify(decoded);
 
@@ -54,14 +55,17 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
         return;
     }
 
+    // Wrap failCb in a shared_ptr so both the success and error lambdas
+    // of execSqlAsync can call it. std::move into two captures causes
+    // the second to be empty (std::bad_function_call on invoke).
+    auto sharedFailCb = std::make_shared<drogon::FilterCallback>(std::move(failCb));
+
     // Verify the user still exists and is active in the database.
-    // This closes the gap where deleted/suspended users retain access
-    // until their JWT expires.
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT is_active FROM users WHERE id=? LIMIT 1",
         [req, userId, username, orgId,
-         failCb = std::move(failCb),
+         sharedFailCb,
          nextCb = std::move(nextCb)](const drogon::orm::Result& r) mutable {
             if (r.empty() || !r[0]["is_active"].as<bool>()) {
                 Json::Value body;
@@ -69,7 +73,7 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
                 body["message"] = "Account is deactivated or does not exist";
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
                 resp->setStatusCode(drogon::k401Unauthorized);
-                failCb(resp);
+                (*sharedFailCb)(resp);
                 return;
             }
 
@@ -78,13 +82,13 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
             req->getAttributes()->insert("orgId",    orgId);
             nextCb();
         },
-        [failCb = std::move(failCb)](const drogon::orm::DrogonDbException&) mutable {
+        [sharedFailCb](const drogon::orm::DrogonDbException&) {
             Json::Value body;
             body["error"]   = "unauthorized";
             body["message"] = "Failed to verify account status";
             auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
             resp->setStatusCode(drogon::k500InternalServerError);
-            failCb(resp);
+            (*sharedFailCb)(resp);
         },
         userId);
 }

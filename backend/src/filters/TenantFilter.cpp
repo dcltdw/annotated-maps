@@ -1,6 +1,7 @@
 #include "TenantFilter.h"
 #include <drogon/drogon.h>
 #include <regex>
+#include <memory>
 
 void TenantFilter::doFilter(const drogon::HttpRequestPtr& req,
                             drogon::FilterCallback&&      failCb,
@@ -36,10 +37,13 @@ void TenantFilter::doFilter(const drogon::HttpRequestPtr& req,
         return;
     }
 
+    // Wrap failCb in shared_ptr so both lambdas can use it.
+    auto sharedFailCb = std::make_shared<drogon::FilterCallback>(std::move(failCb));
+
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT role FROM tenant_members WHERE tenant_id=? AND user_id=? LIMIT 1",
-        [req, tenantId, failCb = std::move(failCb),
+        [req, tenantId, sharedFailCb,
          nextCb = std::move(nextCb)](const drogon::orm::Result& r) mutable {
             if (r.empty()) {
                 Json::Value body;
@@ -47,20 +51,20 @@ void TenantFilter::doFilter(const drogon::HttpRequestPtr& req,
                 body["message"] = "You are not a member of this tenant";
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
                 resp->setStatusCode(drogon::k403Forbidden);
-                failCb(resp);
+                (*sharedFailCb)(resp);
                 return;
             }
             req->getAttributes()->insert("tenantId",   tenantId);
             req->getAttributes()->insert("tenantRole", r[0]["role"].as<std::string>());
             nextCb();
         },
-        [failCb = std::move(failCb)](const drogon::orm::DrogonDbException&) mutable {
+        [sharedFailCb](const drogon::orm::DrogonDbException&) {
             Json::Value body;
             body["error"]   = "db_error";
             body["message"] = "Failed to verify tenant membership";
             auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
             resp->setStatusCode(drogon::k500InternalServerError);
-            failCb(resp);
+            (*sharedFailCb)(resp);
         },
         tenantId, userId);
 }

@@ -29,20 +29,22 @@
       "log_level": "DEBUG"
     }
   },
-  "jwt": {
-    "secret": "CHANGE_ME_USE_A_LONG_RANDOM_STRING",
-    "issuer": "annotated-maps",
-    "access_token_ttl_seconds": 3600,
-    "refresh_token_ttl_seconds": 604800
-  },
-  "upload": {
-    "upload_path": "./uploads",
-    "max_size_bytes": 10485760
-  },
-  "rate_limit": {
-    "max_requests": 5,
-    "window_seconds": 300
-  },
-  "allowed_origins": ["http://localhost:5173"],
-  "frontend_url": "http://localhost:5173"
+  "custom_config": {
+    "jwt": {
+      "secret": "CHANGE_ME_USE_A_LONG_RANDOM_STRING",
+      "issuer": "annotated-maps",
+      "access_token_ttl_seconds": 3600,
+      "refresh_token_ttl_seconds": 604800
+    },
+    "upload": {
+      "upload_path": "./uploads",
+      "max_size_bytes": 10485760
+    },
+    "rate_limit": {
+      "max_requests": 5,
+      "window_seconds": 300
+    },
+    "allowed_origins": ["http://localhost:5173"],
+    "frontend_url": "http://localhost:5173"
+  }
 }
