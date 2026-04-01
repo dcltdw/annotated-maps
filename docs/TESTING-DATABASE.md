@@ -9,7 +9,7 @@ database that is created and dropped automatically.
 With the Docker Compose stack running:
 
 ```bash
-./database/tests/run-db-tests.sh
+python3 database/tests/run-db-tests.py
 ```
 
 The script will:

@@ -33,7 +33,7 @@ annotated-maps/
 │   └── config.json      ← copy and fill in secrets before running
 ├── database/
 │   ├── migrations/      001–004 SQL migration scripts
-│   └── run_migrations.sh
+│   └── run_migrations.py
 └── docker-compose.yml
 ```
 
@@ -89,7 +89,7 @@ cmake --build build -j$(nproc)
 
 ```bash
 cd database
-DB_USER=root DB_PASS=yourpassword ./run_migrations.sh
+DB_PASS=yourpassword python3 run_migrations.py
 ```
 
 ## Permission Model

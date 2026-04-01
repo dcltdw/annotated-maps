@@ -44,7 +44,7 @@ Open a **new terminal tab** and run the seed script:
 
 ```bash
 cd annotated-maps
-./database/seed-local-dev.sh
+python3 database/seed-local-dev.py
 ```
 
 This does two things:
@@ -181,7 +181,7 @@ docker compose down
 # Wipe everything and start fresh (deletes all data)
 docker compose down -v
 docker compose up --build
-# Then re-run: ./database/seed-local-dev.sh
+# Then re-run: python3 database/seed-local-dev.py
 
 # View backend logs only
 docker compose logs -f backend

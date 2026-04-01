@@ -12,7 +12,9 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 
 - Users create maps with a title, description, center coordinates, and zoom level.
 - Annotations (markers, polylines, polygons) are placed on maps with GeoJSON geometry.
+- GeoJSON is validated on input: `type` must be `Point`, `LineString`, or `Polygon`, and `coordinates` must be a non-empty array.
 - Annotations support rich-text descriptions and media attachments (images, links).
+- Media URLs must use `http` or `https` scheme (`javascript:`, `data:`, etc. are rejected).
 
 ### 2.2 Multi-tenancy
 
@@ -58,14 +60,21 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Each tenant may have custom branding stored as a JSON object on the `tenants` table.
 - Supported branding properties: `logo_url`, `favicon_url`, `primary_color`, `accent_color`, `display_name`.
 - All properties are optional; the frontend falls back to platform defaults for missing values.
+- Color values are validated as hex format (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`). URLs must use `https://` scheme. `display_name` is truncated to 255 characters.
 - Any tenant member can read branding; only `admin`-role members can update it.
 - Branding is applied dynamically via CSS custom properties (`--brand-primary`, `--brand-accent`), page title, and favicon.
 
 ### 2.8 Audit Log
 
 - All security-relevant events are recorded to the `audit_log` table: login success/failure, registration, SSO login, member add/remove, and permission changes.
-- Audit inserts are fire-and-forget (async, non-blocking). Failures are logged but do not affect user-facing flows.
+- Audit inserts are fire-and-forget (async, non-blocking). Failures are logged and counted via atomic counters (`AuditLog::failureCount()`, `AuditLog::successCount()`) but do not affect user-facing flows.
 - Each event records: event type, acting user, target user (if applicable), tenant, client IP, and freeform JSON detail.
+
+### 2.9 Resource Limits
+
+- Per-tenant map limit: 1,000 maps. Enforced on map creation.
+- Per-map annotation limit: 5,000 annotations. Enforced on annotation creation.
+- Map list pagination: `pageSize` is clamped to 1–100. Invalid values default to 20.
 
 ---
 
@@ -74,32 +83,56 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 ### 3.1 Transport Security
 
 - All production deployments must run with TLS enabled, either via Drogon's listener config or behind a TLS-terminating reverse proxy.
-- The CORS policy must be tightened in production (replace wildcard `Origin` echo with an allowlist).
 
-### 3.2 Password Security
+### 3.2 CORS
 
-- Passwords are hashed with Argon2id using libsodium's `crypto_pwhash_str` (interactive parameter set).
+- CORS uses an origin whitelist loaded from `custom_config.allowed_origins` in the config file, plus the configured `frontend_url`. Unrecognized origins receive no CORS headers.
+
+### 3.3 Security Headers
+
+- All responses include `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: strict-origin-when-cross-origin`.
+
+### 3.4 Password Security
+
+- Passwords are hashed with Argon2id using libsodium's `crypto_pwhash_str`. Development uses `OPSLIMIT_MIN`/`MEMLIMIT_MIN` parameters for compatibility with emulated Docker environments; production on native hardware should use `OPSLIMIT_INTERACTIVE`/`MEMLIMIT_INTERACTIVE`.
 - Legacy SHA-256 hashes (64-char hex, no leading `$`) are rejected at login. Affected users must reset their password.
 
-### 3.3 Authentication
+### 3.5 Secrets Management
+
+- The JWT secret can be overridden via the `JWT_SECRET` environment variable (minimum 32 characters). If the config file value contains `CHANGE_ME`, a startup warning is printed.
+- The `frontend_url` config value is validated at startup; non-HTTPS, non-localhost values produce a warning.
+- Database credentials in Docker Compose are parameterized via environment variables with local-dev defaults.
+
+### 3.6 Authentication
 
 - Stateless JWT authentication via `JwtFilter` on all protected endpoints.
-- JWT payload includes `sub` (userId), `username`, and `orgId`.
+- JWT payload includes `sub` (userId), `username`, `orgId`, and `aud` (audience: `annotated-maps`).
+- `JwtFilter` validates issuer, audience, signature, and expiry.
 - `tenantId` is not in the JWT; it is provided by the URL path and verified per-request by `TenantFilter`.
 - `JwtFilter` verifies the user still exists and is active (`users.is_active`) on every authenticated request. Deactivated users are rejected immediately with 401, regardless of JWT expiry.
+- Registration error messages are generic ("Registration failed") to prevent account enumeration.
 
-### 3.4 Authorization
+### 3.7 Authorization
 
 - Every mutating endpoint requires a valid JWT.
 - Every tenant-scoped endpoint validates tenant membership via `TenantFilter`, which checks `tenant_members` and injects `tenantRole` into the request.
+- `setPermission` validates that the target user's `org_id` matches the caller's organization.
 - `addMedia` verifies the caller has `can_edit` on the parent map before inserting.
 - `deleteMedia` verifies the caller is the map owner, map editor, or annotation creator before deleting.
 
-### 3.5 Rate Limiting
+### 3.8 Rate Limiting
 
 - `RateLimitFilter` applies a sliding-window rate limit to `/auth/login`, `/auth/register`, and both SSO endpoints.
-- Default: 10 requests per 60 seconds per client IP. Configurable via `rate_limit.max_requests` and `rate_limit.window_seconds` in `config.json`.
+- Configurable via `custom_config.rate_limit.max_requests` and `custom_config.rate_limit.window_seconds` in the config file. Development default: 100 requests per 60 seconds. Production recommendation: 5 requests per 300 seconds.
 - Returns HTTP 429 with a `Retry-After` header when the limit is exceeded.
+
+### 3.9 Input Validation
+
+- GeoJSON: `type` must be `Point`, `LineString`, or `Polygon`; `coordinates` must be non-empty.
+- Media URLs: scheme must be `http` or `https`.
+- Branding colors: must match hex format (`#[0-9a-fA-F]{3,8}`). Branding URLs must use `https`.
+- Pagination: `page` >= 1, `pageSize` clamped to 1–100.
+- SSO error responses are generic ("SSO is not available") to prevent organization slug enumeration.
 
 ---
 
@@ -202,9 +235,14 @@ All routes require JWT + TenantFilter.
 | Layer | Technology |
 |---|---|
 | Frontend | React 18, TypeScript, Vite, Leaflet + Leaflet.draw, Zustand, PWA |
-| Backend | C++20, Drogon framework, jwt-cpp, libsodium (Argon2id) |
-| Database | MySQL 8 |
-| Dev Environment | Docker Compose |
+| Backend | C++20, Drogon framework (v1.9.3), jwt-cpp (v0.7.0), libsodium (Argon2id) |
+| Database | MySQL 8 (MariaDB connector for async I/O) |
+| Dev Environment | Docker Compose (Ubuntu 22.04 containers) |
+| Testing | Python 3 (stdlib only — urllib, json, subprocess) |
+
+### 6.1 Configuration
+
+Backend configuration uses Drogon's JSON config format. Custom application settings (JWT, rate limiting, CORS, frontend URL) are placed under the `custom_config` key and accessed via `drogon::app().getCustomConfig()`.
 
 ---
 
@@ -226,3 +264,7 @@ All routes require JWT + TenantFilter.
 - **No audit log retention policy** — the `audit_log` table grows unbounded. A cron-based cleanup of old rows is recommended for production.
 - **No subdomain-based tenant routing** — tenants are identified by path (`/tenants/{tenantId}/`), not subdomain.
 - **Rate limiter is in-process** — the sliding-window state is held in memory. In a multi-instance deployment, each instance has an independent counter. For shared rate limiting across instances, use a reverse proxy (e.g., nginx `limit_req`) or Redis.
+- **Argon2id uses minimum parameters** — development Docker config uses `OPSLIMIT_MIN`/`MEMLIMIT_MIN` for compatibility with x86_64 emulation on Apple Silicon. Production deployments on native hardware should increase to `OPSLIMIT_INTERACTIVE`/`MEMLIMIT_INTERACTIVE`.
+- **OIDC nonce not verified** — the SSO flow generates a nonce but does not verify it against the ID token.
+- **JWT stored in localStorage** — vulnerable to XSS. Mitigated by security headers and input validation.
+- **SSO token passed in URL fragment** — can leak via browser history and Referer headers.

@@ -7,19 +7,22 @@ controller logic, database, and audit log.
 ## Prerequisites
 
 - Docker Compose stack running (`docker compose up`)
-- `curl` and `python3` (pre-installed on macOS)
+- Python 3 (pre-installed on macOS)
 
 ## Running the tests
 
 ```bash
 # Fast tier (default) — ~60 seconds
-./backend/tests/run-tests.sh
+python3 backend/tests/run-tests.py
 
 # Nightly tier — ~6 minutes (adds 300s rate limit window expiry test)
-./backend/tests/run-tests.sh --tier nightly
+python3 backend/tests/run-tests.py --tier nightly
 
 # Extended tier — ~17 minutes (adds 10-minute soak test)
-./backend/tests/run-tests.sh --tier extended
+python3 backend/tests/run-tests.py --tier extended
+
+# Run a single test
+python3 backend/tests/run-tests.py --only 1
 ```
 
 ## Test tiers
@@ -34,23 +37,23 @@ controller logic, database, and audit log.
 
 | File | Tier | What it tests |
 |---|---|---|
-| `test_01_auth.sh` | fast | Registration, login, refresh, deactivated user, error messages |
-| `test_02_filters.sh` | fast | JwtFilter (missing/bad/expired token, deactivated user), TenantFilter (membership, cross-org) |
-| `test_03_maps.sh` | fast | Map CRUD, tenant scoping, pagination bounds, cross-org isolation |
-| `test_04_annotations.sh` | fast | Annotation CRUD, GeoJSON validation, media URL scheme validation |
-| `test_05_tenants.sh` | fast | Member add/remove, cross-org member rejection, branding validation |
-| `test_06_rate_limit_fast.sh` | fast | Rate limiter blocks after limit, 429 has Retry-After header |
-| `test_07_rate_limit_slow.sh` | nightly | Exhausts limit, waits 300s, verifies requests succeed again |
-| `test_08_audit.sh` | fast | Audit log entries created for login failure, registration, login success |
-| `test_09_security.sh` | fast | Cross-org isolation (maps, annotations, permissions, members), security headers |
-| `test_10_soak.sh` | extended | 10-minute continuous load verifying rate limiter never over-admits |
+| `test_01_auth.py` | fast | Registration, login, refresh, deactivated user, error messages |
+| `test_02_filters.py` | fast | JwtFilter (missing/bad/expired token, deactivated user), TenantFilter (membership, cross-org) |
+| `test_03_maps.py` | fast | Map CRUD, tenant scoping, pagination bounds, cross-org isolation |
+| `test_04_annotations.py` | fast | Annotation CRUD, GeoJSON validation, media URL scheme validation |
+| `test_05_tenants.py` | fast | Member add/remove, cross-org member rejection, branding validation |
+| `test_06_rate_limit_fast.py` | fast | Rate limiter blocks after limit, 429 has Retry-After header |
+| `test_07_rate_limit_slow.py` | nightly | Exhausts limit, waits 300s, verifies requests succeed again |
+| `test_08_audit.py` | fast | Audit log entries created for login failure, registration, login success |
+| `test_09_security.py` | fast | Cross-org isolation (maps, annotations, permissions, members), security headers |
+| `test_10_soak.py` | extended | 10-minute continuous load verifying rate limiter never over-admits |
 
 ## How it works
 
-Tests use `curl` to make HTTP requests to the backend running in Docker.
-Each test file sources `helpers.sh` which provides:
+Tests use Python's `urllib.request` (standard library) to make HTTP requests to
+the backend running in Docker. Each test file imports `helpers.py` which provides:
 
-- `http_get`, `http_post`, `http_put`, `http_delete` — make requests, set `HTTP_STATUS` and `HTTP_BODY`
+- `http_get`, `http_post`, `http_put`, `http_delete` — make requests, return `(status, body)`
 - `assert_status` — verify HTTP status code
 - `assert_json_field` — verify a JSON field value
 - `assert_json_exists` — verify a JSON field is present and non-empty
@@ -59,22 +62,22 @@ Each test file sources `helpers.sh` which provides:
 - `mysql_query` — run SQL against the database (for audit log checks and setup)
 
 Each test file uses a unique prefix for its test data (`t01_`, `t02_`, etc.)
-to avoid collisions when tests run against the same database.
+combined with the process ID to avoid collisions when tests run against the
+same database.
 
 ## Writing new tests
 
-1. Create `backend/tests/test_NN_description.sh`
+1. Create `backend/tests/test_NN_description.py`
 2. Start with:
-   ```bash
-   #!/usr/bin/env bash
-   set -euo pipefail
-   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-   source "$SCRIPT_DIR/helpers.sh"
-   echo "=== Your Test Suite ==="
+   ```python
+   import os, sys
+   sys.path.insert(0, os.path.dirname(__file__))
+   from helpers import reset_counters, report, ...
+   reset_counters()
    ```
-3. Use the assertion helpers from `helpers.sh`
-4. End with `report` (prints summary and exits with correct code)
-5. Add the filename to the `TESTS` array in `run-tests.sh` under the appropriate tier
+3. Use the assertion helpers from `helpers.py`
+4. End with `sys.exit(0 if report() else 1)`
+5. Add the filename to the `FAST_TESTS`, `NIGHTLY_EXTRA`, or `EXTENDED_EXTRA` list in `run-tests.py`
 
 ## Scheduling
 
@@ -82,14 +85,14 @@ to avoid collisions when tests run against the same database.
 
 ```bash
 # crontab -e
-0 3 * * 1-5 cd /path/to/annotated-maps && ./backend/tests/run-tests.sh --tier nightly >> /var/log/annotated-maps-tests.log 2>&1
+0 3 * * 1-5 cd /path/to/annotated-maps && python3 backend/tests/run-tests.py --tier nightly >> /var/log/annotated-maps-tests.log 2>&1
 ```
 
 ### Weekly (e.g., Saturday 2am)
 
 ```bash
 # crontab -e
-0 2 * * 6 cd /path/to/annotated-maps && ./backend/tests/run-tests.sh --tier extended >> /var/log/annotated-maps-tests.log 2>&1
+0 2 * * 6 cd /path/to/annotated-maps && python3 backend/tests/run-tests.py --tier extended >> /var/log/annotated-maps-tests.log 2>&1
 ```
 
 For CI systems (GitHub Actions, GitLab CI), use the `--tier` flag in your
@@ -102,13 +105,14 @@ scheduled triggers.
 Run `docker compose up` first and wait for the `starting on port 8080` log line.
 
 **Rate limit tests fail with "skipped"**
-Previous tests exhausted the rate limit. Either wait for the window to expire
-(300s) or restart the backend: `docker compose restart backend`.
+Previous tests exhausted the rate limit. The runner automatically restarts the
+backend before rate-limit-sensitive tests, but if running individually, restart
+manually: `docker compose restart backend`.
 
 **Audit tests fail with count mismatches**
 The tests clear `audit_log` at the start, but if another process is hitting the
 API simultaneously, extra entries may appear. Run tests in isolation.
 
 **Tests create leftover data**
-Test data (users like `t01_alice`, `t03_bob`, etc.) accumulates in the database.
+Test data (users with PID-based names) accumulates in the database.
 To reset: `docker compose down -v && docker compose up --build`.
