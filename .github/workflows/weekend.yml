@@ -1,0 +1,63 @@
+name: Weekend Extended Tests
+
+on:
+  schedule:
+    - cron: '0 2 * * 6'  # Saturday 2am UTC
+  workflow_dispatch:      # manual trigger from GitHub UI
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # No Docker layer cache — clean build to catch stale dependency issues
+      - name: Build and start stack (no cache)
+        run: |
+          docker compose build --no-cache
+          docker compose up -d
+        env:
+          DOCKER_BUILDKIT: 1
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          echo "Waiting for MySQL..."
+          for i in $(seq 1 30); do
+            if docker compose exec -T mysql mysqladmin ping -uroot -prootpassword 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Wait for backend
+        run: |
+          echo "Waiting for backend..."
+          for i in $(seq 1 12); do
+            if curl -s --max-time 5 -o /dev/null http://localhost:8080/api/v1/../ 2>/dev/null; then
+              echo "Backend is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Run database tests
+        run: python3 database/tests/run-db-tests.py
+
+      - name: Run backend tests (extended tier)
+        run: python3 backend/tests/run-tests.py --tier extended
+        env:
+          CURL_TIMEOUT: "30"
+
+      - name: Show backend logs on failure
+        if: failure()
+        run: docker compose logs --tail 50 backend
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
