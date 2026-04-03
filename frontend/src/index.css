@@ -138,8 +138,145 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   pointer-events: none;
 }
 
+/* ─── Map page layout with notes panel ──────────────────────────────────────── */
+.map-page-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.map-page-content .map-wrapper {
+  flex: 1;
+  min-width: 0;
+}
+
+/* ─── Notes panel ──────────────────────────────────────────────────────────── */
+.notes-panel {
+  width: 320px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-surface);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.notes-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+}
+.notes-header h3 { margin: 0; font-size: 1rem; }
+.notes-header-actions { display: flex; gap: 0.25rem; }
+
+/* Tabs */
+.notes-tabs {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+.notes-tab {
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.notes-tab.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  font-weight: 600;
+}
+.notes-tab:hover { color: var(--color-text); }
+.notes-tab-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.notes-tab-actions { margin-left: 0.25rem; }
+.notes-tab-actions .btn-icon {
+  background: none; border: none; cursor: pointer;
+  font-size: 0.75rem; color: var(--color-text-muted);
+  padding: 0 2px;
+}
+.notes-tab-actions .btn-icon:hover { color: var(--color-danger); }
+
+/* Forms */
+.notes-form {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.notes-form input, .notes-form textarea, .notes-form select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+.notes-form textarea { resize: vertical; }
+.notes-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+/* Note list */
+.notes-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+.notes-empty {
+  text-align: center;
+  color: var(--color-text-muted);
+  padding: 2rem 1rem;
+  font-size: 0.875rem;
+}
+.note-card {
+  padding: 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  margin-bottom: 0.5rem;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+.note-card:hover { border-color: var(--color-primary); }
+.note-card.pinned { border-left: 3px solid var(--color-primary); }
+.note-pin-badge { font-size: 0.75rem; }
+.note-title { margin: 0 0 0.25rem; font-size: 0.9rem; }
+.note-text { margin: 0 0 0.5rem; font-size: 0.85rem; color: var(--color-text); }
+.note-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.note-meta small { color: var(--color-text-muted); font-size: 0.75rem; }
+.note-actions { display: flex; gap: 0.25rem; }
+.note-actions .btn-icon {
+  background: none; border: none; cursor: pointer;
+  font-size: 0.85rem; color: var(--color-text-muted); padding: 0 2px;
+}
+.note-actions .btn-icon:hover { color: var(--color-primary); }
+.note-edit-form { display: flex; flex-direction: column; gap: 0.5rem; }
+.note-edit-form input, .note-edit-form textarea {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+}
+
+/* Small button variants */
+.btn-sm { padding: 0.25rem 0.5rem; font-size: 0.8rem; }
+
 @media (max-width: 600px) {
   .navbar-menu a:not(.btn) { display: none; }
   .map-grid { grid-template-columns: 1fr; }
   .auth-card { padding: 1.5rem; }
+  .map-page-content { flex-direction: column; }
+  .notes-panel { width: 100%; max-height: 300px; border-left: none; border-top: 1px solid var(--color-border); }
 }
