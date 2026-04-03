@@ -88,6 +88,8 @@ void AnnotationController::createAnnotation(
     int tenantId, int mapId) {
 
     int userId = callerUserId(req);
+    std::string callerUsername;
+    try { callerUsername = req->getAttributes()->get<std::string>("username"); } catch (...) {}
     auto body  = req->getJsonObject();
     if (!body || !(*body)["type"] || !(*body)["title"] || !(*body)["geoJson"]) {
         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -136,7 +138,7 @@ void AnnotationController::createAnnotation(
         "FROM maps m "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "WHERE m.id=? AND m.tenant_id=?",
-        [callback, mapId, userId, type, title, description, geoJsonStr]
+        [callback, mapId, userId, callerUsername, type, title, description, geoJsonStr]
         (const drogon::orm::Result& r) {
             if (r.empty() || !r[0]["allowed"].as<bool>()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -149,7 +151,7 @@ void AnnotationController::createAnnotation(
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
                 "SELECT COUNT(*) AS cnt FROM annotations WHERE map_id=?",
-                [callback, mapId, userId, type, title, description, geoJsonStr]
+                [callback, mapId, userId, callerUsername, type, title, description, geoJsonStr]
                 (const drogon::orm::Result& rc) {
                     static const int MAX_ANNOTATIONS_PER_MAP = 5000;
                     if (!rc.empty() && rc[0]["cnt"].as<int>() >= MAX_ANNOTATIONS_PER_MAP) {
@@ -163,18 +165,24 @@ void AnnotationController::createAnnotation(
                     db3->execSqlAsync(
                 "INSERT INTO annotations (map_id, created_by, type, title, description, geo_json) "
                 "VALUES (?,?,?,?,?,?)",
-                [callback, mapId, userId, type, title, description]
+                [callback, mapId, userId, callerUsername, type, title, description, geoJsonStr]
                 (const drogon::orm::Result& r2) {
                     int newId = static_cast<int>(r2.insertId());
                     Json::Value a;
-                    a["id"]          = newId;
-                    a["mapId"]       = mapId;
-                    a["createdBy"]   = userId;
-                    a["type"]        = type;
+                    a["id"]                = newId;
+                    a["mapId"]             = mapId;
+                    a["createdBy"]         = userId;
+                    a["createdByUsername"] = callerUsername;
+                    a["type"]              = type;
                     a["title"]       = title;
                     a["description"] = description;
                     a["canEdit"]     = true;
                     a["media"]       = Json::Value(Json::arrayValue);
+                    // Parse stored GeoJSON back into the response
+                    Json::Value geoJson;
+                    Json::Reader reader;
+                    reader.parse(geoJsonStr, geoJson);
+                    a["geoJson"]     = geoJson;
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(a);
                     resp->setStatusCode(drogon::k201Created);
                     callback(resp);

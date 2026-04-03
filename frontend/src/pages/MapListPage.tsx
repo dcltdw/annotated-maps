@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useMap } from '@/hooks/useMap';
 import type { CreateMapRequest } from '@/types';
 
 export function MapListPage() {
+  const { tenantId } = useParams<{ tenantId: string }>();
   const { maps, loadMaps, createMap } = useMap();
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
@@ -28,7 +29,7 @@ export function MapListPage() {
     setTitle('');
     setDescription('');
     // Navigate to new map
-    window.location.href = `/maps/${map.id}`;
+    window.location.href = `/tenants/${tenantId}/maps/${map.id}`;
   };
 
   if (loading) return <div className="page-loading">Loading maps…</div>;
@@ -88,7 +89,7 @@ export function MapListPage() {
       ) : (
         <div className="map-grid">
           {maps.map((map) => (
-            <Link to={`/maps/${map.id}`} key={map.id} className="map-card">
+            <Link to={`/tenants/${tenantId}/maps/${map.id}`} key={map.id} className="map-card">
               <h3>{map.title}</h3>
               {map.description && <p>{map.description}</p>}
               <span className="map-card-permission">

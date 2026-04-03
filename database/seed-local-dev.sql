@@ -2,8 +2,11 @@
 -- Creates test data for local development: 2 orgs, 6 tenants, 5 users.
 -- Idempotent — safe to run multiple times.
 --
+-- Prerequisites: users must be registered via the API first (seed-local-dev.py
+-- handles this) so passwords get real Argon2id hashes.
+--
 -- Usage:
---   docker compose exec mysql mysql -uroot -prootpassword annotated_maps < database/seed-local-dev.sql
+--   python3 database/seed-local-dev.py
 
 -- ─── Organizations ────────────────────────────────────────────────────────────
 
@@ -25,53 +28,57 @@ INSERT INTO tenants (id, org_id, name, slug) VALUES
     (203, 200, 'Operations',  'operations')
 ON DUPLICATE KEY UPDATE name=VALUES(name);
 
--- ─── Users ────────────────────────────────────────────────────────────────────
--- Passwords are set to NULL here. After running this seed, use the helper
--- script below to set passwords via the running backend (which generates
--- real Argon2id hashes).
---
--- Alternatively, register users via the API and then run just the org/tenant
--- portion of this seed.
+-- ─── Assign users to orgs ─────────────────────────────────────────────────────
+-- Users were registered via the API and have auto-increment IDs.
+-- Look them up by email and assign to the correct org.
 
-SET @pw_hash = NULL;
-
-INSERT INTO users (id, username, email, password_hash, org_id, is_active) VALUES
-    -- Acme Corp users
-    (1001, 'alice', 'alice@acme.test', @pw_hash, 100, TRUE),
-    (1002, 'bob',   'bob@acme.test',   @pw_hash, 100, TRUE),
-    (1003, 'carol', 'carol@acme.test', @pw_hash, 100, TRUE),
-    -- Beta Inc users
-    (2001, 'dan',   'dan@beta.test',   @pw_hash, 200, TRUE),
-    (2002, 'eve',   'eve@beta.test',   @pw_hash, 200, TRUE)
-ON DUPLICATE KEY UPDATE
-    password_hash=VALUES(password_hash),
-    org_id=VALUES(org_id),
-    is_active=VALUES(is_active);
+UPDATE users SET org_id = 100 WHERE email = 'alice@acme.test';
+UPDATE users SET org_id = 100 WHERE email = 'bob@acme.test';
+UPDATE users SET org_id = 100 WHERE email = 'carol@acme.test';
+UPDATE users SET org_id = 200 WHERE email = 'dan@beta.test';
+UPDATE users SET org_id = 200 WHERE email = 'eve@beta.test';
 
 -- ─── Tenant memberships ──────────────────────────────────────────────────────
+-- Use subqueries to look up user IDs by email.
 
-INSERT INTO tenant_members (tenant_id, user_id, role) VALUES
-    -- Acme Engineering
-    (101, 1001, 'admin'),   -- alice: admin
-    (101, 1002, 'editor'),  -- bob: editor
+-- Acme Engineering
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 101, id, 'admin' FROM users WHERE email = 'alice@acme.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 101, id, 'editor' FROM users WHERE email = 'bob@acme.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
-    -- Acme Sales
-    (102, 1001, 'viewer'),  -- alice: viewer (different role, same org)
-    (102, 1003, 'admin'),   -- carol: admin
+-- Acme Sales
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 102, id, 'viewer' FROM users WHERE email = 'alice@acme.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 102, id, 'admin' FROM users WHERE email = 'carol@acme.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
-    -- Acme Support
-    (103, 1002, 'admin'),   -- bob: admin (spans two tenants)
+-- Acme Support
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 103, id, 'admin' FROM users WHERE email = 'bob@acme.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
-    -- Beta Engineering
-    (201, 2001, 'admin'),   -- dan: admin
+-- Beta Engineering
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 201, id, 'admin' FROM users WHERE email = 'dan@beta.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
-    -- Beta Marketing
-    (202, 2001, 'editor'),  -- dan: editor (different role, same org)
-    (202, 2002, 'admin'),   -- eve: admin
+-- Beta Marketing
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 202, id, 'editor' FROM users WHERE email = 'dan@beta.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 202, id, 'admin' FROM users WHERE email = 'eve@beta.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
-    -- Beta Operations
-    (203, 2002, 'viewer')   -- eve: viewer
-ON DUPLICATE KEY UPDATE role=VALUES(role);
+-- Beta Operations
+INSERT INTO tenant_members (tenant_id, user_id, role)
+    SELECT 203, id, 'viewer' FROM users WHERE email = 'eve@beta.test'
+    ON DUPLICATE KEY UPDATE role=VALUES(role);
 
 -- ─── Sample branding ─────────────────────────────────────────────────────────
 
