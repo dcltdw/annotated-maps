@@ -32,7 +32,7 @@ void NoteController::listNotes(
 
     std::string sql = R"(
         SELECT n.id, n.map_id, n.group_id, n.created_by, u.username AS creator_username,
-               n.lat, n.lng, n.title, n.text, n.pinned,
+               n.lat, n.lng, n.title, n.text, n.pinned, n.color,
                n.created_at, n.updated_at,
                CASE WHEN m.owner_id = ? OR n.created_by = ? OR mp.level IN ('edit','moderate','admin')
                     THEN 1 ELSE 0 END AS can_edit
