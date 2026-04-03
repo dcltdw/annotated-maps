@@ -35,13 +35,14 @@ export function MapDetailPage() {
 
   // Load notes and groups
   const loadNotesAndGroups = useCallback(async (groupFilter?: number) => {
-    console.log('loadNotesAndGroups called, mapId:', mapId, 'groupFilter:', groupFilter);
+    console.log('loadNotesAndGroups called, mapId:', mapId, 'groupFilter:', groupFilter, 'tenantId:', storedTenantId);
     if (!mapId) return;
     try {
-      const [g, n] = await Promise.all([
-        noteGroupsService.listGroups(Number(mapId), storedTenantId),
-        notesService.listNotes(Number(mapId), groupFilter, storedTenantId),
-      ]);
+      console.log('Fetching notes and groups...');
+      const gPromise = noteGroupsService.listGroups(Number(mapId), storedTenantId);
+      const nPromise = notesService.listNotes(Number(mapId), groupFilter, storedTenantId);
+      console.log('Promises created, awaiting...');
+      const [g, n] = await Promise.all([gPromise, nPromise]);
       console.log('Notes loaded:', n.length, 'Groups loaded:', g.length);
       setGroups(g);
       setNotes(n);
