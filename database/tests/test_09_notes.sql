@@ -7,8 +7,8 @@ SOURCE helpers.sql;
 
 INSERT INTO organizations (id, name, slug) VALUES (90, 'NoteOrg', 'noteorg');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (90, 90, 'NoteTenant', 'note');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (90, 'note_user', 'note@test.com', NULL, 90, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (90, 'note_user', 'note@test.com', NULL, 90, 'active');
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (90, 90, 90, 'NoteMap');
 
 -- ─── Table exists ────────────────────────────────────────────────────────────
@@ -97,8 +97,8 @@ CALL assert_equals('deleting map cascades notes', '0', CAST(@after AS CHAR));
 -- because the CASCADE path (maps.owner_id) doesn't clear user 92's notes
 -- (user 92 doesn't own the map).
 
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (92, 'note_restricted', 'restrict@test.com', NULL, 90, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (92, 'note_restricted', 'restrict@test.com', NULL, 90, 'active');
 INSERT INTO notes (map_id, created_by, lat, lng, text)
     VALUES (90, 92, 0, 0, 'restrict test');
 

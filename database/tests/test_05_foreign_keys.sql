@@ -7,8 +7,8 @@ SOURCE helpers.sql;
 
 INSERT INTO organizations (id, name, slug) VALUES (30, 'FKOrg', 'fkorg');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (30, 30, 'FKTenant', 'fk');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (30, 'fkuser', 'fk@test.com', NULL, 30, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (30, 'fkuser', 'fk@test.com', NULL, 30, 'active');
 
 -- ─── Helper procedures ──────────────────────────────────────────────────────
 

@@ -146,20 +146,24 @@ export interface CreateAnnotationRequest {
 
 // ─── Permissions ─────────────────────────────────────────────────────────────
 
+export type PermissionLevel = 'none' | 'view' | 'comment' | 'edit' | 'moderate' | 'admin';
+
 export interface MapPermission {
   id: number;
   mapId: number;
   userId: number | null;
   username: string | null;
-  canView: boolean;
-  canEdit: boolean;
+  level: PermissionLevel;
 }
 
 export interface SetPermissionRequest {
   userId: number | null;
-  canView: boolean;
-  canEdit: boolean;
+  level: PermissionLevel;
 }
+
+export type UserStatus = 'active' | 'suspended' | 'deactivated' | 'pending' | 'locked';
+export type PlatformRole = 'superuser' | 'support' | 'none';
+export type OrgRole = 'owner' | 'admin' | 'member';
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 

@@ -31,13 +31,22 @@ CALL check_column('users', 'email',         'NO');
 CALL check_column('users', 'password_hash', 'YES');
 CALL check_column('users', 'org_id',        'YES');
 CALL check_column('users', 'external_id',   'YES');
-CALL check_column('users', 'is_active',     'NO');
+CALL check_column('users', 'status',         'NO');
+CALL check_column('users', 'platform_role',  'NO');
 
 -- maps
 CALL check_column('maps', 'tenant_id',      'NO');
 
 -- tenants
 CALL check_column('tenants', 'branding',    'YES');
+
+-- map_permissions (level enum replaces can_view/can_edit booleans)
+CALL check_column('map_permissions', 'level', 'NO');
+
+-- org_members
+CALL check_column('org_members', 'org_id',   'NO');
+CALL check_column('org_members', 'user_id',  'NO');
+CALL check_column('org_members', 'role',     'NO');
 
 -- audit_log
 CALL check_column('audit_log', 'event_type',     'NO');

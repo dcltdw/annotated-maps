@@ -82,7 +82,7 @@ print("  All update tests passed.")
 print("  --- Permissions ---")
 
 status, _ = http_put(f"/tenants/{TENANT_A}/maps/{MAP_ID}/permissions",
-                     {"userId": None, "canView": True, "canEdit": False}, TOKEN_A)
+                     {"userId": None, "level": "view"}, TOKEN_A)
 assert_status("permission: owner can set public access", 200, status)
 
 status, _ = http_get(f"/tenants/{TENANT_A}/maps/{MAP_ID}/permissions", TOKEN_A)

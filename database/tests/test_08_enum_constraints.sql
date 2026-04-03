@@ -7,8 +7,8 @@ SOURCE helpers.sql;
 
 INSERT INTO organizations (id, name, slug) VALUES (60, 'EnumOrg', 'enum');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (60, 60, 'EnumTenant', 'enum');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (60, 'enum_user', 'enum@test.com', NULL, 60, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (60, 'enum_user', 'enum@test.com', NULL, 60, 'active');
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (60, 60, 60, 'EnumMap');
 
 -- ─── tenant_members.role accepts valid values ────────────────────────────────

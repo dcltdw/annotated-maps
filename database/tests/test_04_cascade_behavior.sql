@@ -7,15 +7,15 @@ SOURCE helpers.sql;
 
 INSERT INTO organizations (id, name, slug) VALUES (10, 'CascadeOrg', 'cascade');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (10, 10, 'CascadeTenant', 'cascade');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (10, 'cascade_user', 'cascade@test.com', NULL, 10, TRUE);
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (11, 'cascade_user2', 'cascade2@test.com', NULL, 10, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (10, 'cascade_user', 'cascade@test.com', NULL, 10, 'active');
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (11, 'cascade_user2', 'cascade2@test.com', NULL, 10, 'active');
 INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (10, 10, 'admin');
 INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (10, 11, 'viewer');
 INSERT INTO sso_providers (org_id, config) VALUES (10, '{"issuer":"test"}');
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (10, 10, 10, 'CascadeMap');
-INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (10, 11, TRUE);
+INSERT INTO map_permissions (map_id, user_id, level) VALUES (10, 11, 'view');
 INSERT INTO annotations (id, map_id, created_by, type, title, geo_json)
     VALUES (10, 10, 10, 'marker', 'TestAnn', '{"type":"Point","coordinates":[0,0]}');
 INSERT INTO annotation_media (id, annotation_id, media_type, url)
@@ -69,8 +69,8 @@ CALL assert_equals('audit_log.tenant_id set to NULL after tenant deletion',
 -- Re-create minimal data for user deletion test
 INSERT INTO organizations (id, name, slug) VALUES (20, 'UserDelOrg', 'userdel');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (20, 20, 'UDTenant', 'ud');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (20, 'delme', 'delme@test.com', NULL, 20, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (20, 'delme', 'delme@test.com', NULL, 20, 'active');
 INSERT INTO audit_log (event_type, user_id, ip_address)
     VALUES ('user_del_test', 20, '127.0.0.1');
 
@@ -85,8 +85,8 @@ CALL assert_equals('audit_log.user_id set to NULL after user deletion',
 
 -- ─── Test: deleting a user cascades to tenant_members ────────────────────────
 
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (21, 'member_del', 'memberdel@test.com', NULL, 20, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (21, 'member_del', 'memberdel@test.com', NULL, 20, 'active');
 INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (20, 21, 'editor');
 
 SELECT COUNT(*) INTO @before FROM tenant_members WHERE user_id = 21;
@@ -98,11 +98,11 @@ CALL assert_equals('deleting user cascades tenant_members (after)', '0', CAST(@a
 
 -- ─── Test: deleting a map cascades to map_permissions ────────────────────────
 
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (22, 'mapperm_user', 'mapperm@test.com', NULL, 20, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (22, 'mapperm_user', 'mapperm@test.com', NULL, 20, 'active');
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (20, 22, 20, 'PermMap');
-INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (20, NULL, TRUE);
-INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (20, 22, TRUE);
+INSERT INTO map_permissions (map_id, user_id, level) VALUES (20, NULL, 'view');
+INSERT INTO map_permissions (map_id, user_id, level) VALUES (20, 22, 'view');
 
 SELECT COUNT(*) INTO @before FROM map_permissions WHERE map_id = 20;
 DELETE FROM maps WHERE id = 20;

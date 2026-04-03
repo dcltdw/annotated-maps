@@ -7,8 +7,8 @@ SOURCE helpers.sql;
 
 INSERT INTO organizations (id, name, slug) VALUES (1, 'TestOrg', 'testorg');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (1, 1, 'TestTenant', 'test');
-INSERT INTO users (id, username, email, password_hash, org_id, is_active)
-    VALUES (1, 'testuser', 'test@example.com', NULL, 1, TRUE);
+INSERT INTO users (id, username, email, password_hash, org_id, status)
+    VALUES (1, 'testuser', 'test@example.com', NULL, 1, 'active');
 
 -- ─── Helper procedure for testing duplicate inserts ──────────────────────────
 
@@ -26,22 +26,22 @@ DELIMITER $$
 CREATE PROCEDURE test_dup_username()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1062 BEGIN END;
-    INSERT INTO users (username, email, password_hash, org_id, is_active)
-        VALUES ('testuser', 'other@example.com', NULL, 1, TRUE);
+    INSERT INTO users (username, email, password_hash, org_id, status)
+        VALUES ('testuser', 'other@example.com', NULL, 1, 'active');
 END$$
 
 CREATE PROCEDURE test_dup_email()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1062 BEGIN END;
-    INSERT INTO users (username, email, password_hash, org_id, is_active)
-        VALUES ('otheruser', 'test@example.com', NULL, 1, TRUE);
+    INSERT INTO users (username, email, password_hash, org_id, status)
+        VALUES ('otheruser', 'test@example.com', NULL, 1, 'active');
 END$$
 
 CREATE PROCEDURE test_dup_external_id()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1062 BEGIN END;
-    INSERT INTO users (username, email, password_hash, org_id, external_id, is_active)
-        VALUES ('ssouser2', 'sso2@example.com', NULL, 1, 'sso-sub-1', TRUE);
+    INSERT INTO users (username, email, password_hash, org_id, external_id, status)
+        VALUES ('ssouser2', 'sso2@example.com', NULL, 1, 'sso-sub-1', 'active');
 END$$
 
 CREATE PROCEDURE test_dup_org_slug()
@@ -65,7 +65,7 @@ END$$
 CREATE PROCEDURE test_dup_map_permission()
 BEGIN
     DECLARE CONTINUE HANDLER FOR SQLSTATE '23000' BEGIN END;
-    INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (1, NULL, TRUE);
+    INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, NULL, 'view');
 END$$
 
 CREATE PROCEDURE test_dup_sso_org()
@@ -118,14 +118,14 @@ CALL assert_true('tenant_members rejects duplicate (tenant_id, user_id)', @befor
 
 -- map_permissions: duplicate (map_id, non-NULL user_id) is rejected
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (1, 1, 1, 'Test Map');
-INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (1, 1, TRUE);
+INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, 1, 'view');
 
 DROP PROCEDURE IF EXISTS test_dup_map_perm_user;
 DELIMITER $$
 CREATE PROCEDURE test_dup_map_perm_user()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1062 BEGIN END;
-    INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (1, 1, TRUE);
+    INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, 1, 'view');
 END$$
 DELIMITER ;
 
@@ -138,7 +138,7 @@ DROP PROCEDURE IF EXISTS test_dup_map_perm_user;
 -- map_permissions: duplicate (map_id, NULL user_id) is rejected
 -- Migration 010 adds a generated column (COALESCE(user_id, 0)) with a unique
 -- key, so the database now enforces one public permission row per map.
-INSERT INTO map_permissions (map_id, user_id, can_view) VALUES (1, NULL, TRUE);
+INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, NULL, 'view');
 SELECT COUNT(*) INTO @before FROM map_permissions WHERE map_id = 1 AND user_id IS NULL;
 CALL test_dup_map_permission();
 SELECT COUNT(*) INTO @after FROM map_permissions WHERE map_id = 1 AND user_id IS NULL;

@@ -49,7 +49,7 @@ print("  All cross-org map isolation tests passed.")
 print("  --- Cross-org permission grant ---")
 
 status, _ = http_put(f"/tenants/{TENANT_A}/maps/{MAP_A}/permissions",
-                     {"userId": USER_B_ID, "canView": True, "canEdit": False}, TOKEN_A)
+                     {"userId": USER_B_ID, "level": "view"}, TOKEN_A)
 assert_status("security: cannot grant permission to cross-org user", 400, status)
 
 print("  All cross-org permission grant tests passed.")

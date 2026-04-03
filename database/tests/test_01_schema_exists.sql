@@ -44,3 +44,7 @@ CALL assert_equals('table annotation_media exists', '1', CAST(@cnt AS CHAR));
 SELECT COUNT(*) INTO @cnt FROM information_schema.tables
     WHERE table_schema = @db AND table_name = 'audit_log';
 CALL assert_equals('table audit_log exists', '1', CAST(@cnt AS CHAR));
+
+SELECT COUNT(*) INTO @cnt FROM information_schema.tables
+    WHERE table_schema = @db AND table_name = 'org_members';
+CALL assert_equals('table org_members exists', '1', CAST(@cnt AS CHAR));

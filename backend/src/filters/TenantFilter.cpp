@@ -37,7 +37,20 @@ void TenantFilter::doFilter(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    // Wrap failCb in shared_ptr so both lambdas can use it.
+    // Superuser bypasses tenant membership check
+    std::string platformRole;
+    try {
+        platformRole = req->getAttributes()->get<std::string>("platformRole");
+    } catch (...) {}
+
+    if (platformRole == "superuser") {
+        req->getAttributes()->insert("tenantId",   tenantId);
+        req->getAttributes()->insert("tenantRole", std::string("admin"));
+        nextCb();
+        return;
+    }
+
+    // Wrap failCb in shared_ptr so both lambdas can call it.
     auto sharedFailCb = std::make_shared<drogon::FilterCallback>(std::move(failCb));
 
     auto db = drogon::app().getDbClient();

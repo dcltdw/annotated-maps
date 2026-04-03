@@ -45,10 +45,10 @@ assert_status("jwt: garbage token returns 401", 401, status)
 status, _ = http_get("/tenants", TOKEN)
 assert_status("jwt: valid token returns 200", 200, status)
 
-mysql_query(f"UPDATE users SET is_active = FALSE WHERE email = 't02_{RUN_ID}@test.com';")
+mysql_query(f"UPDATE users SET status = 'deactivated' WHERE email = 't02_{RUN_ID}@test.com';")
 status, _ = http_get("/tenants", TOKEN)
 assert_status("jwt: deactivated user with valid token returns 401", 401, status)
-mysql_query(f"UPDATE users SET is_active = TRUE WHERE email = 't02_{RUN_ID}@test.com';")
+mysql_query(f"UPDATE users SET status = 'active' WHERE email = 't02_{RUN_ID}@test.com';")
 
 print("  All JwtFilter tests passed.")
 

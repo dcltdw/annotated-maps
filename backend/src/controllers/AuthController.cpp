@@ -119,6 +119,13 @@ void AuthController::registerUser(
                                 "VALUES (?,?,?)",
                                 [callback, req, newId, username, email, orgId, tenantId, this]
                                 (const drogon::orm::Result&) {
+                                    // Step 5: Add to org as owner
+                                    auto db5 = drogon::app().getDbClient();
+                                    db5->execSqlAsync(
+                                        "INSERT INTO org_members (org_id, user_id, role) "
+                                        "VALUES (?,?,?)",
+                                        [callback, req, newId, username, email, orgId, tenantId, this]
+                                        (const drogon::orm::Result&) {
                                     AuditLog::record("register", req, newId);
                                     std::string token = issueToken(newId, username, orgId);
 
@@ -144,6 +151,14 @@ void AuthController::registerUser(
                                         drogon::HttpResponse::newHttpJsonResponse(resp);
                                     httpResp->setStatusCode(drogon::k201Created);
                                     callback(httpResp);
+                                        },
+                                        [callback](const drogon::orm::DrogonDbException&) {
+                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                                                errorJson("db_error", "Failed to assign org membership"));
+                                            resp->setStatusCode(drogon::k500InternalServerError);
+                                            callback(resp);
+                                        },
+                                        orgId, newId, "owner");
                                 },
                                 [callback](const drogon::orm::DrogonDbException&) {
                                     auto resp = drogon::HttpResponse::newHttpJsonResponse(

@@ -28,7 +28,7 @@ void AnnotationController::listAnnotations(
                a.created_at, a.updated_at,
                CASE
                    WHEN m.owner_id = ? THEN 1
-                   WHEN mp.can_edit = 1 THEN 1
+                   WHEN mp.level IN ('edit','moderate','admin') THEN 1
                    ELSE 0
                END AS can_edit
         FROM annotations a
@@ -37,10 +37,11 @@ void AnnotationController::listAnnotations(
         LEFT JOIN map_permissions mp
                ON mp.map_id = m.id AND mp.user_id = ?
         LEFT JOIN map_permissions mp_pub
-               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
+               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL
+               AND mp_pub.level IN ('view','comment','edit','moderate','admin')
         WHERE a.map_id = ?
           AND m.tenant_id = ?
-          AND (m.owner_id = ? OR mp.can_view = 1 OR mp_pub.can_view = 1)
+          AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))
         ORDER BY a.created_at ASC
     )";
 
@@ -134,7 +135,7 @@ void AnnotationController::createAnnotation(
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT CASE WHEN m.owner_id=? THEN 1 "
-        "            WHEN mp.can_edit=1 THEN 1 ELSE 0 END AS allowed "
+        "            WHEN mp.level IN ('edit','moderate','admin') THEN 1 ELSE 0 END AS allowed "
         "FROM maps m "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "WHERE m.id=? AND m.tenant_id=?",
@@ -223,15 +224,16 @@ void AnnotationController::getAnnotation(
     auto db    = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT a.*, u.username AS creator_username, "
-        "       CASE WHEN m.owner_id=? OR mp.can_edit=1 THEN 1 ELSE 0 END AS can_edit "
+        "       CASE WHEN m.owner_id=? OR mp.level IN ('edit','moderate','admin') THEN 1 ELSE 0 END AS can_edit "
         "FROM annotations a "
         "JOIN maps m ON m.id=a.map_id "
         "JOIN users u ON u.id=a.created_by "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "LEFT JOIN map_permissions mp_pub "
-        "       ON mp_pub.map_id=m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view=1 "
+        "       ON mp_pub.map_id=m.id AND mp_pub.user_id IS NULL"
+        "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
-        "  AND (m.owner_id=? OR mp.can_view=1 OR mp_pub.can_view=1)",
+        "  AND (m.owner_id=? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
         [callback](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -305,7 +307,7 @@ void AnnotationController::updateAnnotation(
         "    a.description = IF(?='', a.description, ?), "
         "    a.geo_json    = IF(?=0, a.geo_json, ?) "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
-        "  AND (m.owner_id=? OR mp.can_edit=1 OR a.created_by=?)",
+        "  AND (m.owner_id=? OR mp.level IN ('edit','moderate','admin') OR a.created_by=?)",
         [callback, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -346,7 +348,7 @@ void AnnotationController::deleteAnnotation(
         "JOIN maps m ON m.id=a.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
-        "  AND (m.owner_id=? OR mp.can_edit=1 OR a.created_by=?)",
+        "  AND (m.owner_id=? OR mp.level IN ('edit','moderate','admin') OR a.created_by=?)",
         [callback](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -402,7 +404,7 @@ void AnnotationController::addMedia(
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT CASE WHEN m.owner_id=? THEN 1 "
-        "            WHEN mp.can_edit=1 THEN 1 ELSE 0 END AS allowed "
+        "            WHEN mp.level IN ('edit','moderate','admin') THEN 1 ELSE 0 END AS allowed "
         "FROM annotations a "
         "JOIN maps m ON m.id=a.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
@@ -467,7 +469,7 @@ void AnnotationController::deleteMedia(
         "JOIN maps m ON m.id = a.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "WHERE am.id=? AND a.id=? AND a.map_id=? AND m.tenant_id=? "
-        "  AND (m.owner_id=? OR mp.can_edit=1 OR a.created_by=?)",
+        "  AND (m.owner_id=? OR mp.level IN ('edit','moderate','admin') OR a.created_by=?)",
         [callback, mediaId](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(

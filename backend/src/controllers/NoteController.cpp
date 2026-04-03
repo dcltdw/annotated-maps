@@ -27,16 +27,17 @@ void NoteController::listNotes(
         SELECT n.id, n.map_id, n.created_by, u.username AS creator_username,
                n.lat, n.lng, n.title, n.text, n.pinned,
                n.created_at, n.updated_at,
-               CASE WHEN m.owner_id = ? OR n.created_by = ? OR mp.can_edit = 1
+               CASE WHEN m.owner_id = ? OR n.created_by = ? OR mp.level IN ('edit','moderate','admin')
                     THEN 1 ELSE 0 END AS can_edit
         FROM notes n
         JOIN maps m ON m.id = n.map_id
         JOIN users u ON u.id = n.created_by
         LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ?
         LEFT JOIN map_permissions mp_pub
-               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
+               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL
+               AND mp_pub.level IN ('view','comment','edit','moderate','admin')
         WHERE n.map_id = ? AND m.tenant_id = ?
-          AND (m.owner_id = ? OR mp.can_view = 1 OR mp_pub.can_view = 1)
+          AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))
         ORDER BY n.pinned DESC, n.created_at ASC
     )";
 
@@ -101,9 +102,10 @@ void NoteController::createNote(
         "SELECT m.id FROM maps m "
         "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
         "LEFT JOIN map_permissions mp_pub "
-        "       ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1 "
+        "       ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL"
+        "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE m.id = ? AND m.tenant_id = ? "
-        "  AND (m.owner_id = ? OR mp.can_view = 1 OR mp_pub.can_view = 1)",
+        "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
         [callback, mapId, userId, lat, lng, title, text]
         (const drogon::orm::Result& r) {
             if (r.empty()) {
@@ -185,16 +187,17 @@ void NoteController::getNote(
     auto db    = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT n.*, u.username AS creator_username, "
-        "       CASE WHEN m.owner_id=? OR n.created_by=? OR mp.can_edit=1 "
+        "       CASE WHEN m.owner_id=? OR n.created_by=? OR mp.level IN ('edit','moderate','admin') "
         "            THEN 1 ELSE 0 END AS can_edit "
         "FROM notes n "
         "JOIN maps m ON m.id = n.map_id "
         "JOIN users u ON u.id = n.created_by "
         "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
         "LEFT JOIN map_permissions mp_pub "
-        "       ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1 "
+        "       ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL"
+        "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
-        "  AND (m.owner_id = ? OR mp.can_view = 1 OR mp_pub.can_view = 1)",
+        "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
         [callback](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -256,7 +259,7 @@ void NoteController::updateNote(
         "SET n.title = IF(?='', n.title, ?), "
         "    n.text  = IF(?='', n.text, ?) "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
-        "  AND (m.owner_id = ? OR mp.can_edit = 1 OR n.created_by = ?)",
+        "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin') OR n.created_by = ?)",
         [callback, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -296,7 +299,7 @@ void NoteController::deleteNote(
         "JOIN maps m ON m.id = n.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
-        "  AND (m.owner_id = ? OR mp.can_edit = 1 OR n.created_by = ?)",
+        "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin') OR n.created_by = ?)",
         [callback](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(

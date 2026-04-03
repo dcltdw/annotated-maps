@@ -55,31 +55,43 @@ void JwtFilter::doFilter(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    // Wrap failCb in a shared_ptr so both the success and error lambdas
-    // of execSqlAsync can call it. std::move into two captures causes
-    // the second to be empty (std::bad_function_call on invoke).
+    // Wrap failCb in shared_ptr so both lambdas can call it.
     auto sharedFailCb = std::make_shared<drogon::FilterCallback>(std::move(failCb));
 
-    // Verify the user still exists and is active in the database.
+    // Verify the user still exists, is active, and get their platform_role.
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
-        "SELECT is_active FROM users WHERE id=? LIMIT 1",
+        "SELECT status, platform_role FROM users WHERE id=? LIMIT 1",
         [req, userId, username, orgId,
          sharedFailCb,
          nextCb = std::move(nextCb)](const drogon::orm::Result& r) mutable {
-            if (r.empty() || !r[0]["is_active"].as<bool>()) {
+            if (r.empty()) {
                 Json::Value body;
                 body["error"]   = "unauthorized";
-                body["message"] = "Account is deactivated or does not exist";
+                body["message"] = "Account does not exist";
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
                 resp->setStatusCode(drogon::k401Unauthorized);
                 (*sharedFailCb)(resp);
                 return;
             }
 
-            req->getAttributes()->insert("userId",   userId);
-            req->getAttributes()->insert("username", username);
-            req->getAttributes()->insert("orgId",    orgId);
+            std::string status = r[0]["status"].as<std::string>();
+            if (status != "active") {
+                Json::Value body;
+                body["error"]   = "unauthorized";
+                body["message"] = "Account is " + status;
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
+                resp->setStatusCode(drogon::k401Unauthorized);
+                (*sharedFailCb)(resp);
+                return;
+            }
+
+            std::string platformRole = r[0]["platform_role"].as<std::string>();
+
+            req->getAttributes()->insert("userId",       userId);
+            req->getAttributes()->insert("username",     username);
+            req->getAttributes()->insert("orgId",        orgId);
+            req->getAttributes()->insert("platformRole", platformRole);
             nextCb();
         },
         [sharedFailCb](const drogon::orm::DrogonDbException&) {

@@ -8,13 +8,18 @@ SOURCE helpers.sql;
 INSERT INTO organizations (id, name, slug) VALUES (40, 'DefaultsOrg', 'defaults');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (40, 40, 'DefaultsTenant', 'defaults');
 
--- ─── users.is_active defaults to TRUE ────────────────────────────────────────
+-- ─── users.status defaults to active ──────────────────────────────────────────
 
 INSERT INTO users (id, username, email, password_hash, org_id)
     VALUES (40, 'defaults_user', 'defaults@test.com', NULL, 40);
 
-SELECT is_active INTO @active FROM users WHERE id = 40;
-CALL assert_equals('users.is_active defaults to TRUE', '1', CAST(@active AS CHAR));
+SELECT status INTO @status FROM users WHERE id = 40;
+CALL assert_equals('users.status defaults to active', 'active', @status);
+
+-- ─── users.platform_role defaults to none ─────────────────────────────────────
+
+SELECT platform_role INTO @pr FROM users WHERE id = 40;
+CALL assert_equals('users.platform_role defaults to none', 'none', @pr);
 
 -- ─── tenant_members.role defaults to viewer ──────────────────────────────────
 
@@ -28,10 +33,8 @@ CALL assert_equals('tenant_members.role defaults to viewer', 'viewer', @role);
 INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (40, 40, 40, 'DefaultsMap');
 INSERT INTO map_permissions (map_id, user_id) VALUES (40, NULL);
 
-SELECT can_view INTO @cv FROM map_permissions WHERE map_id = 40 AND user_id IS NULL;
-SELECT can_edit INTO @ce FROM map_permissions WHERE map_id = 40 AND user_id IS NULL;
-CALL assert_equals('map_permissions.can_view defaults to FALSE', '0', CAST(@cv AS CHAR));
-CALL assert_equals('map_permissions.can_edit defaults to FALSE', '0', CAST(@ce AS CHAR));
+SELECT level INTO @lv FROM map_permissions WHERE map_id = 40 AND user_id IS NULL;
+CALL assert_equals('map_permissions.level defaults to none', 'none', @lv);
 
 -- ─── tenants.branding defaults to NULL ────────────────────────────────────────
 

@@ -43,8 +43,8 @@ void MapController::listMaps(
                m.created_at, m.updated_at,
                CASE
                    WHEN m.owner_id = ? THEN 'owner'
-                   WHEN mp2.can_edit = 1 THEN 'edit'
-                   WHEN mp2.can_view = 1 OR mp_pub.can_view = 1 THEN 'view'
+                   WHEN mp2.level IN ('edit','moderate','admin') THEN 'edit'
+                   WHEN mp2.level IN ('view','comment') OR mp_pub.level IN ('view','comment','edit') THEN 'view'
                    ELSE 'none'
                END AS permission
         FROM maps m
@@ -52,9 +52,12 @@ void MapController::listMaps(
         LEFT JOIN map_permissions mp2
                ON mp2.map_id = m.id AND mp2.user_id = ?
         LEFT JOIN map_permissions mp_pub
-               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
+               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL
+               AND mp_pub.level IN ('view','comment','edit','moderate','admin')
         WHERE m.tenant_id = ?
-          AND (m.owner_id = ? OR mp2.can_view = 1 OR mp_pub.can_view = 1)
+          AND (m.owner_id = ?
+               OR mp2.level IN ('view','comment','edit','moderate','admin')
+               OR mp_pub.level IN ('view','comment','edit','moderate','admin'))
         ORDER BY m.updated_at DESC
         LIMIT ? OFFSET ?
     )";
@@ -186,8 +189,8 @@ void MapController::getMap(
                m.created_at, m.updated_at,
                CASE
                    WHEN m.owner_id = ? THEN 'owner'
-                   WHEN mp2.can_edit = 1 THEN 'edit'
-                   WHEN mp2.can_view = 1 OR mp_pub.can_view = 1 THEN 'view'
+                   WHEN mp2.level IN ('edit','moderate','admin') THEN 'edit'
+                   WHEN mp2.level IN ('view','comment') OR mp_pub.level IN ('view','comment','edit') THEN 'view'
                    ELSE 'none'
                END AS permission
         FROM maps m
@@ -195,7 +198,8 @@ void MapController::getMap(
         LEFT JOIN map_permissions mp2
                ON mp2.map_id = m.id AND mp2.user_id = ?
         LEFT JOIN map_permissions mp_pub
-               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL AND mp_pub.can_view = 1
+               ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL
+               AND mp_pub.level IN ('view','comment','edit','moderate','admin')
         WHERE m.id = ? AND m.tenant_id = ?
     )";
 
@@ -359,7 +363,7 @@ void MapController::listPermissions(
             }
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
-                "SELECT mp.id, mp.user_id, u.username, mp.can_view, mp.can_edit "
+                "SELECT mp.id, mp.user_id, u.username, mp.level "
                 "FROM map_permissions mp "
                 "LEFT JOIN users u ON u.id = mp.user_id "
                 "WHERE mp.map_id=?",
@@ -370,8 +374,7 @@ void MapController::listPermissions(
                         p["id"]       = row["id"].as<int>();
                         p["userId"]   = row["user_id"].isNull() ? Json::Value() : Json::Value(row["user_id"].as<int>());
                         p["username"] = row["username"].isNull() ? Json::Value("(public)") : Json::Value(row["username"].as<std::string>());
-                        p["canView"]  = row["can_view"].as<bool>();
-                        p["canEdit"]  = row["can_edit"].as<bool>();
+                        p["level"]    = row["level"].as<std::string>();
                         arr.append(p);
                     }
                     callback(drogon::HttpResponse::newHttpJsonResponse(arr));
@@ -411,8 +414,23 @@ void MapController::setPermission(
         return;
     }
 
-    bool canView  = (*body).get("canView", false).asBool();
-    bool canEdit  = (*body).get("canEdit", false).asBool();
+    // Accept "level" (new) or fall back to "canView"/"canEdit" (legacy compat)
+    std::string level = (*body).get("level", "").asString();
+    if (level.empty()) {
+        bool canEdit = (*body).get("canEdit", false).asBool();
+        bool canView = (*body).get("canView", false).asBool();
+        level = canEdit ? "edit" : (canView ? "view" : "none");
+    }
+    // Validate level
+    if (level != "none" && level != "view" && level != "comment" &&
+        level != "edit" && level != "moderate" && level != "admin") {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("bad_request", "level must be none, view, comment, edit, moderate, or admin"));
+        resp->setStatusCode(drogon::k400BadRequest);
+        callback(resp);
+        return;
+    }
+
     bool isPublic = (*body)["userId"].isNull();
     int  targetId = isPublic ? 0 : (*body)["userId"].asInt();
 
@@ -420,7 +438,7 @@ void MapController::setPermission(
     db->execSqlAsync(
         "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, req, id, tenantId, callerId, callerOrg, targetId,
-         isPublic, canView, canEdit](const drogon::orm::Result& r) {
+         isPublic, level](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
                     errorJson("forbidden", "Only the map owner can set permissions"));
@@ -433,7 +451,7 @@ void MapController::setPermission(
                 auto dbCheck = drogon::app().getDbClient();
                 dbCheck->execSqlAsync(
                     "SELECT id FROM users WHERE id=? AND org_id=?",
-                    [callback, req, id, tenantId, callerId, targetId, canView, canEdit]
+                    [callback, req, id, tenantId, callerId, targetId, level]
                     (const drogon::orm::Result& rc) {
                         if (rc.empty()) {
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -445,14 +463,14 @@ void MapController::setPermission(
                         }
                         auto db2 = drogon::app().getDbClient();
                         db2->execSqlAsync(
-                            "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
-                            "VALUES (?,?,?,?) "
-                            "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
-                            [callback, req, id, tenantId, callerId, targetId, canView, canEdit]
+                            "INSERT INTO map_permissions (map_id, user_id, level) "
+                            "VALUES (?,?,?) "
+                            "ON DUPLICATE KEY UPDATE level=VALUES(level)",
+                            [callback, req, id, tenantId, callerId, targetId, level]
                             (const drogon::orm::Result&) {
                                 Json::Value detail;
                                 detail["mapId"] = id; detail["targetUserId"] = targetId;
-                                detail["canView"] = canView; detail["canEdit"] = canEdit;
+                                detail["level"] = level;
                                 AuditLog::record("permission_change", req, callerId, targetId, tenantId, detail);
                                 Json::Value v; v["updated"] = true;
                                 callback(drogon::HttpResponse::newHttpJsonResponse(v));
@@ -463,7 +481,7 @@ void MapController::setPermission(
                                 resp->setStatusCode(drogon::k500InternalServerError);
                                 callback(resp);
                             },
-                            id, targetId, canView, canEdit);
+                            id, targetId, level);
                     },
                     [callback](const drogon::orm::DrogonDbException&) {
                         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -475,14 +493,14 @@ void MapController::setPermission(
             } else {
                 auto db2 = drogon::app().getDbClient();
                 db2->execSqlAsync(
-                    "INSERT INTO map_permissions (map_id, user_id, can_view, can_edit) "
-                    "VALUES (?, NULL, ?, ?) "
-                    "ON DUPLICATE KEY UPDATE can_view=VALUES(can_view), can_edit=VALUES(can_edit)",
-                    [callback, req, id, tenantId, callerId, canView, canEdit]
+                    "INSERT INTO map_permissions (map_id, user_id, level) "
+                    "VALUES (?, NULL, ?) "
+                    "ON DUPLICATE KEY UPDATE level=VALUES(level)",
+                    [callback, req, id, tenantId, callerId, level]
                     (const drogon::orm::Result&) {
                         Json::Value detail;
                         detail["mapId"] = id; detail["public"] = true;
-                        detail["canView"] = canView; detail["canEdit"] = canEdit;
+                        detail["level"] = level;
                         AuditLog::record("permission_change", req, callerId, 0, tenantId, detail);
                         Json::Value v; v["updated"] = true;
                         callback(drogon::HttpResponse::newHttpJsonResponse(v));
@@ -493,7 +511,7 @@ void MapController::setPermission(
                         resp->setStatusCode(drogon::k500InternalServerError);
                         callback(resp);
                     },
-                    id, canView, canEdit);
+                    id, level);
             }
         },
         [callback](const drogon::orm::DrogonDbException&) {

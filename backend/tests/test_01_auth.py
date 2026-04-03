@@ -101,10 +101,10 @@ print("  All refresh tests passed.")
 print("  --- Deactivated user ---")
 
 if TOKEN:
-    mysql_query(f"UPDATE users SET is_active = FALSE WHERE email = 't01_{RUN_ID}@test.com';")
+    mysql_query(f"UPDATE users SET status = 'deactivated' WHERE email = 't01_{RUN_ID}@test.com';")
     status, _ = http_get("/tenants", TOKEN)
     assert_status("deactivated: existing token rejected", 401, status)
-    mysql_query(f"UPDATE users SET is_active = TRUE WHERE email = 't01_{RUN_ID}@test.com';")
+    mysql_query(f"UPDATE users SET status = 'active' WHERE email = 't01_{RUN_ID}@test.com';")
 else:
     print("FAIL: deactivated: no token available (skipped)")
 
