@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState } from 'react';
 import { notesService, noteGroupsService } from '@/services/maps';
 import type { Note, NoteGroup, CreateNoteRequest, CreateNoteGroupRequest } from '@/types';
 import { useAuthStore } from '@/store/authStore';
@@ -7,17 +7,20 @@ interface NotesPanelProps {
   mapId: number;
   canEdit: boolean;
   isAdmin: boolean;
+  notes: Note[];
+  groups: NoteGroup[];
+  onNotesChanged: (groupFilter?: number) => void;
   onNoteClick?: (note: Note) => void;
   onRequestMapClick?: (callback: (lat: number, lng: number) => void) => void;
 }
 
-export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapClick }: NotesPanelProps) {
+export function NotesPanel({
+  mapId, canEdit, isAdmin, notes, groups,
+  onNotesChanged, onNoteClick, onRequestMapClick
+}: NotesPanelProps) {
   const tenantId = useAuthStore((s) => s.tenantId) ?? undefined;
 
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [groups, setGroups] = useState<NoteGroup[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
 
   // Note creation
   const [showCreate, setShowCreate] = useState(false);
@@ -39,25 +42,10 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
   const [editTitle, setEditTitle] = useState('');
   const [editText, setEditText] = useState('');
 
-  const loadData = useCallback(async () => {
-    try {
-      const [g, n] = await Promise.all([
-        noteGroupsService.listGroups(mapId, tenantId),
-        notesService.listNotes(mapId, activeGroupId ?? undefined, tenantId),
-      ]);
-      setGroups(g);
-      setNotes(n);
-    } catch {
-      // silently fail
-    } finally {
-      setLoading(false);
-    }
-  }, [mapId, tenantId, activeGroupId]);
-
-  useEffect(() => {
-    setLoading(true);
-    loadData();
-  }, [loadData]);
+  // Filter notes by active group tab
+  const filteredNotes = activeGroupId === null
+    ? notes
+    : notes.filter((n) => n.groupId === activeGroupId);
 
   // ─── Note CRUD ─────────────────────────────────────────────────────────────
 
@@ -73,13 +61,11 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
     e.preventDefault();
     if (!newText.trim()) return;
 
-    // If no location set, prompt to place on map
     if (newLat === null || newLng === null) {
       if (onRequestMapClick) {
         alert('Please click "Place on map" to set the note location first.');
         return;
       }
-      // Fallback if no map click handler (shouldn't happen)
     }
 
     const data: CreateNoteRequest = {
@@ -90,14 +76,14 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
       groupId: newGroupId,
     };
     try {
-      const note = await notesService.createNote(mapId, data, tenantId);
-      setNotes((prev) => [...prev, note]);
+      await notesService.createNote(mapId, data, tenantId);
       setNewTitle('');
       setNewText('');
       setNewGroupId(undefined);
       setNewLat(null);
       setNewLng(null);
       setShowCreate(false);
+      onNotesChanged(activeGroupId ?? undefined);
     } catch {
       alert('Failed to create note.');
     }
@@ -107,7 +93,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
     if (!window.confirm('Delete this note?')) return;
     try {
       await notesService.deleteNote(mapId, noteId, tenantId);
-      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      onNotesChanged(activeGroupId ?? undefined);
     } catch {
       alert('Failed to delete note.');
     }
@@ -125,10 +111,8 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
       await notesService.updateNote(mapId, editingNote.id, {
         title: editTitle, text: editText,
       }, tenantId);
-      setNotes((prev) => prev.map((n) =>
-        n.id === editingNote.id ? { ...n, title: editTitle, text: editText } : n
-      ));
       setEditingNote(null);
+      onNotesChanged(activeGroupId ?? undefined);
     } catch {
       alert('Failed to update note.');
     }
@@ -164,14 +148,11 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
     try {
       if (editingGroup) {
         await noteGroupsService.updateGroup(mapId, editingGroup.id, data, tenantId);
-        setGroups((prev) => prev.map((g) =>
-          g.id === editingGroup.id ? { ...g, name: groupName, color: groupColor, description: groupDesc } : g
-        ));
       } else {
-        const group = await noteGroupsService.createGroup(mapId, data, tenantId);
-        setGroups((prev) => [...prev, group]);
+        await noteGroupsService.createGroup(mapId, data, tenantId);
       }
       setShowGroupForm(false);
+      onNotesChanged(activeGroupId ?? undefined);
     } catch {
       alert('Failed to save group.');
     }
@@ -181,17 +162,19 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
     if (!window.confirm('Delete this group? Notes in this group will become ungrouped.')) return;
     try {
       await noteGroupsService.deleteGroup(mapId, groupId, tenantId);
-      setGroups((prev) => prev.filter((g) => g.id !== groupId));
       if (activeGroupId === groupId) setActiveGroupId(null);
-      loadData();
+      onNotesChanged();
     } catch {
       alert('Failed to delete group.');
     }
   };
 
-  // ─── Render ────────────────────────────────────────────────────────────────
+  const handleTabClick = (groupId: number | null) => {
+    setActiveGroupId(groupId);
+    onNotesChanged(groupId ?? undefined);
+  };
 
-  if (loading) return <div className="notes-panel"><p>Loading notes...</p></div>;
+  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div className="notes-panel">
@@ -219,7 +202,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
       <div className="notes-tabs">
         <button
           className={`notes-tab ${activeGroupId === null ? 'active' : ''}`}
-          onClick={() => setActiveGroupId(null)}
+          onClick={() => handleTabClick(null)}
         >
           All
         </button>
@@ -227,7 +210,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
           <button
             key={g.id}
             className={`notes-tab ${activeGroupId === g.id ? 'active' : ''}`}
-            onClick={() => setActiveGroupId(g.id)}
+            onClick={() => handleTabClick(g.id)}
             style={g.color ? { borderBottomColor: g.color } : undefined}
           >
             {g.color && <span className="notes-tab-dot" style={{ backgroundColor: g.color }} />}
@@ -317,10 +300,10 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapC
 
       {/* Note list */}
       <div className="notes-list">
-        {notes.length === 0 ? (
+        {filteredNotes.length === 0 ? (
           <p className="notes-empty">No notes yet.</p>
         ) : (
-          notes.map((note) => (
+          filteredNotes.map((note) => (
             <div
               key={note.id}
               className={`note-card ${note.pinned ? 'pinned' : ''}`}

@@ -5,8 +5,9 @@ import 'leaflet-draw/dist/leaflet.draw.css';
 import L from 'leaflet';
 import 'leaflet-draw';
 import { AnnotationLayer } from './AnnotationLayer';
+import { NoteMarkers } from './NoteMarkers';
 import { useMap } from '@/hooks/useMap';
-import type { MapRecord, AnnotationType, GeoJsonGeometry } from '@/types';
+import type { MapRecord, AnnotationType, GeoJsonGeometry, Note, NoteGroup } from '@/types';
 
 // Fix default marker icon broken by webpack/vite bundling
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -163,12 +164,15 @@ function NotePlacement({ isActive, onPlace, onCancel }: NotePlacementProps) {
 
 interface MapViewProps {
   map: MapRecord;
+  notes?: Note[];
+  noteGroups?: NoteGroup[];
   isPlacingNote?: boolean;
   onMapClickForNote?: (lat: number, lng: number) => void;
   onCancelPlace?: () => void;
+  onNoteClick?: (note: Note) => void;
 }
 
-export function MapView({ map, isPlacingNote, onMapClickForNote, onCancelPlace }: MapViewProps) {
+export function MapView({ map, notes, noteGroups, isPlacingNote, onMapClickForNote, onCancelPlace, onNoteClick }: MapViewProps) {
   const canEdit = map.permission === 'edit' || map.permission === 'owner';
 
   return (
@@ -186,6 +190,9 @@ export function MapView({ map, isPlacingNote, onMapClickForNote, onCancelPlace }
         />
         <AnnotationLayer mapId={map.id} canEdit={canEdit} />
         <DrawControls mapId={map.id} canEdit={canEdit} />
+        {notes && noteGroups && (
+          <NoteMarkers notes={notes} groups={noteGroups} onNoteClick={onNoteClick} />
+        )}
         {isPlacingNote && onMapClickForNote && onCancelPlace && (
           <NotePlacement
             isActive={isPlacingNote}
