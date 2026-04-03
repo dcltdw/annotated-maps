@@ -80,8 +80,7 @@ export function NotesPanel({
       groupId: newGroupId,
     };
     try {
-      const created = await notesService.createNote(mapId, data, tenantId);
-      console.log('Note created:', created);
+      await notesService.createNote(mapId, data, tenantId);
       setNewTitle('');
       setNewText('');
       setNewColor('');
@@ -89,7 +88,8 @@ export function NotesPanel({
       setNewLat(null);
       setNewLng(null);
       setShowCreate(false);
-      onNotesChanged(activeGroupId ?? undefined);
+      // Reload notes from server — use setTimeout to ensure state updates have flushed
+      setTimeout(() => onNotesChanged(activeGroupId ?? undefined), 100);
     } catch (err) {
       console.error('Failed to create note:', err);
       alert('Failed to create note.');

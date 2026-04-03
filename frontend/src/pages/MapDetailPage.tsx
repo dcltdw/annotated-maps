@@ -35,6 +35,7 @@ export function MapDetailPage() {
 
   // Load notes and groups
   const loadNotesAndGroups = useCallback(async (groupFilter?: number) => {
+    console.log('loadNotesAndGroups called, mapId:', mapId, 'groupFilter:', groupFilter);
     if (!mapId) return;
     try {
       const [g, n] = await Promise.all([
