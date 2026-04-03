@@ -14,7 +14,7 @@ python3 database/tests/run-db-tests.py
 
 The script will:
 1. Create a temporary database (`annotated_maps_test_<pid>`).
-2. Apply all migrations (001-003).
+2. Apply all migrations (001-006).
 3. Run each `test_*.sql` file and report PASS/FAIL per assertion.
 4. Drop the temporary database.
 
@@ -24,14 +24,16 @@ Exit code 0 means all tests passed.
 
 | File | What it tests |
 |---|---|
-| `test_01_schema_exists.sql` | All 10 tables exist after migrations |
+| `test_01_schema_exists.sql` | All tables exist after migrations |
 | `test_02_columns.sql` | Key columns have correct types and nullability |
 | `test_03_unique_constraints.sql` | Duplicate inserts rejected by unique keys |
 | `test_04_cascade_behavior.sql` | ON DELETE CASCADE and ON DELETE SET NULL |
 | `test_05_foreign_keys.sql` | Invalid FK references rejected |
-| `test_06_defaults.sql` | Column defaults (`is_active`, `role`, `branding`, etc.) |
+| `test_06_defaults.sql` | Column defaults (`status`, `platform_role`, `role`, `level`, `branding`, etc.) |
 | `test_07_public_perm_trigger.sql` | Trigger enforces one public permission row per map |
 | `test_08_enum_constraints.sql` | ENUM columns reject invalid values |
+| `test_09_notes.sql` | Notes table schema, constraints, cascades, fulltext search |
+| `test_10_note_groups.sql` | Note groups table, unique name, FK, cascade, SET NULL on delete |
 
 ## Writing new tests
 

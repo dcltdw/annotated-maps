@@ -36,7 +36,7 @@ annotated-maps/
 │   ├── Dockerfile
 │   └── config.json
 ├── database/
-│   ├── migrations/        001–004 SQL migration scripts
+│   ├── migrations/        001–006 SQL migration scripts
 │   ├── tests/             Database schema tests (SQL + Python runner)
 │   ├── run_migrations.py
 │   └── seed-local-dev.py
@@ -119,9 +119,9 @@ Every map has a permission table. A row with `user_id = NULL` represents public
 
 | Scenario | Row |
 |----------|-----|
-| Publicly viewable map | `user_id=NULL, can_view=true, can_edit=false` |
-| Collaborator with edit | `user_id=42, can_view=true, can_edit=true` |
-| Read-only collaborator | `user_id=42, can_view=true, can_edit=false` |
+| Publicly viewable map | `user_id=NULL, level='view'` |
+| Collaborator with edit | `user_id=42, level='edit'` |
+| Read-only collaborator | `user_id=42, level='view'` |
 | Map owner | No row needed — owner always has full access |
 
 ## API Reference
@@ -185,10 +185,19 @@ All map, annotation, and note endpoints are tenant-scoped under `/api/v1/tenants
 | PUT | `.../maps/{mapId}/notes/{id}` | JWT + Tenant | Update note |
 | DELETE | `.../maps/{mapId}/notes/{id}` | JWT + Tenant | Delete note |
 
+### Note Groups
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `.../maps/{mapId}/note-groups` | JWT + Tenant | List groups |
+| POST | `.../maps/{mapId}/note-groups` | JWT + Tenant(admin) | Create group |
+| PUT | `.../maps/{mapId}/note-groups/{id}` | JWT + Tenant(admin) | Update group |
+| DELETE | `.../maps/{mapId}/note-groups/{id}` | JWT + Tenant(admin) | Delete group |
+
 ## Security
 
 - Passwords hashed with **Argon2id** via libsodium. Legacy SHA-256 hashes are rejected at login.
-- JWT includes `sub`, `username`, `orgId`, and `aud` (audience) claims. Validated per-request including `is_active` DB check.
+- JWT includes `sub`, `username`, `orgId`, and `aud` (audience) claims. Validated per-request including `status` DB check (must be `active`).
 - CORS uses an origin whitelist (not echo). Security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) on all responses.
 - Rate limiting on auth endpoints (configurable, default: 100 req/60s for dev, recommend 5 req/300s for production).
 - JWT secret overridable via `JWT_SECRET` environment variable.

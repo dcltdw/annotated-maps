@@ -5,7 +5,7 @@ for end-to-end testing. This setup simulates two organizations (Acme Corp and
 Beta Inc), each with three tenants (Engineering, Sales/Marketing,
 Support/Operations).
 
-For production deployment, see `SETUP-PRODUCTION.md`.
+For production deployment, see `SETUP-PRODUCTION.md` (planned).
 
 ---
 
@@ -32,7 +32,7 @@ Three containers are running:
 
 | Service | Port | Purpose |
 |---|---|---|
-| `mysql` | 3306 | MySQL 8. Migrations 001-009 run automatically on first boot. |
+| `mysql` | 3306 | MySQL 8. Migrations 001-006 run automatically on first boot. |
 | `backend` | 8080 | Drogon C++ REST API |
 | `frontend` | 5173 | Vite dev server with hot module replacement |
 
@@ -154,7 +154,7 @@ Deactivate a user and confirm immediate lockout:
 ```bash
 # Deactivate Bob
 docker compose exec mysql mysql -uroot -prootpassword annotated_maps \
-  -e "UPDATE users SET is_active = FALSE WHERE email = 'bob@acme.test';"
+  -e "UPDATE users SET status = 'deactivated' WHERE email = 'bob@acme.test';"
 
 # Bob's next API call (with a still-valid JWT) should return 401
 curl -s -X POST http://localhost:8080/api/v1/auth/login \
@@ -164,7 +164,7 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 
 # Re-activate
 docker compose exec mysql mysql -uroot -prootpassword annotated_maps \
-  -e "UPDATE users SET is_active = TRUE WHERE email = 'bob@acme.test';"
+  -e "UPDATE users SET status = 'active' WHERE email = 'bob@acme.test';"
 ```
 
 ---

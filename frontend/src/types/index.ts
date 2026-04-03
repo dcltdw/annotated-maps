@@ -165,6 +165,54 @@ export type UserStatus = 'active' | 'suspended' | 'deactivated' | 'pending' | 'l
 export type PlatformRole = 'superuser' | 'support' | 'none';
 export type OrgRole = 'owner' | 'admin' | 'member';
 
+// ─── Notes ────────────────────────────────────────────────────────────────────
+
+export interface Note {
+  id: number;
+  mapId: number;
+  groupId: number | null;
+  createdBy: number;
+  createdByUsername: string;
+  lat: number;
+  lng: number;
+  title: string | null;
+  text: string;
+  pinned: boolean;
+  canEdit: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateNoteRequest {
+  lat: number;
+  lng: number;
+  title?: string;
+  text: string;
+  groupId?: number;
+}
+
+// ─── Note Groups ──────────────────────────────────────────────────────────────
+
+export interface NoteGroup {
+  id: number;
+  mapId: number;
+  name: string;
+  description: string;
+  color: string;
+  sortOrder: number;
+  createdBy: number;
+  createdByUsername: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateNoteGroupRequest {
+  name: string;
+  description?: string;
+  color?: string;
+  sortOrder?: number;
+}
+
 // ─── API ─────────────────────────────────────────────────────────────────────
 
 export interface ApiError {

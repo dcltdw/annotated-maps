@@ -22,9 +22,16 @@ void NoteController::listNotes(
 
     int userId = callerUserId(req);
 
-    // Verify the map belongs to this tenant and the user can view it
-    const std::string sql = R"(
-        SELECT n.id, n.map_id, n.created_by, u.username AS creator_username,
+    // Optional group filter
+    std::string groupIdParam = req->getParameter("groupId");
+    bool filterByGroup = !groupIdParam.empty();
+    int filterGroupId = 0;
+    if (filterByGroup) {
+        try { filterGroupId = std::stoi(groupIdParam); } catch (...) { filterByGroup = false; }
+    }
+
+    std::string sql = R"(
+        SELECT n.id, n.map_id, n.group_id, n.created_by, u.username AS creator_username,
                n.lat, n.lng, n.title, n.text, n.pinned,
                n.created_at, n.updated_at,
                CASE WHEN m.owner_id = ? OR n.created_by = ? OR mp.level IN ('edit','moderate','admin')
@@ -38,39 +45,48 @@ void NoteController::listNotes(
                AND mp_pub.level IN ('view','comment','edit','moderate','admin')
         WHERE n.map_id = ? AND m.tenant_id = ?
           AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))
-        ORDER BY n.pinned DESC, n.created_at ASC
     )";
+    if (filterByGroup) {
+        sql += " AND n.group_id = ?";
+    }
+    sql += " ORDER BY n.pinned DESC, n.created_at ASC";
+
+    auto resultCb = [callback](const drogon::orm::Result& r) {
+        Json::Value arr(Json::arrayValue);
+        for (const auto& row : r) {
+            Json::Value n;
+            n["id"]               = row["id"].as<int>();
+            n["mapId"]            = row["map_id"].as<int>();
+            n["createdBy"]        = row["created_by"].as<int>();
+            n["createdByUsername"] = row["creator_username"].as<std::string>();
+            n["lat"]              = row["lat"].as<double>();
+            n["lng"]              = row["lng"].as<double>();
+            n["title"]            = row["title"].isNull() ? "" : row["title"].as<std::string>();
+            n["text"]             = row["text"].as<std::string>();
+            n["pinned"]           = row["pinned"].as<bool>();
+            n["groupId"]          = row["group_id"].isNull() ? Json::Value() : Json::Value(row["group_id"].as<int>());
+            n["createdAt"]        = row["created_at"].as<std::string>();
+            n["updatedAt"]        = row["updated_at"].as<std::string>();
+            n["canEdit"]          = row["can_edit"].as<bool>();
+            arr.append(n);
+        }
+        callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+    };
+    auto errCb = [callback](const drogon::orm::DrogonDbException&) {
+        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+            errorJson("db_error", "Failed to fetch notes"));
+        resp->setStatusCode(drogon::k500InternalServerError);
+        callback(resp);
+    };
 
     auto db = drogon::app().getDbClient();
-    db->execSqlAsync(
-        sql,
-        [callback](const drogon::orm::Result& r) {
-            Json::Value arr(Json::arrayValue);
-            for (const auto& row : r) {
-                Json::Value n;
-                n["id"]               = row["id"].as<int>();
-                n["mapId"]            = row["map_id"].as<int>();
-                n["createdBy"]        = row["created_by"].as<int>();
-                n["createdByUsername"] = row["creator_username"].as<std::string>();
-                n["lat"]              = row["lat"].as<double>();
-                n["lng"]              = row["lng"].as<double>();
-                n["title"]            = row["title"].isNull() ? "" : row["title"].as<std::string>();
-                n["text"]             = row["text"].as<std::string>();
-                n["pinned"]           = row["pinned"].as<bool>();
-                n["createdAt"]        = row["created_at"].as<std::string>();
-                n["updatedAt"]        = row["updated_at"].as<std::string>();
-                n["canEdit"]          = row["can_edit"].as<bool>();
-                arr.append(n);
-            }
-            callback(drogon::HttpResponse::newHttpJsonResponse(arr));
-        },
-        [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to fetch notes"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
-        },
-        userId, userId, userId, mapId, tenantId, userId);
+    if (filterByGroup) {
+        db->execSqlAsync(sql, resultCb, errCb,
+            userId, userId, userId, mapId, tenantId, userId, filterGroupId);
+    } else {
+        db->execSqlAsync(sql, resultCb, errCb,
+            userId, userId, userId, mapId, tenantId, userId);
+    }
 }
 
 // ─── POST /api/v1/tenants/{tenantId}/maps/{mapId}/notes ───────────────────────
@@ -94,6 +110,8 @@ void NoteController::createNote(
     double lng   = (*body)["lng"].asDouble();
     std::string title = (*body).get("title", "").asString();
     std::string text  = (*body)["text"].asString();
+    bool hasGroupId   = body->isMember("groupId") && !(*body)["groupId"].isNull();
+    int groupId       = hasGroupId ? (*body)["groupId"].asInt() : 0;
 
     // Verify map exists in this tenant and user has at least view access
     // (any member who can see the map can leave a note)
@@ -106,7 +124,7 @@ void NoteController::createNote(
         "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE m.id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, userId, lat, lng, title, text]
+        [callback, mapId, userId, lat, lng, title, text, groupId]
         (const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -120,7 +138,7 @@ void NoteController::createNote(
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
                 "SELECT COUNT(*) AS cnt FROM notes WHERE map_id = ?",
-                [callback, mapId, userId, lat, lng, title, text]
+                [callback, mapId, userId, lat, lng, title, text, groupId]
                 (const drogon::orm::Result& rc) {
                     if (!rc.empty() && rc[0]["cnt"].as<int>() >= 10000) {
                         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -132,9 +150,9 @@ void NoteController::createNote(
 
                     auto db3 = drogon::app().getDbClient();
                     db3->execSqlAsync(
-                        "INSERT INTO notes (map_id, created_by, lat, lng, title, text) "
-                        "VALUES (?,?,?,?,?,?)",
-                        [callback, mapId, userId, lat, lng, title, text]
+                        "INSERT INTO notes (map_id, created_by, lat, lng, title, text, group_id) "
+                        "VALUES (?,?,?,?,?,?,NULLIF(?,0))",
+                        [callback, mapId, userId, lat, lng, title, text, groupId]
                         (const drogon::orm::Result& r2) {
                             int newId = static_cast<int>(r2.insertId());
                             Json::Value n;
@@ -146,6 +164,7 @@ void NoteController::createNote(
                             n["title"]     = title;
                             n["text"]      = text;
                             n["pinned"]    = false;
+                            n["groupId"]   = groupId > 0 ? Json::Value(groupId) : Json::Value();
                             n["canEdit"]   = true;
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
                             resp->setStatusCode(drogon::k201Created);
@@ -157,7 +176,7 @@ void NoteController::createNote(
                             resp->setStatusCode(drogon::k500InternalServerError);
                             callback(resp);
                         },
-                        mapId, userId, lat, lng, title, text);
+                        mapId, userId, lat, lng, title, text, groupId);
                 },
                 [callback](const drogon::orm::DrogonDbException&) {
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -217,6 +236,7 @@ void NoteController::getNote(
             n["title"]            = row["title"].isNull() ? "" : row["title"].as<std::string>();
             n["text"]             = row["text"].as<std::string>();
             n["pinned"]           = row["pinned"].as<bool>();
+            n["groupId"]          = row["group_id"].isNull() ? Json::Value() : Json::Value(row["group_id"].as<int>());
             n["createdAt"]        = row["created_at"].as<std::string>();
             n["updatedAt"]        = row["updated_at"].as<std::string>();
             n["canEdit"]          = row["can_edit"].as<bool>();

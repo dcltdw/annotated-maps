@@ -31,12 +31,12 @@ sequenceDiagram
         Note over AX: 401 interceptor → authStore.logout()<br/>→ redirect to /login
     end
 
-    JF->>DB: SELECT is_active FROM users WHERE id={userId}
+    JF->>DB: SELECT status, platform_role FROM users WHERE id={userId}
     alt user deleted or deactivated
-        DB-->>JF: empty or is_active=FALSE
+        DB-->>JF: empty or status != 'active'
         JF-->>AX: 401 {error: "unauthorized",<br/>message: "Account is deactivated or does not exist"}
     end
-    DB-->>JF: is_active=TRUE
+    DB-->>JF: status=active
 
     JF->>JF: inject into req attributes:<br/>userId, username, orgId
     JF->>TF: nextCb()

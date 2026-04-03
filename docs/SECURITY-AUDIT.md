@@ -22,7 +22,7 @@ The application implements the following security controls:
 
 - **No SQL injection:** All database queries use parameterized statements via Drogon ORM.
 - **Strong password hashing:** Argon2id via libsodium (`crypto_pwhash_str`, interactive parameters). Legacy SHA-256 hashes are detected and rejected at login.
-- **Per-request user verification:** `JwtFilter` checks `users.is_active` against the database on every authenticated request. Deactivated users are rejected immediately regardless of JWT expiry.
+- **Per-request user verification:** `JwtFilter` checks `users.status` against the database on every authenticated request. Non-active users (suspended, deactivated, pending, locked) are rejected immediately regardless of JWT expiry.
 - **JWT scoping:** Tokens include `issuer`, `audience` (`annotated-maps`), and `orgId` claims. The verifier validates all three plus signature and expiry.
 - **Secrets management:** JWT secret is overridable via `JWT_SECRET` environment variable (minimum 32 characters). Config file placeholders trigger startup warnings. Database credentials in Docker Compose are parameterized via environment variables.
 - **CORS whitelist:** Only origins listed in the `allowed_origins` config array (plus `frontend_url`) receive CORS headers. Unrecognized origins get no `Access-Control-Allow-Origin`.

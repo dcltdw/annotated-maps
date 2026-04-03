@@ -45,14 +45,14 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - `admin` — full access including member management and all map operations.
 - `editor` — can create maps and annotations; can edit/delete their own; cannot manage members.
 - `viewer` — read-only access to all tenant maps and annotations.
-- Per-map `map_permissions` rows function as fine-grained overrides within the tenant role floor (e.g., a `viewer`-role member can be granted `can_edit` on a specific map).
+- Per-map `map_permissions` rows function as fine-grained overrides within the tenant role floor (e.g., a `viewer`-role member can be granted `level='edit'` on a specific map).
 - Only `admin`-role members may manage tenant membership.
 
 ### 2.6 Permissions
 
 - Each map has a permission table. A row with `user_id = NULL` represents public (unauthenticated) access.
 - The map owner always has full access; no permission row is needed.
-- Permissions are additive: `can_edit` implies `can_view`.
+- Permissions are hierarchical: higher levels imply lower ones (`edit` implies `view`).
 - Permission grants validate that the target user belongs to the same organization as the map owner.
 
 ### 2.7 Tenant Branding
@@ -78,10 +78,21 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Notes can be updated or deleted by the note creator, the map owner, or a user with edit permission.
 - Notes support a `pinned` flag (default false) for sorting important notes first.
 - A fulltext search index covers `title` and `text` columns.
-- `group_id` column exists (nullable) for future note grouping (phase 2).
+- Notes can optionally belong to a note group (see 2.10).
 - Resource limit: 10,000 notes per map.
 
-### 2.10 Resource Limits
+### 2.10 Note Groups
+
+- Note groups are named categories for organizing notes on a map (e.g., "Safety Hazards", "Customer Feedback").
+- Each group has a name (unique per map), optional description, optional hex color, and a sort order for tab display.
+- Only tenant admins can create, update, or delete groups. Any tenant member can read them.
+- Notes can be assigned to a group at creation via `groupId`. Notes without a group are ungrouped.
+- Notes can be filtered by group: `GET .../notes?groupId=N`.
+- Deleting a group sets `group_id` to NULL on all notes in that group (notes are preserved, not deleted).
+- Deleting a map cascades to all its note groups.
+- Group color values are validated as hex format (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`).
+
+### 2.11 Resource Limits
 
 - Per-tenant map limit: 1,000 maps. Enforced on map creation.
 - Per-map annotation limit: 5,000 annotations. Enforced on annotation creation.
@@ -120,7 +131,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - JWT payload includes `sub` (userId), `username`, `orgId`, and `aud` (audience: `annotated-maps`).
 - `JwtFilter` validates issuer, audience, signature, and expiry.
 - `tenantId` is not in the JWT; it is provided by the URL path and verified per-request by `TenantFilter`.
-- `JwtFilter` verifies the user still exists and is active (`users.is_active`) on every authenticated request. Deactivated users are rejected immediately with 401, regardless of JWT expiry.
+- `JwtFilter` verifies the user still exists and has `status = 'active'` on every authenticated request. Non-active users (suspended, deactivated, pending, locked) are rejected immediately with 401, regardless of JWT expiry. The user's `platform_role` is also injected into the request attributes.
 - Registration error messages are generic ("Registration failed") to prevent account enumeration.
 
 ### 3.7 Authorization
@@ -128,7 +139,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Every mutating endpoint requires a valid JWT.
 - Every tenant-scoped endpoint validates tenant membership via `TenantFilter`, which checks `tenant_members` and injects `tenantRole` into the request.
 - `setPermission` validates that the target user's `org_id` matches the caller's organization.
-- `addMedia` verifies the caller has `can_edit` on the parent map before inserting.
+- `addMedia` verifies the caller has `level='edit'` or higher on the parent map before inserting.
 - `deleteMedia` verifies the caller is the map owner, map editor, or annotation creator before deleting.
 
 ### 3.8 Rate Limiting
@@ -153,25 +164,29 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 
 | Table | Purpose |
 |---|---|
-| `users` | User accounts. Supports local (password) and SSO (`external_id`) authentication. `is_active` flag for deactivation. |
+| `users` | User accounts. Supports local (password) and SSO (`external_id`) authentication. `status` ENUM for account state, `platform_role` ENUM for platform-level privileges. |
 | `organizations` | Top-level identity unit. One per company. |
 | `tenants` | Department/team within an org. Unit of data isolation. Optional `branding` JSON column for visual customization. |
 | `tenant_members` | User-to-tenant mapping with role (`admin`/`editor`/`viewer`). |
+| `org_members` | Organization-level role mapping. User-to-org membership with role (`owner`/`admin`/`member`). |
 | `sso_providers` | OIDC provider config per organization (JSON: issuer, client_id, client_secret, endpoints). |
 | `maps` | Map records scoped to a tenant via `tenant_id`. |
 | `map_permissions` | Per-map, per-user permission grants. `user_id = NULL` = public access. Database triggers enforce at most one public row per map. |
 | `annotations` | GeoJSON annotations on maps (marker, polyline, polygon). |
 | `annotation_media` | Media attachments (image, link) on annotations. |
-| `notes` | Location-pinned text notes on maps. Separate from GeoJSON annotations. Fulltext indexed. |
+| `notes` | Location-pinned text notes on maps. Separate from GeoJSON annotations. Fulltext indexed. Optional `group_id` FK to `note_groups`. |
+| `note_groups` | Named categories for organizing notes on a map. Unique name per map. Optional color for display. |
 | `audit_log` | Security event log. FKs use `ON DELETE SET NULL` so records survive entity deletion. |
 
 ### 4.2 Key Relationships
 
 ```
 organizations ──< tenants ──< tenant_members >── users
+organizations ──< org_members >── users
                   tenants ──< maps ──< annotations ──< annotation_media
                               maps ──< map_permissions >── users
                               maps ──< notes >── users
+                              maps ──< note_groups ──< notes
 organizations ──< sso_providers
 ```
 
@@ -247,11 +262,22 @@ All routes require JWT + TenantFilter.
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `.../maps/{mapId}/notes` | List notes (pinned first) |
-| POST | `.../maps/{mapId}/notes` | Create note (view perm required) |
+| GET | `.../maps/{mapId}/notes` | List notes (pinned first; `?groupId=N` to filter) |
+| POST | `.../maps/{mapId}/notes` | Create note (view perm required; optional `groupId`) |
 | GET | `.../maps/{mapId}/notes/{id}` | Get note |
 | PUT | `.../maps/{mapId}/notes/{id}` | Update note (creator, owner, or editor) |
 | DELETE | `.../maps/{mapId}/notes/{id}` | Delete note (creator, owner, or editor) |
+
+### 5.6 Note Groups (tenant-scoped)
+
+All routes require JWT + TenantFilter. Create/update/delete require tenant admin role.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `.../maps/{mapId}/note-groups` | List groups (sorted by sort_order) |
+| POST | `.../maps/{mapId}/note-groups` | Create group (admin only) |
+| PUT | `.../maps/{mapId}/note-groups/{id}` | Update group (admin only) |
+| DELETE | `.../maps/{mapId}/note-groups/{id}` | Delete group (admin only; notes become ungrouped) |
 
 ---
 
@@ -278,7 +304,9 @@ Backend configuration uses Drogon's JSON config format. Custom application setti
 | 001 | Core schema: all tables (`organizations`, `users`, `tenants`, `tenant_members`, `sso_providers`, `maps`, `map_permissions` with triggers, `annotations`, `annotation_media`) |
 | 002 | Audit log table |
 | 003 | Development seed data placeholder |
-| 004 | Notes table (location-pinned text, fulltext index, group_id for future use) |
+| 004 | Notes table (location-pinned text, fulltext index, group_id column) |
+| 005 | User roles (`status`, `platform_role`), `org_members` table, `map_permissions.level` enum |
+| 006 | Note groups table and FK constraint on `notes.group_id` |
 
 ---
 

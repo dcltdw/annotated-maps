@@ -41,8 +41,8 @@ sequenceDiagram
 
     AX->>JF: HTTP request + Bearer token
     JF->>JF: verify JWT (signature, issuer, expiry)
-    JF->>DB: SELECT is_active FROM users WHERE id={userId}
-    DB-->>JF: is_active=TRUE
+    JF->>DB: SELECT status, platform_role FROM users WHERE id={userId}
+    DB-->>JF: status=active
     JF->>JF: inject: userId, username, orgId
     JF->>TF: nextCb()
 
@@ -54,7 +54,7 @@ sequenceDiagram
 
     AN->>AN: read userId, type, title,<br/>description from request<br/>serialize geoJson to string
 
-    AN->>DB: SELECT CASE WHEN m.owner_id={userId} THEN 1<br/>WHEN mp.can_edit=1 THEN 1 ELSE 0 END AS allowed<br/>FROM maps m LEFT JOIN map_permissions mp ...<br/>WHERE m.id={mapId} AND m.tenant_id={tenantId}
+    AN->>DB: SELECT CASE WHEN m.owner_id={userId} THEN 1<br/>WHEN mp.level IN ('edit','moderate','admin') THEN 1 ELSE 0 END AS allowed<br/>FROM maps m LEFT JOIN map_permissions mp ...<br/>WHERE m.id={mapId} AND m.tenant_id={tenantId}
     alt no edit permission
         DB-->>AN: allowed=0 (or empty)
         AN-->>AX: 403 {error: "forbidden",<br/>message: "You do not have edit permission on this map"}

@@ -43,6 +43,7 @@ FAST_TESTS = [
     "test_09_security.py",
     "test_11_notes.py",
     "test_12_annotation_edit_delete_move.py",
+    "test_13_note_groups.py",
 ]
 
 NIGHTLY_EXTRA = ["test_07_rate_limit_slow.py"]
@@ -61,6 +62,7 @@ TEST_DESCRIPTIONS = {
     10: "Rate limit — soak (10min continuous) [extended]",
     11: "Notes (CRUD, cross-org isolation)",
     12: "Annotation edit, delete, and move",
+    13: "Note groups (CRUD, assignment, filtering, permissions)",
 }
 
 
