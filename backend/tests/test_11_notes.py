@@ -41,6 +41,14 @@ assert_json_field("create: pinned defaults to false", body, ["pinned"], False)
 assert_json_field("create: canEdit is true for creator", body, ["canEdit"], True)
 assert_json_exists("create: has createdByUsername", body, ["createdByUsername"])
 
+# With custom color
+status, body = http_post(BASE, {
+    "lat": 40.713, "lng": -74.007, "text": "Colored note", "color": "#ff5500"
+}, TOKEN)
+assert_status("create: note with color returns 201", 201, status)
+assert_json_field("create: color set", body, ["color"], "#ff5500")
+COLORED_NOTE_ID = json_field(body, ["id"])
+
 # Without title (optional)
 status, body = http_post(BASE, {
     "lat": 40.714, "lng": -74.002, "text": "No title note"
@@ -139,9 +147,12 @@ assert_status("delete: creator can delete", 204, status)
 status, _ = http_get(f"{BASE}/{NOTE_ID_2}", TOKEN)
 assert_status("delete: note is gone", 404, status)
 
-# Delete the other note too
+# Delete the other notes too
 status, _ = http_delete(f"{BASE}/{NOTE_ID}", TOKEN)
 assert_status("delete: second note deleted", 204, status)
+
+status, _ = http_delete(f"{BASE}/{COLORED_NOTE_ID}", TOKEN)
+assert_status("delete: colored note deleted", 204, status)
 
 print("  All delete tests passed.")
 

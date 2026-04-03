@@ -9,9 +9,11 @@ interface NoteMarkersProps {
   onNoteClick?: (note: Note) => void;
 }
 
-const DEFAULT_NOTE_COLOR = '#f59e0b'; // amber — distinct from blue annotations
+const DEFAULT_NOTE_COLOR = '#00FFFF'; // cyan — distinct from blue annotation pins
 
-function getGroupColor(note: Note, groups: NoteGroup[]): string {
+function getNoteColor(note: Note, groups: NoteGroup[]): string {
+  // Priority: per-note color > group color > default
+  if (note.color) return note.color;
   if (note.groupId) {
     const group = groups.find((g) => g.id === note.groupId);
     if (group?.color) return group.color;
@@ -32,7 +34,7 @@ export function NoteMarkers({ notes, groups, onNoteClick }: NoteMarkersProps) {
       // Skip notes at 0,0 (unplaced)
       if (note.lat === 0 && note.lng === 0) return;
 
-      const color = getGroupColor(note, groups);
+      const color = getNoteColor(note, groups);
 
       const marker = L.circleMarker([note.lat, note.lng], {
         radius: 8,

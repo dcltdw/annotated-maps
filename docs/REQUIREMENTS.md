@@ -77,6 +77,8 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Any user who can view a map can create notes on it.
 - Notes can be updated or deleted by the note creator, the map owner, or a user with edit permission.
 - Notes support a `pinned` flag (default false) for sorting important notes first.
+- Notes support an optional per-note `color` (hex format) for the map marker. Priority: per-note color > group color > default cyan (#00FFFF).
+- Notes can be moved between groups or ungrouped via the update endpoint (`groupId: null` to ungroup, `groupId: N` to assign).
 - A fulltext search index covers `title` and `text` columns.
 - Notes can optionally belong to a note group (see 2.10).
 - Resource limit: 10,000 notes per map.
@@ -307,6 +309,7 @@ Backend configuration uses Drogon's JSON config format. Custom application setti
 | 004 | Notes table (location-pinned text, fulltext index, group_id column) |
 | 005 | User roles (`status`, `platform_role`), `org_members` table, `map_permissions.level` enum |
 | 006 | Note groups table and FK constraint on `notes.group_id` |
+| 007 | Add per-note `color` column |
 
 ---
 

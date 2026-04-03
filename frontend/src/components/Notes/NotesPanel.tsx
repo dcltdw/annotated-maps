@@ -27,6 +27,7 @@ export function NotesPanel({
   const [newTitle, setNewTitle] = useState('');
   const [newText, setNewText] = useState('');
   const [newGroupId, setNewGroupId] = useState<number | undefined>(undefined);
+  const [newColor, setNewColor] = useState('');
   const [newLat, setNewLat] = useState<number | null>(null);
   const [newLng, setNewLng] = useState<number | null>(null);
 
@@ -41,6 +42,8 @@ export function NotesPanel({
   const [editingNote, setEditingNote] = useState<Note | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editText, setEditText] = useState('');
+  const [editColor, setEditColor] = useState('');
+  const [editGroupId, setEditGroupId] = useState<number | null>(null);
 
   // Filter notes by active group tab
   const filteredNotes = activeGroupId === null
@@ -73,12 +76,14 @@ export function NotesPanel({
       lng: newLng ?? 0,
       text: newText,
       title: newTitle || undefined,
+      color: newColor || undefined,
       groupId: newGroupId,
     };
     try {
       await notesService.createNote(mapId, data, tenantId);
       setNewTitle('');
       setNewText('');
+      setNewColor('');
       setNewGroupId(undefined);
       setNewLat(null);
       setNewLng(null);
@@ -103,14 +108,23 @@ export function NotesPanel({
     setEditingNote(note);
     setEditTitle(note.title || '');
     setEditText(note.text);
+    setEditColor(note.color || '');
+    setEditGroupId(note.groupId);
   };
 
   const handleSaveEdit = async () => {
     if (!editingNote) return;
     try {
-      await notesService.updateNote(mapId, editingNote.id, {
-        title: editTitle, text: editText,
-      }, tenantId);
+      const updateData: Record<string, unknown> = {
+        title: editTitle,
+        text: editText,
+        color: editColor || undefined,
+      };
+      // Send groupId: null to ungroup, number to assign, omit for no change
+      if (editGroupId !== editingNote.groupId) {
+        updateData.groupId = editGroupId;
+      }
+      await notesService.updateNote(mapId, editingNote.id, updateData as any, tenantId);
       setEditingNote(null);
       onNotesChanged(activeGroupId ?? undefined);
     } catch {
@@ -251,6 +265,11 @@ export function NotesPanel({
               ))}
             </select>
           )}
+          <input
+            placeholder="Pin color (e.g. #ff0000, optional)"
+            value={newColor}
+            onChange={(e) => setNewColor(e.target.value)}
+          />
           <div className="notes-location">
             {newLat !== null && newLng !== null ? (
               <span className="notes-location-set">
@@ -321,6 +340,22 @@ export function NotesPanel({
                     onChange={(e) => setEditText(e.target.value)}
                     rows={3}
                   />
+                  <input
+                    value={editColor}
+                    onChange={(e) => setEditColor(e.target.value)}
+                    placeholder="Pin color (e.g. #ff0000)"
+                  />
+                  {groups.length > 0 && (
+                    <select
+                      value={editGroupId ?? ''}
+                      onChange={(e) => setEditGroupId(e.target.value ? Number(e.target.value) : null)}
+                    >
+                      <option value="">No group</option>
+                      {groups.map((g) => (
+                        <option key={g.id} value={g.id}>{g.name}</option>
+                      ))}
+                    </select>
+                  )}
                   <div className="notes-form-actions">
                     <button className="btn btn-sm btn-ghost" onClick={() => setEditingNote(null)}>Cancel</button>
                     <button className="btn btn-sm btn-primary" onClick={handleSaveEdit}>Save</button>

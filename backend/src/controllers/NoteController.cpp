@@ -64,6 +64,7 @@ void NoteController::listNotes(
             n["title"]            = row["title"].isNull() ? "" : row["title"].as<std::string>();
             n["text"]             = row["text"].as<std::string>();
             n["pinned"]           = row["pinned"].as<bool>();
+            n["color"]            = row["color"].isNull() ? Json::Value() : Json::Value(row["color"].as<std::string>());
             n["groupId"]          = row["group_id"].isNull() ? Json::Value() : Json::Value(row["group_id"].as<int>());
             n["createdAt"]        = row["created_at"].as<std::string>();
             n["updatedAt"]        = row["updated_at"].as<std::string>();
@@ -112,6 +113,7 @@ void NoteController::createNote(
     double lng   = (*body)["lng"].asDouble();
     std::string title = (*body).get("title", "").asString();
     std::string text  = (*body)["text"].asString();
+    std::string color = (*body).get("color", "").asString();
     bool hasGroupId   = body->isMember("groupId") && !(*body)["groupId"].isNull();
     int groupId       = hasGroupId ? (*body)["groupId"].asInt() : 0;
 
@@ -126,7 +128,7 @@ void NoteController::createNote(
         "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE m.id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
+        [callback, mapId, userId, callerUsername, lat, lng, title, text, color, groupId]
         (const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -140,7 +142,7 @@ void NoteController::createNote(
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
                 "SELECT COUNT(*) AS cnt FROM notes WHERE map_id = ?",
-                [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
+                [callback, mapId, userId, callerUsername, lat, lng, title, text, color, groupId]
                 (const drogon::orm::Result& rc) {
                     if (!rc.empty() && rc[0]["cnt"].as<int>() >= 10000) {
                         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -152,9 +154,9 @@ void NoteController::createNote(
 
                     auto db3 = drogon::app().getDbClient();
                     db3->execSqlAsync(
-                        "INSERT INTO notes (map_id, created_by, lat, lng, title, text, group_id) "
-                        "VALUES (?,?,?,?,?,?,NULLIF(?,0))",
-                        [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
+                        "INSERT INTO notes (map_id, created_by, lat, lng, title, text, color, group_id) "
+                        "VALUES (?,?,?,?,?,?,NULLIF(?,''),NULLIF(?,0))",
+                        [callback, mapId, userId, callerUsername, lat, lng, title, text, color, groupId]
                         (const drogon::orm::Result& r2) {
                             int newId = static_cast<int>(r2.insertId());
                             Json::Value n;
@@ -167,6 +169,7 @@ void NoteController::createNote(
                             n["title"]     = title;
                             n["text"]      = text;
                             n["pinned"]    = false;
+                            n["color"]     = color.empty() ? Json::Value() : Json::Value(color);
                             n["groupId"]   = groupId > 0 ? Json::Value(groupId) : Json::Value();
                             n["canEdit"]   = true;
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
@@ -179,7 +182,7 @@ void NoteController::createNote(
                             resp->setStatusCode(drogon::k500InternalServerError);
                             callback(resp);
                         },
-                        mapId, userId, lat, lng, title, text, groupId);
+                        mapId, userId, lat, lng, title, text, color, groupId);
                 },
                 [callback](const drogon::orm::DrogonDbException&) {
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -239,6 +242,7 @@ void NoteController::getNote(
             n["title"]            = row["title"].isNull() ? "" : row["title"].as<std::string>();
             n["text"]             = row["text"].as<std::string>();
             n["pinned"]           = row["pinned"].as<bool>();
+            n["color"]            = row["color"].isNull() ? Json::Value() : Json::Value(row["color"].as<std::string>());
             n["groupId"]          = row["group_id"].isNull() ? Json::Value() : Json::Value(row["group_id"].as<int>());
             n["createdAt"]        = row["created_at"].as<std::string>();
             n["updatedAt"]        = row["updated_at"].as<std::string>();
@@ -273,14 +277,23 @@ void NoteController::updateNote(
 
     std::string newTitle = (*body).get("title", "").asString();
     std::string newText  = (*body).get("text", "").asString();
+    std::string newColor = (*body).get("color", "").asString();
+    bool hasGroupId      = body->isMember("groupId");
+    // groupId: null means ungroup, number means assign, absent means no change
+    bool ungrouping      = hasGroupId && (*body)["groupId"].isNull();
+    int newGroupId       = (hasGroupId && !ungrouping) ? (*body)["groupId"].asInt() : 0;
 
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE notes n "
         "JOIN maps m ON m.id = n.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
-        "SET n.title = IF(?='', n.title, ?), "
-        "    n.text  = IF(?='', n.text, ?) "
+        "SET n.title    = IF(?='', n.title, ?), "
+        "    n.text     = IF(?='', n.text, ?), "
+        "    n.color    = IF(?='', n.color, ?), "
+        "    n.group_id = CASE WHEN ?=0 THEN n.group_id "
+        "                      WHEN ?=-1 THEN NULL "
+        "                      ELSE ? END "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin') OR n.created_by = ?)",
         [callback, id](const drogon::orm::Result& r) {
@@ -305,6 +318,10 @@ void NoteController::updateNote(
         userId,
         newTitle, newTitle,
         newText, newText,
+        newColor, newColor,
+        hasGroupId ? (ungrouping ? -1 : newGroupId) : 0,
+        hasGroupId ? (ungrouping ? -1 : newGroupId) : 0,
+        newGroupId,
         id, mapId, tenantId, userId, userId);
 }
 

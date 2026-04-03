@@ -178,6 +178,7 @@ export interface Note {
   title: string | null;
   text: string;
   pinned: boolean;
+  color: string | null;
   canEdit: boolean;
   createdAt: string;
   updatedAt: string;
@@ -188,6 +189,7 @@ export interface CreateNoteRequest {
   lng: number;
   title?: string;
   text: string;
+  color?: string;
   groupId?: number;
 }
 
