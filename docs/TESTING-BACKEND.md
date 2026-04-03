@@ -82,7 +82,18 @@ same database.
 4. End with `sys.exit(0 if report() else 1)`
 5. Add the filename to the `FAST_TESTS`, `NIGHTLY_EXTRA`, or `EXTENDED_EXTRA` list in `run-tests.py`
 
-## Scheduling
+## CI / GitHub Actions
+
+### Pull request gate
+
+Every pull request to `main` runs the fast test suite automatically via
+`.github/workflows/pr-tests.yml`. Both database tests and backend integration
+tests (fast tier) must pass before the PR can be merged.
+
+To enable merge blocking, configure branch protection on `main`:
+1. Go to Settings → Branches → Add rule for `main`
+2. Enable "Require status checks to pass before merging"
+3. Select the "test" check from the PR Tests workflow
 
 ### Nightly (e.g., 3am weekdays)
 

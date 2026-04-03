@@ -41,7 +41,7 @@ annotated-maps/
 │   ├── run_migrations.py
 │   └── seed-local-dev.py
 ├── docs/                  Requirements, security audit, setup guides, test docs
-├── .github/workflows/     Nightly + weekend CI (GitHub Actions)
+├── .github/workflows/     PR gate, nightly + weekend CI (GitHub Actions)
 └── docker-compose.yml
 ```
 

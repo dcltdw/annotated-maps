@@ -1,0 +1,73 @@
+name: PR Tests
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: docker-${{ runner.os }}-${{ hashFiles('backend/Dockerfile', 'frontend/Dockerfile.dev', 'backend/CMakeLists.txt') }}
+          restore-keys: |
+            docker-${{ runner.os }}-
+
+      - name: Build and start stack
+        run: |
+          docker compose build
+          docker compose up -d
+        env:
+          DOCKER_BUILDKIT: 1
+          COMPOSE_DOCKER_CLI_BUILD: 1
+
+      - name: Wait for MySQL to be healthy
+        run: |
+          echo "Waiting for MySQL..."
+          for i in $(seq 1 30); do
+            if docker compose exec -T mysql mysqladmin ping -uroot -prootpassword 2>/dev/null; then
+              echo "MySQL is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Wait for backend
+        run: |
+          echo "Waiting for backend..."
+          for i in $(seq 1 12); do
+            if curl -s --max-time 5 -o /dev/null http://localhost:8080/api/v1/../ 2>/dev/null; then
+              echo "Backend is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Run database tests
+        run: python3 database/tests/run-db-tests.py
+
+      - name: Run backend tests (fast tier)
+        run: python3 backend/tests/run-tests.py --tier fast
+        env:
+          CURL_TIMEOUT: "30"
+
+      - name: Show backend logs on failure
+        if: failure()
+        run: docker compose logs --tail 50 backend
+
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
