@@ -288,13 +288,22 @@ void AnnotationController::updateAnnotation(
     std::string newTitle = (*body).get("title", "").asString();
     std::string newDesc  = (*body).get("description", "").asString();
 
+    // Serialize geoJson if provided
+    std::string newGeoJson;
+    bool hasGeoJson = body->isMember("geoJson") && !(*body)["geoJson"].isNull();
+    if (hasGeoJson) {
+        Json::StreamWriterBuilder wb;
+        newGeoJson = Json::writeString(wb, (*body)["geoJson"]);
+    }
+
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE annotations a "
         "JOIN maps m ON m.id=a.map_id "
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "SET a.title       = IF(?='', a.title, ?), "
-        "    a.description = IF(?='', a.description, ?) "
+        "    a.description = IF(?='', a.description, ?), "
+        "    a.geo_json    = IF(?=0, a.geo_json, ?) "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
         "  AND (m.owner_id=? OR mp.can_edit=1 OR a.created_by=?)",
         [callback, id](const drogon::orm::Result& r) {
@@ -319,6 +328,7 @@ void AnnotationController::updateAnnotation(
         userId,
         newTitle, newTitle,
         newDesc, newDesc,
+        hasGeoJson ? 1 : 0, hasGeoJson ? newGeoJson : std::string(),
         id, mapId, tenantId, userId, userId);
 }
 

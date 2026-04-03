@@ -49,6 +49,8 @@ function DrawControls({ mapId, canEdit }: DrawControlsProps) {
     const onDrawStart = () => setIsDrawing(true);
     const onDrawStop = () => setIsDrawing(false);
 
+    // ─── CREATE ──────────────────────────────────────────────────────────
+
     const onCreated = async (e: L.LeafletEvent) => {
       const event = e as L.DrawEvents.Created;
       const layer = event.layer;
