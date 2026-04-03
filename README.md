@@ -58,7 +58,7 @@ open http://localhost:5173
 
 ### Prerequisites
 
-- Node.js 20+
+- Node.js 24+
 - CMake 3.20+, a C++20 compiler
 - Drogon installed ([docs](https://github.com/drogonframework/drogon/wiki/ENG-02-Installation))
 - jwt-cpp installed (`vcpkg install jwt-cpp` or from source)
