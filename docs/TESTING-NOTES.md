@@ -25,7 +25,10 @@ This runs both layers in sequence:
    - Fulltext search index works
 
 2. **Backend integration tests** — restarts the backend (clears rate limiter), then runs `test_11_notes.py`. Verifies:
-   - Note CRUD (create with/without title, list, get, update, delete)
+   - Note CRUD (create with/without title, with custom color, list, get, update, delete)
+   - Note move (update lat/lng)
+   - Note color update
+   - `createdByUsername` in create response
    - Input validation (missing `text`, missing `lat`/`lng`)
    - Cross-org isolation (user from another org cannot list, create, read, update, or delete notes)
    - Permission model (note creator can edit/delete their own notes)

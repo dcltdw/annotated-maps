@@ -35,15 +35,12 @@ export function MapDetailPage() {
 
   // Load notes and groups
   const loadNotesAndGroups = useCallback(async (groupFilter?: number) => {
-    console.log('loadNotesAndGroups called, mapId:', mapId, 'groupFilter:', groupFilter, 'tenantId:', storedTenantId);
     if (!mapId) return;
     try {
-      console.log('Fetching notes and groups...');
-      const gPromise = noteGroupsService.listGroups(Number(mapId), storedTenantId);
-      const nPromise = notesService.listNotes(Number(mapId), groupFilter, storedTenantId);
-      console.log('Promises created, awaiting...');
-      const [g, n] = await Promise.all([gPromise, nPromise]);
-      console.log('Notes loaded:', n.length, 'Groups loaded:', g.length);
+      const [g, n] = await Promise.all([
+        noteGroupsService.listGroups(Number(mapId), storedTenantId),
+        notesService.listNotes(Number(mapId), groupFilter, storedTenantId),
+      ]);
       setGroups(g);
       setNotes(n);
     } catch (err) {
@@ -58,7 +55,7 @@ export function MapDetailPage() {
   }, [loading, activeMap, loadNotesAndGroups]);
 
   const handleNoteClick = (note: Note) => {
-    console.log('Note clicked:', note.id, note.lat, note.lng);
+    // Future: pan map to note location
   };
 
   const handleRequestMapClick = useCallback((callback: (lat: number, lng: number) => void) => {

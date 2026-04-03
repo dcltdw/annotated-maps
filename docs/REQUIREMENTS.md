@@ -79,6 +79,8 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Notes support a `pinned` flag (default false) for sorting important notes first.
 - Notes support an optional per-note `color` (hex format) for the map marker. Priority: per-note color > group color > default cyan (#00FFFF).
 - Notes can be moved between groups or ungrouped via the update endpoint (`groupId: null` to ungroup, `groupId: N` to assign).
+- Notes can be relocated on the map by updating `lat`/`lng` via the update endpoint.
+- Notes are rendered on the map as circle markers, visually distinct from annotation pin icons.
 - A fulltext search index covers `title` and `text` columns.
 - Notes can optionally belong to a note group (see 2.10).
 - Resource limit: 10,000 notes per map.
@@ -176,7 +178,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 | `map_permissions` | Per-map, per-user permission grants. `user_id = NULL` = public access. Database triggers enforce at most one public row per map. |
 | `annotations` | GeoJSON annotations on maps (marker, polyline, polygon). |
 | `annotation_media` | Media attachments (image, link) on annotations. |
-| `notes` | Location-pinned text notes on maps. Separate from GeoJSON annotations. Fulltext indexed. Optional `group_id` FK to `note_groups`. |
+| `notes` | Location-pinned text notes on maps. Separate from GeoJSON annotations. Fulltext indexed. Optional `group_id` FK to `note_groups`. Optional `color` for per-note marker color. |
 | `note_groups` | Named categories for organizing notes on a map. Unique name per map. Optional color for display. |
 | `audit_log` | Security event log. FKs use `ON DELETE SET NULL` so records survive entity deletion. |
 
@@ -265,9 +267,9 @@ All routes require JWT + TenantFilter.
 | Method | Path | Description |
 |---|---|---|
 | GET | `.../maps/{mapId}/notes` | List notes (pinned first; `?groupId=N` to filter) |
-| POST | `.../maps/{mapId}/notes` | Create note (view perm required; optional `groupId`) |
+| POST | `.../maps/{mapId}/notes` | Create note (view perm required; optional `groupId`, `color`) |
 | GET | `.../maps/{mapId}/notes/{id}` | Get note |
-| PUT | `.../maps/{mapId}/notes/{id}` | Update note (creator, owner, or editor) |
+| PUT | `.../maps/{mapId}/notes/{id}` | Update note (title, text, color, lat/lng, groupId; creator, owner, or editor) |
 | DELETE | `.../maps/{mapId}/notes/{id}` | Delete note (creator, owner, or editor) |
 
 ### 5.6 Note Groups (tenant-scoped)

@@ -32,7 +32,7 @@ Three containers are running:
 
 | Service | Port | Purpose |
 |---|---|---|
-| `mysql` | 3306 | MySQL 8. Migrations 001-006 run automatically on first boot. |
+| `mysql` | 3306 | MySQL 8. Migrations 001-007 run automatically on first boot. |
 | `backend` | 8080 | Drogon C++ REST API |
 | `frontend` | 5173 | Vite dev server with hot module replacement |
 
