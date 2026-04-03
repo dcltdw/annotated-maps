@@ -109,11 +109,66 @@ function DrawControls({ mapId, canEdit }: DrawControlsProps) {
   return null;
 }
 
-interface MapViewProps {
-  map: MapRecord;
+// ─── Note placement mode ─────────────────────────────────────────────────────
+
+interface NotePlacementProps {
+  isActive: boolean;
+  onPlace: (lat: number, lng: number) => void;
+  onCancel: () => void;
 }
 
-export function MapView({ map }: MapViewProps) {
+function NotePlacement({ isActive, onPlace, onCancel }: NotePlacementProps) {
+  const leafletMap = useLeafletMap();
+
+  useEffect(() => {
+    if (!isActive) return;
+
+    const mapContainer = leafletMap.getContainer();
+    mapContainer.style.cursor = 'crosshair';
+
+    const hint = document.createElement('div');
+    hint.className = 'move-hint';
+    hint.textContent = 'Click to place note (Esc to cancel)';
+    mapContainer.appendChild(hint);
+
+    const handleClick = (e: L.LeafletMouseEvent) => {
+      cleanup();
+      onPlace(e.latlng.lat, e.latlng.lng);
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        cleanup();
+        onCancel();
+      }
+    };
+
+    const cleanup = () => {
+      mapContainer.style.cursor = '';
+      hint.remove();
+      leafletMap.off('click', handleClick);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+
+    leafletMap.once('click', handleClick);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return cleanup;
+  }, [isActive, leafletMap, onPlace, onCancel]);
+
+  return null;
+}
+
+// ─── MapView ─────────────────────────────────────────────────────────────────
+
+interface MapViewProps {
+  map: MapRecord;
+  isPlacingNote?: boolean;
+  onMapClickForNote?: (lat: number, lng: number) => void;
+  onCancelPlace?: () => void;
+}
+
+export function MapView({ map, isPlacingNote, onMapClickForNote, onCancelPlace }: MapViewProps) {
   const canEdit = map.permission === 'edit' || map.permission === 'owner';
 
   return (
@@ -131,6 +186,13 @@ export function MapView({ map }: MapViewProps) {
         />
         <AnnotationLayer mapId={map.id} canEdit={canEdit} />
         <DrawControls mapId={map.id} canEdit={canEdit} />
+        {isPlacingNote && onMapClickForNote && onCancelPlace && (
+          <NotePlacement
+            isActive={isPlacingNote}
+            onPlace={onMapClickForNote}
+            onCancel={onCancelPlace}
+          />
+        )}
       </MapContainer>
     </div>
   );

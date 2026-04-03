@@ -39,6 +39,7 @@ assert_json_field("create: text correct", body, ["text"], "Main office location"
 assert_json_field("create: title correct", body, ["title"], "HQ")
 assert_json_field("create: pinned defaults to false", body, ["pinned"], False)
 assert_json_field("create: canEdit is true for creator", body, ["canEdit"], True)
+assert_json_exists("create: has createdByUsername", body, ["createdByUsername"])
 
 # Without title (optional)
 status, body = http_post(BASE, {

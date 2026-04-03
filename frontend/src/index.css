@@ -224,6 +224,12 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 }
 .notes-form textarea { resize: vertical; }
 .notes-form-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+.notes-location { font-size: 0.85rem; }
+.notes-location-set {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  color: var(--color-primary); font-size: 0.85rem;
+}
+.notes-location-set .btn-icon { font-size: 0.75rem; }
 
 /* Note list */
 .notes-list {

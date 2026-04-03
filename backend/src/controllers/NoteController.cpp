@@ -97,6 +97,8 @@ void NoteController::createNote(
     int tenantId, int mapId) {
 
     int userId = callerUserId(req);
+    std::string callerUsername;
+    try { callerUsername = req->getAttributes()->get<std::string>("username"); } catch (...) {}
     auto body  = req->getJsonObject();
     if (!body || !body->isMember("lat") || !body->isMember("lng") || !(*body)["text"]) {
         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -124,7 +126,7 @@ void NoteController::createNote(
         "               AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE m.id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, userId, lat, lng, title, text, groupId]
+        [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
         (const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -138,7 +140,7 @@ void NoteController::createNote(
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
                 "SELECT COUNT(*) AS cnt FROM notes WHERE map_id = ?",
-                [callback, mapId, userId, lat, lng, title, text, groupId]
+                [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
                 (const drogon::orm::Result& rc) {
                     if (!rc.empty() && rc[0]["cnt"].as<int>() >= 10000) {
                         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -152,13 +154,14 @@ void NoteController::createNote(
                     db3->execSqlAsync(
                         "INSERT INTO notes (map_id, created_by, lat, lng, title, text, group_id) "
                         "VALUES (?,?,?,?,?,?,NULLIF(?,0))",
-                        [callback, mapId, userId, lat, lng, title, text, groupId]
+                        [callback, mapId, userId, callerUsername, lat, lng, title, text, groupId]
                         (const drogon::orm::Result& r2) {
                             int newId = static_cast<int>(r2.insertId());
                             Json::Value n;
-                            n["id"]        = newId;
-                            n["mapId"]     = mapId;
-                            n["createdBy"] = userId;
+                            n["id"]                = newId;
+                            n["mapId"]             = mapId;
+                            n["createdBy"]         = userId;
+                            n["createdByUsername"] = callerUsername;
                             n["lat"]       = lat;
                             n["lng"]       = lng;
                             n["title"]     = title;

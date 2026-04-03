@@ -8,14 +8,15 @@ interface NotesPanelProps {
   canEdit: boolean;
   isAdmin: boolean;
   onNoteClick?: (note: Note) => void;
+  onRequestMapClick?: (callback: (lat: number, lng: number) => void) => void;
 }
 
-export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelProps) {
+export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick, onRequestMapClick }: NotesPanelProps) {
   const tenantId = useAuthStore((s) => s.tenantId) ?? undefined;
 
   const [notes, setNotes] = useState<Note[]>([]);
   const [groups, setGroups] = useState<NoteGroup[]>([]);
-  const [activeGroupId, setActiveGroupId] = useState<number | null>(null); // null = "All"
+  const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Note creation
@@ -23,6 +24,8 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
   const [newTitle, setNewTitle] = useState('');
   const [newText, setNewText] = useState('');
   const [newGroupId, setNewGroupId] = useState<number | undefined>(undefined);
+  const [newLat, setNewLat] = useState<number | null>(null);
+  const [newLng, setNewLng] = useState<number | null>(null);
 
   // Group management
   const [showGroupForm, setShowGroupForm] = useState(false);
@@ -45,7 +48,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
       setGroups(g);
       setNotes(n);
     } catch {
-      // silently fail — panel shows empty
+      // silently fail
     } finally {
       setLoading(false);
     }
@@ -58,11 +61,30 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
 
   // ─── Note CRUD ─────────────────────────────────────────────────────────────
 
+  const handlePlaceOnMap = () => {
+    if (!onRequestMapClick) return;
+    onRequestMapClick((lat, lng) => {
+      setNewLat(lat);
+      setNewLng(lng);
+    });
+  };
+
   const handleCreateNote = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newText.trim()) return;
+
+    // If no location set, prompt to place on map
+    if (newLat === null || newLng === null) {
+      if (onRequestMapClick) {
+        alert('Please click "Place on map" to set the note location first.');
+        return;
+      }
+      // Fallback if no map click handler (shouldn't happen)
+    }
+
     const data: CreateNoteRequest = {
-      lat: 0, lng: 0, // default — user can move later
+      lat: newLat ?? 0,
+      lng: newLng ?? 0,
       text: newText,
       title: newTitle || undefined,
       groupId: newGroupId,
@@ -73,6 +95,8 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
       setNewTitle('');
       setNewText('');
       setNewGroupId(undefined);
+      setNewLat(null);
+      setNewLng(null);
       setShowCreate(false);
     } catch {
       alert('Failed to create note.');
@@ -141,7 +165,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
       if (editingGroup) {
         await noteGroupsService.updateGroup(mapId, editingGroup.id, data, tenantId);
         setGroups((prev) => prev.map((g) =>
-          g.id === editingGroup.id ? { ...g, ...data, name: groupName, color: groupColor, description: groupDesc } : g
+          g.id === editingGroup.id ? { ...g, name: groupName, color: groupColor, description: groupDesc } : g
         ));
       } else {
         const group = await noteGroupsService.createGroup(mapId, data, tenantId);
@@ -158,7 +182,6 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
     try {
       await noteGroupsService.deleteGroup(mapId, groupId, tenantId);
       setGroups((prev) => prev.filter((g) => g.id !== groupId));
-      // Notes in this group now have null groupId — reload
       if (activeGroupId === groupId) setActiveGroupId(null);
       loadData();
     } catch {
@@ -176,7 +199,11 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
         <h3>Notes</h3>
         <div className="notes-header-actions">
           {canEdit && (
-            <button className="btn btn-sm btn-primary" onClick={() => setShowCreate(true)}>
+            <button className="btn btn-sm btn-primary" onClick={() => {
+              setShowCreate(true);
+              setNewLat(null);
+              setNewLng(null);
+            }}>
               + Note
             </button>
           )}
@@ -241,6 +268,18 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
               ))}
             </select>
           )}
+          <div className="notes-location">
+            {newLat !== null && newLng !== null ? (
+              <span className="notes-location-set">
+                📍 {newLat.toFixed(4)}, {newLng.toFixed(4)}
+                <button type="button" className="btn-icon" onClick={() => { setNewLat(null); setNewLng(null); }}>×</button>
+              </span>
+            ) : (
+              <button type="button" className="btn btn-sm btn-ghost" onClick={handlePlaceOnMap}>
+                📍 Place on map
+              </button>
+            )}
+          </div>
           <div className="notes-form-actions">
             <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
             <button type="submit" className="btn btn-sm btn-primary">Save</button>
@@ -248,7 +287,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
         </form>
       )}
 
-      {/* Group form (create/edit) */}
+      {/* Group form */}
       {showGroupForm && (
         <form className="notes-form" onSubmit={handleSaveGroup}>
           <input
@@ -310,7 +349,7 @@ export function NotesPanel({ mapId, canEdit, isAdmin, onNoteClick }: NotesPanelP
                   {note.title && <h4 className="note-title">{note.title}</h4>}
                   <p className="note-text">{note.text}</p>
                   <div className="note-meta">
-                    <small>By {note.createdByUsername}</small>
+                    <small>By {note.createdByUsername || 'unknown'}</small>
                     {note.canEdit && (
                       <span className="note-actions">
                         <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleStartEdit(note); }} title="Edit">✎</button>
