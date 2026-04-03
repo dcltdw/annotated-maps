@@ -30,7 +30,7 @@ The application implements the following security controls:
 - **Tenant isolation:** All data-access queries include `tenant_id` scoping, enforced per-request by `TenantFilter` which verifies `tenant_members` before any controller code runs.
 - **Cross-org permission guard:** `setPermission` validates that the target user's `org_id` matches the caller's organization.
 - **Media authorization:** `addMedia` checks edit permission on the parent map. `deleteMedia` verifies the caller is the map owner, map editor, or annotation creator.
-- **Rate limiting:** `RateLimitFilter` applies a sliding-window limit (default: 5 requests per 300 seconds per IP) to login, registration, and SSO endpoints. Returns 429 with `Retry-After` header.
+- **Rate limiting:** `RateLimitFilter` applies a sliding-window limit to login, registration, and SSO endpoints. Returns 429 with `Retry-After` header. Development default: 100 requests per 60 seconds. Production recommendation: 5 requests per 300 seconds. Configurable via `custom_config.rate_limit` in config.
 - **Input validation:** GeoJSON structure (type + non-empty coordinates), media URL schemes (`http`/`https` only), branding colors (hex format), branding URLs (`https` only), display name length (255 max), and pagination bounds (`pageSize` clamped 1-100) are all validated server-side.
 - **Resource limits:** Per-tenant map cap (1,000) and per-map annotation cap (5,000) prevent storage exhaustion.
 - **Audit logging:** Security events (login success/failure, registration, SSO login, member add/remove, permission changes) are recorded to `audit_log` with atomic success/failure counters for monitoring.

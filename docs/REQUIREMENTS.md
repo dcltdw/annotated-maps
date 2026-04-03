@@ -70,7 +70,18 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 - Audit inserts are fire-and-forget (async, non-blocking). Failures are logged and counted via atomic counters (`AuditLog::failureCount()`, `AuditLog::successCount()`) but do not affect user-facing flows.
 - Each event records: event type, acting user, target user (if applicable), tenant, client IP, and freeform JSON detail.
 
-### 2.9 Resource Limits
+### 2.9 Notes
+
+- Notes are lightweight location-pinned text entries, separate from GeoJSON annotations.
+- A note has a latitude, longitude, optional title, and required text body.
+- Any user who can view a map can create notes on it.
+- Notes can be updated or deleted by the note creator, the map owner, or a user with edit permission.
+- Notes support a `pinned` flag (default false) for sorting important notes first.
+- A fulltext search index covers `title` and `text` columns.
+- `group_id` column exists (nullable) for future note grouping (phase 2).
+- Resource limit: 10,000 notes per map.
+
+### 2.10 Resource Limits
 
 - Per-tenant map limit: 1,000 maps. Enforced on map creation.
 - Per-map annotation limit: 5,000 annotations. Enforced on annotation creation.
@@ -151,6 +162,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 | `map_permissions` | Per-map, per-user permission grants. `user_id = NULL` = public access. Database triggers enforce at most one public row per map. |
 | `annotations` | GeoJSON annotations on maps (marker, polyline, polygon). |
 | `annotation_media` | Media attachments (image, link) on annotations. |
+| `notes` | Location-pinned text notes on maps. Separate from GeoJSON annotations. Fulltext indexed. |
 | `audit_log` | Security event log. FKs use `ON DELETE SET NULL` so records survive entity deletion. |
 
 ### 4.2 Key Relationships
@@ -159,6 +171,7 @@ Annotated Maps is a multi-tenant, collaborative map annotation platform. Users c
 organizations ──< tenants ──< tenant_members >── users
                   tenants ──< maps ──< annotations ──< annotation_media
                               maps ──< map_permissions >── users
+                              maps ──< notes >── users
 organizations ──< sso_providers
 ```
 
@@ -228,6 +241,18 @@ All routes require JWT + TenantFilter.
 | POST | `.../maps/{mapId}/annotations/{id}/media` | Attach media (edit perm required) |
 | DELETE | `.../maps/{mapId}/annotations/{id}/media/{mediaId}` | Remove media |
 
+### 5.5 Notes (tenant-scoped)
+
+All routes require JWT + TenantFilter.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `.../maps/{mapId}/notes` | List notes (pinned first) |
+| POST | `.../maps/{mapId}/notes` | Create note (view perm required) |
+| GET | `.../maps/{mapId}/notes/{id}` | Get note |
+| PUT | `.../maps/{mapId}/notes/{id}` | Update note (creator, owner, or editor) |
+| DELETE | `.../maps/{mapId}/notes/{id}` | Delete note (creator, owner, or editor) |
+
 ---
 
 ## 6. Technology Stack
@@ -253,6 +278,7 @@ Backend configuration uses Drogon's JSON config format. Custom application setti
 | 001 | Core schema: all tables (`organizations`, `users`, `tenants`, `tenant_members`, `sso_providers`, `maps`, `map_permissions` with triggers, `annotations`, `annotation_media`) |
 | 002 | Audit log table |
 | 003 | Development seed data placeholder |
+| 004 | Notes table (location-pinned text, fulltext index, group_id for future use) |
 
 ---
 

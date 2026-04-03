@@ -132,7 +132,7 @@ docker compose exec mysql mysql -uroot -prootpassword annotated_maps \
 
 ### Rate limiting
 
-Hit the login endpoint rapidly to trigger the rate limiter (default: 10
+Hit the login endpoint rapidly to trigger the rate limiter (dev default: 100
 requests per 60 seconds):
 
 ```bash
