@@ -278,8 +278,11 @@ void NoteController::updateNote(
     std::string newTitle = (*body).get("title", "").asString();
     std::string newText  = (*body).get("text", "").asString();
     std::string newColor = (*body).get("color", "").asString();
+    bool hasLat          = body->isMember("lat");
+    bool hasLng          = body->isMember("lng");
+    double newLat        = hasLat ? (*body)["lat"].asDouble() : 0.0;
+    double newLng        = hasLng ? (*body)["lng"].asDouble() : 0.0;
     bool hasGroupId      = body->isMember("groupId");
-    // groupId: null means ungroup, number means assign, absent means no change
     bool ungrouping      = hasGroupId && (*body)["groupId"].isNull();
     int newGroupId       = (hasGroupId && !ungrouping) ? (*body)["groupId"].asInt() : 0;
 
@@ -291,6 +294,8 @@ void NoteController::updateNote(
         "SET n.title    = IF(?='', n.title, ?), "
         "    n.text     = IF(?='', n.text, ?), "
         "    n.color    = IF(?='', n.color, ?), "
+        "    n.lat      = IF(?, ?, n.lat), "
+        "    n.lng      = IF(?, ?, n.lng), "
         "    n.group_id = CASE WHEN ?=0 THEN n.group_id "
         "                      WHEN ?=-1 THEN NULL "
         "                      ELSE ? END "
@@ -319,6 +324,8 @@ void NoteController::updateNote(
         newTitle, newTitle,
         newText, newText,
         newColor, newColor,
+        hasLat, newLat,
+        hasLng, newLng,
         hasGroupId ? (ungrouping ? -1 : newGroupId) : 0,
         hasGroupId ? (ungrouping ? -1 : newGroupId) : 0,
         newGroupId,

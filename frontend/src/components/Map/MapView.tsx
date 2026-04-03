@@ -126,6 +126,7 @@ function NotePlacement({ isActive, onPlace, onCancel }: NotePlacementProps) {
 
     const mapContainer = leafletMap.getContainer();
     mapContainer.style.cursor = 'crosshair';
+    let placementMarker: L.CircleMarker | null = null;
 
     const hint = document.createElement('div');
     hint.className = 'move-hint';
@@ -133,6 +134,25 @@ function NotePlacement({ isActive, onPlace, onCancel }: NotePlacementProps) {
     mapContainer.appendChild(hint);
 
     const handleClick = (e: L.LeafletMouseEvent) => {
+      // Leave a temporary marker showing where the note will be placed
+      placementMarker = L.circleMarker([e.latlng.lat, e.latlng.lng], {
+        radius: 10,
+        fillColor: '#00FFFF',
+        color: '#fff',
+        weight: 2,
+        opacity: 1,
+        fillOpacity: 0.85,
+      }).addTo(leafletMap);
+      placementMarker.bindPopup('Note will be placed here').openPopup();
+
+      // Remove marker after 5 seconds (note form is still open)
+      setTimeout(() => {
+        if (placementMarker) {
+          leafletMap.removeLayer(placementMarker);
+          placementMarker = null;
+        }
+      }, 5000);
+
       cleanup();
       onPlace(e.latlng.lat, e.latlng.lng);
     };

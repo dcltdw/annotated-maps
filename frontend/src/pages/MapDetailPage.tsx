@@ -41,10 +41,11 @@ export function MapDetailPage() {
         noteGroupsService.listGroups(Number(mapId), storedTenantId),
         notesService.listNotes(Number(mapId), groupFilter, storedTenantId),
       ]);
+      console.log('Notes loaded:', n.length, 'Groups loaded:', g.length);
       setGroups(g);
       setNotes(n);
-    } catch {
-      // silently fail
+    } catch (err) {
+      console.error('Failed to load notes/groups:', err);
     }
   }, [mapId, storedTenantId]);
 

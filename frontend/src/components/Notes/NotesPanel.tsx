@@ -80,7 +80,8 @@ export function NotesPanel({
       groupId: newGroupId,
     };
     try {
-      await notesService.createNote(mapId, data, tenantId);
+      const created = await notesService.createNote(mapId, data, tenantId);
+      console.log('Note created:', created);
       setNewTitle('');
       setNewText('');
       setNewColor('');
@@ -89,7 +90,8 @@ export function NotesPanel({
       setNewLng(null);
       setShowCreate(false);
       onNotesChanged(activeGroupId ?? undefined);
-    } catch {
+    } catch (err) {
+      console.error('Failed to create note:', err);
       alert('Failed to create note.');
     }
   };
@@ -130,6 +132,18 @@ export function NotesPanel({
     } catch {
       alert('Failed to update note.');
     }
+  };
+
+  const handleMoveNote = (note: Note) => {
+    if (!onRequestMapClick) return;
+    onRequestMapClick(async (lat, lng) => {
+      try {
+        await notesService.updateNote(mapId, note.id, { lat, lng } as any, tenantId);
+        onNotesChanged(activeGroupId ?? undefined);
+      } catch {
+        alert('Failed to move note.');
+      }
+    });
   };
 
   // ─── Group CRUD ────────────────────────────────────────────────────────────
@@ -371,6 +385,7 @@ export function NotesPanel({
                     {note.canEdit && (
                       <span className="note-actions">
                         <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleStartEdit(note); }} title="Edit">✎</button>
+                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleMoveNote(note); }} title="Move">⤢</button>
                         <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleDeleteNote(note.id); }} title="Delete">×</button>
                       </span>
                     )}
