@@ -12,6 +12,10 @@ import type {
   PaginatedResponse,
   Tenant,
   TenantMember,
+  Note,
+  CreateNoteRequest,
+  NoteGroup,
+  CreateNoteGroupRequest,
 } from '@/types';
 
 // Helper: resolve tenantId from store if not explicitly provided
@@ -168,5 +172,71 @@ export const permissionsService = {
   async removePermission(mapId: number, userId: number | null, tenantId?: number): Promise<void> {
     const target = userId === null ? 'public' : String(userId);
     await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/permissions/${target}`);
+  },
+};
+
+// ─── Notes ────────────────────────────────────────────────────────────────────
+
+export const notesService = {
+  async listNotes(mapId: number, groupId?: number, tenantId?: number): Promise<Note[]> {
+    const params = groupId ? { groupId } : {};
+    const res = await apiClient.get<Note[]>(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes`, { params }
+    );
+    return res.data;
+  },
+
+  async createNote(mapId: number, data: CreateNoteRequest, tenantId?: number): Promise<Note> {
+    const res = await apiClient.post<Note>(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes`, data
+    );
+    return res.data;
+  },
+
+  async getNote(mapId: number, noteId: number, tenantId?: number): Promise<Note> {
+    const res = await apiClient.get<Note>(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`
+    );
+    return res.data;
+  },
+
+  async updateNote(
+    mapId: number, noteId: number,
+    data: Partial<CreateNoteRequest>, tenantId?: number
+  ): Promise<void> {
+    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`, data);
+  },
+
+  async deleteNote(mapId: number, noteId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`);
+  },
+};
+
+// ─── Note Groups ──────────────────────────────────────────────────────────────
+
+export const noteGroupsService = {
+  async listGroups(mapId: number, tenantId?: number): Promise<NoteGroup[]> {
+    const res = await apiClient.get<NoteGroup[]>(
+      `${tenantBase(tenantId)}/maps/${mapId}/note-groups`
+    );
+    return res.data;
+  },
+
+  async createGroup(mapId: number, data: CreateNoteGroupRequest, tenantId?: number): Promise<NoteGroup> {
+    const res = await apiClient.post<NoteGroup>(
+      `${tenantBase(tenantId)}/maps/${mapId}/note-groups`, data
+    );
+    return res.data;
+  },
+
+  async updateGroup(
+    mapId: number, groupId: number,
+    data: Partial<CreateNoteGroupRequest>, tenantId?: number
+  ): Promise<void> {
+    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/note-groups/${groupId}`, data);
+  },
+
+  async deleteGroup(mapId: number, groupId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/note-groups/${groupId}`);
   },
 };

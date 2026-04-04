@@ -39,6 +39,15 @@ assert_json_field("create: text correct", body, ["text"], "Main office location"
 assert_json_field("create: title correct", body, ["title"], "HQ")
 assert_json_field("create: pinned defaults to false", body, ["pinned"], False)
 assert_json_field("create: canEdit is true for creator", body, ["canEdit"], True)
+assert_json_exists("create: has createdByUsername", body, ["createdByUsername"])
+
+# With custom color
+status, body = http_post(BASE, {
+    "lat": 40.713, "lng": -74.007, "text": "Colored note", "color": "#ff5500"
+}, TOKEN)
+assert_status("create: note with color returns 201", 201, status)
+assert_json_field("create: color set", body, ["color"], "#ff5500")
+COLORED_NOTE_ID = json_field(body, ["id"])
 
 # Without title (optional)
 status, body = http_post(BASE, {
@@ -98,6 +107,22 @@ assert_json_field("update: text changed", body, ["text"], "Updated location info
 status, _ = http_put(f"{BASE}/{NOTE_ID}", {"title": "New HQ"}, TOKEN)
 assert_status("update: title only returns 200", 200, status)
 
+# Move note (update lat/lng)
+status, _ = http_put(f"{BASE}/{NOTE_ID}", {"lat": 41.0, "lng": -73.5}, TOKEN)
+assert_status("update: move note returns 200", 200, status)
+
+status, body = http_get(f"{BASE}/{NOTE_ID}", TOKEN)
+coords = (json_field(body, ["lat"]), json_field(body, ["lng"]))
+assert_true("update: lat updated after move", coords[0] is not None and abs(coords[0] - 41.0) < 0.001)
+assert_true("update: lng updated after move", coords[1] is not None and abs(coords[1] - (-73.5)) < 0.001)
+
+# Update color
+status, _ = http_put(f"{BASE}/{NOTE_ID}", {"color": "#00ff00"}, TOKEN)
+assert_status("update: color returns 200", 200, status)
+
+status, body = http_get(f"{BASE}/{NOTE_ID}", TOKEN)
+assert_json_field("update: color changed", body, ["color"], "#00ff00")
+
 print("  All update tests passed.")
 
 # ─── Cross-org isolation ──────────────────────────────────────────────────────
@@ -138,9 +163,12 @@ assert_status("delete: creator can delete", 204, status)
 status, _ = http_get(f"{BASE}/{NOTE_ID_2}", TOKEN)
 assert_status("delete: note is gone", 404, status)
 
-# Delete the other note too
+# Delete the other notes too
 status, _ = http_delete(f"{BASE}/{NOTE_ID}", TOKEN)
 assert_status("delete: second note deleted", 204, status)
+
+status, _ = http_delete(f"{BASE}/{COLORED_NOTE_ID}", TOKEN)
+assert_status("delete: colored note deleted", 204, status)
 
 print("  All delete tests passed.")
 
