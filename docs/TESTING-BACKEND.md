@@ -18,7 +18,7 @@ python3 backend/tests/run-tests.py
 # Nightly tier — ~6 minutes (adds 300s rate limit window expiry test)
 python3 backend/tests/run-tests.py --tier nightly
 
-# Extended tier — ~17 minutes (adds 10-minute soak test)
+# Extended tier — ~12 minutes (adds 5-minute soak test)
 python3 backend/tests/run-tests.py --tier extended
 
 # Run a single test
@@ -31,7 +31,7 @@ python3 backend/tests/run-tests.py --only 1
 |---|---|---|---|
 | `fast` | ~60s | Every commit, local dev | Auth, filters, CRUD, permissions, input validation, security headers, audit log, rate limit enforcement |
 | `nightly` | ~6min | Scheduled CI (e.g., 3am) | Everything in fast + rate limit window expiry with real 300s wait |
-| `extended` | ~17min | Weekly or manual | Everything in nightly + 10-minute rate limiter soak test |
+| `extended` | ~12min | Weekly or manual | Everything in nightly + 5-minute rate limiter soak test |
 
 ## Test files
 
@@ -46,7 +46,7 @@ python3 backend/tests/run-tests.py --only 1
 | `test_07_rate_limit_slow.py` | nightly | Exhausts limit, waits 300s, verifies requests succeed again |
 | `test_08_audit.py` | fast | Audit log entries created for login failure, registration, login success |
 | `test_09_security.py` | fast | Cross-org isolation (maps, annotations, permissions, members), security headers |
-| `test_10_soak.py` | extended | 10-minute continuous load verifying rate limiter never over-admits |
+| `test_10_soak.py` | extended | 5-minute continuous load verifying rate limiter never over-admits |
 | `test_11_notes.py` | fast | Notes CRUD, cross-org isolation |
 | `test_12_annotation_edit_delete_move.py` | fast | Annotation edit, delete, move for all geometry types |
 | `test_13_note_groups.py` | fast | Note group CRUD, note-group assignment, filtering, permissions |

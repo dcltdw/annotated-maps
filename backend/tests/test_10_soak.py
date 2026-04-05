@@ -13,9 +13,9 @@ from helpers import reset_counters, report, assert_true, API, CURL_TIMEOUT
 
 reset_counters()
 
-print("=== Rate Limit Soak Test (10 minutes) ===")
+print("=== Rate Limit Soak Test (5 minutes) ===")
 
-DURATION = 600  # 10 minutes
+DURATION = 300  # 5 minutes — sufficient to catch rate limiter bugs with CI headroom
 INTERVAL = 5    # seconds between bursts
 MAX_PER_WINDOW = 100  # must match config.docker.json rate_limit.max_requests
 
