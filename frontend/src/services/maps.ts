@@ -14,6 +14,7 @@ import type {
   TenantMember,
   Note,
   CreateNoteRequest,
+  UpdateNoteRequest,
   NoteGroup,
   CreateNoteGroupRequest,
 } from '@/types';
@@ -202,7 +203,7 @@ export const notesService = {
 
   async updateNote(
     mapId: number, noteId: number,
-    data: Partial<CreateNoteRequest>, tenantId?: number
+    data: UpdateNoteRequest, tenantId?: number
   ): Promise<void> {
     await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`, data);
   },

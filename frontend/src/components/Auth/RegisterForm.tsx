@@ -3,23 +3,31 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 
 export function RegisterForm() {
-  const { register, loading, error } = useAuth();
+  const { register } = useAuth();
   const navigate = useNavigate();
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [localError, setLocalError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setLocalError(null);
+    setError(null);
     if (password !== confirm) {
-      setLocalError('Passwords do not match.');
+      setError('Passwords do not match.');
       return;
     }
-    const ok = await register({ username, email, password });
-    if (ok) navigate('/maps');
+    setLoading(true);
+    try {
+      const ok = await register({ username, email, password });
+      if (ok) navigate('/maps');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -27,9 +35,7 @@ export function RegisterForm() {
       <div className="auth-card">
         <h1>Create Account</h1>
         <form onSubmit={handleSubmit} className="auth-form">
-          {(error || localError) && (
-            <div className="alert alert-error">{error ?? localError}</div>
-          )}
+          {error && <div className="alert alert-error">{error}</div>}
           <div className="form-group">
             <label htmlFor="username">Username</label>
             <input

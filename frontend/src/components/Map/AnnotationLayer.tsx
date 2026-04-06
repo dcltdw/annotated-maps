@@ -241,6 +241,7 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
   return null;
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function layerToGeoJson(layer: L.Layer): GeoJsonGeometry | null {
   if (layer instanceof L.Marker) {
     const ll = layer.getLatLng();

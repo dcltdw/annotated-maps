@@ -3,15 +3,25 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 
 export function LoginForm() {
-  const { login, loading, error } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const ok = await login({ email, password });
-    if (ok) navigate('/maps');
+    setError(null);
+    setLoading(true);
+    try {
+      const ok = await login({ email, password });
+      if (ok) navigate('/maps');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

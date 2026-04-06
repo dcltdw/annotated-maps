@@ -86,29 +86,30 @@ same database.
 
 ### Pull request gate
 
-Every pull request to `main` runs two jobs via `.github/workflows/pr-tests.yml`:
+Every pull request to `main` runs three jobs via `.github/workflows/pr-tests.yml`:
 
-1. **compile** — Builds only the backend builder stage (C++ compile + link).
+1. **lint** — Runs TypeScript type-check (`tsc --noEmit`) and ESLint
+   (`npm run lint`) directly on the runner (no Docker). Completes in ~10s.
+2. **compile** — Builds only the backend builder stage (C++ compile + link).
    Uses the GitHub Actions cache so Drogon/jwt-cpp layers are cached and only
    the application code is recompiled (~30s on cache hit).
-2. **test** — Runs after compile succeeds (`needs: compile`). Builds backend
-   and frontend images individually via `docker/build-push-action` with GHA
-   cache, then starts the stack and runs database + backend integration tests
-   (fast tier).
+3. **test** — Runs after both lint and compile succeed
+   (`needs: [lint, compile]`). Builds backend and frontend images individually
+   via `docker/build-push-action` with GHA cache, then starts the stack and
+   runs database + backend integration tests (fast tier).
 
-Both jobs use GitHub Actions cache (`type=gha`) so Drogon, jwt-cpp, and
-node_modules layers are cached across runs. On cache hit, only application
-code is rebuilt (~30s for backend, ~10s for frontend). The CI compose
-override (`docker-compose.ci.yml`) maps the pre-built image tags to the
-services so `docker compose up` skips rebuilding.
+The lint and compile jobs run in parallel. Both use GitHub Actions cache
+(`type=gha`) so Drogon, jwt-cpp, and node_modules layers are cached across
+runs. The CI compose override (`docker-compose.ci.yml`) maps the pre-built
+image tags to the services so `docker compose up` skips rebuilding.
 
-If the C++ code doesn't compile, the test job is skipped entirely, giving
+If either lint or compile fails, the test job is skipped entirely, giving
 faster feedback than waiting for the full stack build.
 
 To enable merge blocking, configure branch protection on `main`:
 1. Go to Settings → Branches → Add rule for `main`
 2. Enable "Require status checks to pass before merging"
-3. Select both the "compile" and "test" checks from the PR Tests workflow
+3. Select the "lint", "compile", and "test" checks from the PR Tests workflow
 
 ### Nightly (weekdays 3am UTC)
 

@@ -54,7 +54,7 @@ export function MapDetailPage() {
     }
   }, [loading, activeMap, loadNotesAndGroups]);
 
-  const handleNoteClick = (note: Note) => {
+  const handleNoteClick = (_note: Note) => {
     // Future: pan map to note location
   };
 
