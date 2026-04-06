@@ -11,6 +11,15 @@ interface AnnotationLayerProps {
   canEdit: boolean;
 }
 
+function showMapError(map: L.Map, message: string) {
+  const container = map.getContainer();
+  const banner = document.createElement('div');
+  banner.className = 'map-error-banner';
+  banner.textContent = message;
+  container.appendChild(banner);
+  setTimeout(() => banner.remove(), 5000);
+}
+
 function createPopupContent(annotation: Annotation, canEdit: boolean): string {
   const mediaHtml = annotation.media && annotation.media.length > 0
     ? `<div class="annotation-media">
@@ -123,7 +132,7 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
             });
             layer!.closePopup();
           } catch {
-            alert('Failed to update annotation.');
+            showMapError(leafletMap, 'Failed to update annotation.');
           }
         });
 
@@ -196,7 +205,7 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
                 geoJson: newGeoJson,
               });
             } catch {
-              alert('Failed to move annotation.');
+              showMapError(leafletMap, 'Failed to move annotation.');
             }
           };
 
@@ -223,7 +232,7 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
             );
             removeAnnotationFromStore(annotation.id);
           } catch {
-            alert('Failed to delete annotation.');
+            showMapError(leafletMap, 'Failed to delete annotation.');
           }
         });
       });

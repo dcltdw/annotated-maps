@@ -21,6 +21,8 @@ export function NotesPanel({
   const tenantId = useAuthStore((s) => s.tenantId) ?? undefined;
 
   const [activeGroupId, setActiveGroupId] = useState<number | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
   // Note creation
   const [showCreate, setShowCreate] = useState(false);
@@ -50,6 +52,8 @@ export function NotesPanel({
     ? notes
     : notes.filter((n) => n.groupId === activeGroupId);
 
+  const clearError = () => setActionError(null);
+
   // ─── Note CRUD ─────────────────────────────────────────────────────────────
 
   const handlePlaceOnMap = () => {
@@ -66,7 +70,7 @@ export function NotesPanel({
 
     if (newLat === null || newLng === null) {
       if (onRequestMapClick) {
-        alert('Please click "Place on map" to set the note location first.');
+        setActionError('Please click "Place on map" to set the note location first.');
         return;
       }
     }
@@ -79,6 +83,8 @@ export function NotesPanel({
       color: newColor || undefined,
       groupId: newGroupId,
     };
+    clearError();
+    setSaving(true);
     try {
       await notesService.createNote(mapId, data, tenantId);
       setNewTitle('');
@@ -88,25 +94,27 @@ export function NotesPanel({
       setNewLat(null);
       setNewLng(null);
       setShowCreate(false);
-      // Reload notes from server — use setTimeout to ensure state updates have flushed
       setTimeout(() => onNotesChanged(activeGroupId ?? undefined), 100);
-    } catch (err) {
-      console.error('Failed to create note:', err);
-      alert('Failed to create note.');
+    } catch {
+      setActionError('Failed to create note.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDeleteNote = async (noteId: number) => {
     if (!window.confirm('Delete this note?')) return;
+    clearError();
     try {
       await notesService.deleteNote(mapId, noteId, tenantId);
       onNotesChanged(activeGroupId ?? undefined);
     } catch {
-      alert('Failed to delete note.');
+      setActionError('Failed to delete note.');
     }
   };
 
   const handleStartEdit = (note: Note) => {
+    clearError();
     setEditingNote(note);
     setEditTitle(note.title || '');
     setEditText(note.text);
@@ -116,13 +124,14 @@ export function NotesPanel({
 
   const handleSaveEdit = async () => {
     if (!editingNote) return;
+    clearError();
+    setSaving(true);
     try {
       const updateData: Record<string, unknown> = {
         title: editTitle,
         text: editText,
         color: editColor || undefined,
       };
-      // Send groupId: null to ungroup, number to assign, omit for no change
       if (editGroupId !== editingNote.groupId) {
         updateData.groupId = editGroupId;
       }
@@ -130,18 +139,21 @@ export function NotesPanel({
       setEditingNote(null);
       onNotesChanged(activeGroupId ?? undefined);
     } catch {
-      alert('Failed to update note.');
+      setActionError('Failed to update note.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleMoveNote = (note: Note) => {
     if (!onRequestMapClick) return;
+    clearError();
     onRequestMapClick(async (lat, lng) => {
       try {
         await notesService.updateNote(mapId, note.id, { lat, lng } , tenantId);
         onNotesChanged(activeGroupId ?? undefined);
       } catch {
-        alert('Failed to move note.');
+        setActionError('Failed to move note.');
       }
     });
   };
@@ -149,6 +161,7 @@ export function NotesPanel({
   // ─── Group CRUD ────────────────────────────────────────────────────────────
 
   const handleOpenGroupForm = (group?: NoteGroup) => {
+    clearError();
     if (group) {
       setEditingGroup(group);
       setGroupName(group.name);
@@ -173,6 +186,8 @@ export function NotesPanel({
       description: groupDesc || undefined,
     };
 
+    clearError();
+    setSaving(true);
     try {
       if (editingGroup) {
         await noteGroupsService.updateGroup(mapId, editingGroup.id, data, tenantId);
@@ -182,18 +197,21 @@ export function NotesPanel({
       setShowGroupForm(false);
       onNotesChanged(activeGroupId ?? undefined);
     } catch {
-      alert('Failed to save group.');
+      setActionError('Failed to save group.');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleDeleteGroup = async (groupId: number) => {
     if (!window.confirm('Delete this group? Notes in this group will become ungrouped.')) return;
+    clearError();
     try {
       await noteGroupsService.deleteGroup(mapId, groupId, tenantId);
       if (activeGroupId === groupId) setActiveGroupId(null);
       onNotesChanged();
     } catch {
-      alert('Failed to delete group.');
+      setActionError('Failed to delete group.');
     }
   };
 
@@ -211,6 +229,7 @@ export function NotesPanel({
         <div className="notes-header-actions">
           {canEdit && (
             <button className="btn btn-sm btn-primary" onClick={() => {
+              clearError();
               setShowCreate(true);
               setNewLat(null);
               setNewLng(null);
@@ -225,6 +244,13 @@ export function NotesPanel({
           )}
         </div>
       </div>
+
+      {actionError && (
+        <div className="alert alert-error" style={{ margin: '0.5rem 0' }}>
+          {actionError}
+          <button className="btn-icon" onClick={clearError} style={{ marginLeft: '0.5rem' }}>×</button>
+        </div>
+      )}
 
       {/* Group tabs */}
       <div className="notes-tabs">
@@ -297,8 +323,10 @@ export function NotesPanel({
             )}
           </div>
           <div className="notes-form-actions">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-            <button type="submit" className="btn btn-sm btn-primary">Save</button>
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCreate(false)} disabled={saving}>Cancel</button>
+            <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </button>
           </div>
         </form>
       )}
@@ -323,9 +351,9 @@ export function NotesPanel({
             onChange={(e) => setGroupDesc(e.target.value)}
           />
           <div className="notes-form-actions">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowGroupForm(false)}>Cancel</button>
-            <button type="submit" className="btn btn-sm btn-primary">
-              {editingGroup ? 'Update' : 'Create'} Group
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowGroupForm(false)} disabled={saving}>Cancel</button>
+            <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
+              {saving ? 'Saving…' : (editingGroup ? 'Update' : 'Create') + ' Group'}
             </button>
           </div>
         </form>
@@ -371,8 +399,10 @@ export function NotesPanel({
                     </select>
                   )}
                   <div className="notes-form-actions">
-                    <button className="btn btn-sm btn-ghost" onClick={() => setEditingNote(null)}>Cancel</button>
-                    <button className="btn btn-sm btn-primary" onClick={handleSaveEdit}>Save</button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setEditingNote(null)} disabled={saving}>Cancel</button>
+                    <button className="btn btn-sm btn-primary" onClick={handleSaveEdit} disabled={saving}>
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
                   </div>
                 </div>
               ) : (

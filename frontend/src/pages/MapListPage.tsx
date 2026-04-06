@@ -10,6 +10,8 @@ export function MapListPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     loadMaps().finally(() => setLoading(false));
@@ -17,19 +19,26 @@ export function MapListPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    const data: CreateMapRequest = {
-      title,
-      description,
-      centerLat: 0,
-      centerLng: 0,
-      zoom: 3,
-    };
-    const map = await createMap(data);
-    setShowCreate(false);
-    setTitle('');
-    setDescription('');
-    // Navigate to new map
-    window.location.href = `/tenants/${tenantId}/maps/${map.id}`;
+    setCreateError(null);
+    setCreating(true);
+    try {
+      const data: CreateMapRequest = {
+        title,
+        description,
+        centerLat: 0,
+        centerLng: 0,
+        zoom: 3,
+      };
+      const map = await createMap(data);
+      setShowCreate(false);
+      setTitle('');
+      setDescription('');
+      window.location.href = `/tenants/${tenantId}/maps/${map.id}`;
+    } catch {
+      setCreateError('Failed to create map.');
+    } finally {
+      setCreating(false);
+    }
   };
 
   if (loading) return <div className="page-loading">Loading maps…</div>;
@@ -48,6 +57,7 @@ export function MapListPage() {
           <div className="modal">
             <h2>Create Map</h2>
             <form onSubmit={handleCreate} className="auth-form">
+              {createError && <div className="alert alert-error">{createError}</div>}
               <div className="form-group">
                 <label>Title</label>
                 <input
@@ -67,11 +77,11 @@ export function MapListPage() {
                 />
               </div>
               <div className="modal-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)}>
+                <button type="button" className="btn btn-ghost" onClick={() => setShowCreate(false)} disabled={creating}>
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-primary">
-                  Create
+                <button type="submit" className="btn btn-primary" disabled={creating}>
+                  {creating ? 'Creating…' : 'Create'}
                 </button>
               </div>
             </form>
