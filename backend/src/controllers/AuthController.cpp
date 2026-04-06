@@ -171,10 +171,17 @@ void AuthController::registerUser(
                         [callback](const drogon::orm::DrogonDbException& e) {
                             std::string err = e.base().what();
                             bool dup = err.find("Duplicate") != std::string::npos;
+                            std::string code = "db_error";
+                            if (dup) {
+                                if (err.find("uq_users_email") != std::string::npos)
+                                    code = "email_taken";
+                                else if (err.find("uq_users_username") != std::string::npos)
+                                    code = "username_taken";
+                                else
+                                    code = "conflict";
+                            }
                             auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                errorJson(dup ? "conflict" : "db_error",
-                                          dup ? "Registration failed"
-                                              : "Registration failed"));
+                                errorJson(code, "Registration failed"));
                             resp->setStatusCode(dup ? drogon::k409Conflict
                                                     : drogon::k500InternalServerError);
                             callback(resp);
@@ -193,7 +200,7 @@ void AuthController::registerUser(
             std::string err = e.base().what();
             bool dup = err.find("Duplicate") != std::string::npos;
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson(dup ? "conflict" : "db_error",
+                errorJson(dup ? "username_taken" : "db_error",
                           "Registration failed"));
             resp->setStatusCode(dup ? drogon::k409Conflict
                                     : drogon::k500InternalServerError);

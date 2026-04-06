@@ -28,9 +28,13 @@ export function RegisterForm() {
     } catch (err) {
       if (err instanceof AxiosError) {
         const code = (err as AxiosError<ApiError>).response?.data?.error;
-        setError(code === 'conflict'
-          ? 'Error: this email address is already registered.'
-          : 'Registration failed');
+        if (code === 'email_taken') {
+          setError('Error: this email address is already registered.');
+        } else if (code === 'username_taken') {
+          setError('Error: this username is already taken.');
+        } else {
+          setError('Registration failed');
+        }
       } else {
         setError('Registration failed');
       }

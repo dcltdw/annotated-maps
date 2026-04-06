@@ -39,6 +39,14 @@ status, body = http_post("/auth/register", {
 })
 assert_status("register: duplicate returns 409", 409, status)
 assert_json_field("register: generic error message", body, ["message"], "Registration failed")
+assert_json_field("register: duplicate email error code", body, ["error"], "email_taken")
+
+# Duplicate username, different email
+status, body = http_post("/auth/register", {
+    "username": f"t01_{RUN_ID}", "email": f"t01_{RUN_ID}_alt@test.com", "password": "testpass123"
+})
+assert_status("register: duplicate username returns 409", 409, status)
+assert_json_field("register: duplicate username error code", body, ["error"], "username_taken")
 
 # Missing fields
 status, _ = http_post("/auth/register", {"email": "t01_nouser@test.com", "password": "testpass123"})
