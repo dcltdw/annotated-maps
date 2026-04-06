@@ -180,7 +180,7 @@ def main():
         print(f"--- {test_file} ---")
         result = subprocess.run(
             [sys.executable, os.path.join(SCRIPT_DIR, test_file)],
-            timeout=600  # 10 min max per test
+            timeout=900  # 15 min max per test — headroom for soak test + CI overhead
         )
         print()
 
