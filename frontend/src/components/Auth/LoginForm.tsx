@@ -21,7 +21,8 @@ export function LoginForm() {
       if (ok) navigate('/maps');
     } catch (err) {
       if (err instanceof AxiosError) {
-        setError((err as AxiosError<ApiError>).response?.data?.error ?? 'Login failed');
+        const data = (err as AxiosError<ApiError>).response?.data;
+        setError(data?.message ?? data?.error ?? 'Login failed');
       } else {
         setError('Login failed');
       }
