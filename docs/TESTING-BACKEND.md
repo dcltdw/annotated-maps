@@ -86,14 +86,22 @@ same database.
 
 ### Pull request gate
 
-Every pull request to `main` runs the fast test suite automatically via
-`.github/workflows/pr-tests.yml`. Both database tests and backend integration
-tests (fast tier) must pass before the PR can be merged.
+Every pull request to `main` runs two jobs via `.github/workflows/pr-tests.yml`:
+
+1. **compile** — Builds only the backend builder stage (C++ compile + link).
+   Uses the GitHub Actions cache so Drogon/jwt-cpp layers are cached and only
+   the application code is recompiled (~30s on cache hit).
+2. **test** — Runs after compile succeeds (`needs: compile`). Builds the full
+   Docker Compose stack and runs database tests + backend integration tests
+   (fast tier).
+
+If the C++ code doesn't compile, the test job is skipped entirely, giving
+faster feedback than waiting for the full stack build.
 
 To enable merge blocking, configure branch protection on `main`:
 1. Go to Settings → Branches → Add rule for `main`
 2. Enable "Require status checks to pass before merging"
-3. Select the "test" check from the PR Tests workflow
+3. Select both the "compile" and "test" checks from the PR Tests workflow
 
 ### Nightly (e.g., 3am weekdays)
 
