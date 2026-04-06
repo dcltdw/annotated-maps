@@ -35,6 +35,54 @@ jobs:
         run: npm run lint
         working-directory: frontend
 
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (frontend)
+        run: npm audit --audit-level=high
+        working-directory: frontend
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          load: true
+          tags: annotated-maps-backend:scan
+          cache-from: |
+            type=gha,scope=backend-compile
+            type=gha,scope=backend
+
+      - name: Trivy scan (backend image)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: annotated-maps-backend:scan
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
+
+      - name: Secret scan (trufflehog)
+        uses: trufflesecurity/trufflehog@v3.88.30
+        with:
+          extra_args: --only-verified
+
   compile:
     runs-on: ubuntu-latest
     timeout-minutes: 15
