@@ -1,6 +1,8 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { AxiosError } from 'axios';
 import { useAuth } from '@/hooks/useAuth';
+import type { ApiError } from '@/types';
 
 export function RegisterForm() {
   const { register } = useAuth();
@@ -24,7 +26,11 @@ export function RegisterForm() {
       const ok = await register({ username, email, password });
       if (ok) navigate('/maps');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Registration failed');
+      if (err instanceof AxiosError) {
+        setError((err as AxiosError<ApiError>).response?.data?.error ?? 'Registration failed');
+      } else {
+        setError('Registration failed');
+      }
     } finally {
       setLoading(false);
     }
