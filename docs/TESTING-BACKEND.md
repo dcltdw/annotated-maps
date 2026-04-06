@@ -109,6 +109,11 @@ pre-built image tags to the services so `docker compose up` skips rebuilding.
 If either lint or compile fails, the test job is skipped entirely, giving
 faster feedback than waiting for the full stack build.
 
+After tests run, the test job posts a summary comment on the PR with
+pass/fail counts per suite (database, backend), a table of totals, and
+a link to full logs. On failure, the specific `FAIL:` lines are included.
+The comment is updated in place on re-runs to avoid clutter.
+
 To enable merge blocking, configure branch protection on `main`:
 1. Go to Settings → Branches → Add rule for `main`
 2. Enable "Require status checks to pass before merging"
