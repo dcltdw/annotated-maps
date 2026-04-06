@@ -1,3 +1,4 @@
+// Test: valid C++ change for CI compile-check verification
 #include <drogon/drogon.h>
 #include <sodium.h>
 #include <iostream>
