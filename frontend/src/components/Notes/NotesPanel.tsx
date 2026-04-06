@@ -126,7 +126,7 @@ export function NotesPanel({
       if (editGroupId !== editingNote.groupId) {
         updateData.groupId = editGroupId;
       }
-      await notesService.updateNote(mapId, editingNote.id, updateData as any, tenantId);
+      await notesService.updateNote(mapId, editingNote.id, updateData , tenantId);
       setEditingNote(null);
       onNotesChanged(activeGroupId ?? undefined);
     } catch {
@@ -138,7 +138,7 @@ export function NotesPanel({
     if (!onRequestMapClick) return;
     onRequestMapClick(async (lat, lng) => {
       try {
-        await notesService.updateNote(mapId, note.id, { lat, lng } as any, tenantId);
+        await notesService.updateNote(mapId, note.id, { lat, lng } , tenantId);
         onNotesChanged(activeGroupId ?? undefined);
       } catch {
         alert('Failed to move note.');

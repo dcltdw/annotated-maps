@@ -193,6 +193,15 @@ export interface CreateNoteRequest {
   groupId?: number;
 }
 
+export interface UpdateNoteRequest {
+  title?: string;
+  text?: string;
+  color?: string | null;
+  groupId?: number | null;
+  lat?: number;
+  lng?: number;
+}
+
 // ─── Note Groups ──────────────────────────────────────────────────────────────
 
 export interface NoteGroup {

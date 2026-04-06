@@ -1,17 +1,34 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { AxiosError } from 'axios';
 import { useAuth } from '@/hooks/useAuth';
+import type { ApiError } from '@/types';
 
 export function LoginForm() {
-  const { login, loading, error } = useAuth();
+  const { login } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    const ok = await login({ email, password });
-    if (ok) navigate('/maps');
+    setError(null);
+    setLoading(true);
+    try {
+      const ok = await login({ email, password });
+      if (ok) navigate('/maps');
+    } catch (err) {
+      if (err instanceof AxiosError) {
+        const data = (err as AxiosError<ApiError>).response?.data;
+        setError(data?.message ?? data?.error ?? 'Login failed');
+      } else {
+        setError('Login failed');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
