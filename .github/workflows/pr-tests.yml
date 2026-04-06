@@ -7,6 +7,10 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -169,12 +173,108 @@ jobs:
           done
 
       - name: Run database tests
-        run: python3 database/tests/run-db-tests.py
+        id: db_tests
+        run: |
+          python3 database/tests/run-db-tests.py 2>&1 | tee /tmp/db-tests.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Run backend tests (fast tier)
-        run: python3 backend/tests/run-tests.py --tier fast
+        id: backend_tests
+        if: always() && steps.db_tests.outcome != 'skipped'
+        run: |
+          python3 backend/tests/run-tests.py --tier fast 2>&1 | tee /tmp/backend-tests.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
         env:
           CURL_TIMEOUT: "30"
+
+      - name: Post test summary to PR
+        if: always() && steps.db_tests.outcome != 'skipped'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            function parseCounts(log) {
+              let passed = 0, failed = 0;
+              for (const line of log.split('\n')) {
+                const m = line.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
+                if (m) {
+                  passed += parseInt(m[1]);
+                  failed += parseInt(m[2]);
+                }
+              }
+              return { passed, failed };
+            }
+
+            let dbLog = '', backendLog = '';
+            try { dbLog = fs.readFileSync('/tmp/db-tests.log', 'utf8'); } catch {}
+            try { backendLog = fs.readFileSync('/tmp/backend-tests.log', 'utf8'); } catch {}
+
+            const db = parseCounts(dbLog);
+            const backend = parseCounts(backendLog);
+            const total = { passed: db.passed + backend.passed, failed: db.failed + backend.failed };
+            const status = total.failed > 0 ? '❌' : '✅';
+            const logsUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+
+            // Extract failed test names
+            const failures = [];
+            for (const line of (dbLog + '\n' + backendLog).split('\n')) {
+              if (line.trim().startsWith('FAIL:')) {
+                failures.push(line.trim());
+              }
+            }
+
+            let body = `## ${status} Test Results\n\n`;
+            body += `| Suite | Passed | Failed |\n`;
+            body += `|-------|-------:|-------:|\n`;
+            body += `| Database | ${db.passed} | ${db.failed} |\n`;
+            body += `| Backend (fast) | ${backend.passed} | ${backend.failed} |\n`;
+            body += `| **Total** | **${total.passed}** | **${total.failed}** |\n\n`;
+
+            if (failures.length > 0) {
+              body += `### Failures\n\n`;
+              body += '```\n' + failures.join('\n') + '\n```\n\n';
+            }
+
+            body += `[Full logs](${logsUrl})`;
+
+            // Find and update existing bot comment, or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const marker = '## ✅ Test Results';
+            const markerFail = '## ❌ Test Results';
+            const existing = comments.find(c =>
+              c.body?.startsWith(marker) || c.body?.startsWith(markerFail)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Fail if tests failed
+        if: always() && steps.db_tests.outcome != 'skipped'
+        run: |
+          db_exit="${{ steps.db_tests.outputs.exit_code }}"
+          backend_exit="${{ steps.backend_tests.outputs.exit_code }}"
+          if [ "$db_exit" != "0" ] || [ "$backend_exit" != "0" ]; then
+            echo "Tests failed (db=$db_exit, backend=$backend_exit)"
+            exit 1
+          fi
 
       - name: Show backend logs on failure
         if: failure()
