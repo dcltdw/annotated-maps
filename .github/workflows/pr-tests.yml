@@ -4,8 +4,34 @@ on:
   pull_request:
     branches: [main]
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compile backend (builder stage only)
+        uses: docker/build-push-action@v6
+        with:
+          context: backend
+          file: backend/Dockerfile
+          target: builder
+          push: false
+          load: false
+          cache-from: type=gha,scope=backend-compile
+          cache-to: type=gha,scope=backend-compile,mode=max
+
   test:
+    needs: compile
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
