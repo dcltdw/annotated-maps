@@ -1,4 +1,6 @@
+// Test: broken C++ for CI compile-check verification
 #include <drogon/drogon.h>
+THIS_IS_NOT_VALID_CPP;
 #include <sodium.h>
 #include <iostream>
 #include <set>
