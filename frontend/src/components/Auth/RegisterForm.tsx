@@ -27,7 +27,10 @@ export function RegisterForm() {
       if (ok) navigate('/maps');
     } catch (err) {
       if (err instanceof AxiosError) {
-        setError((err as AxiosError<ApiError>).response?.data?.error ?? 'Registration failed');
+        const code = (err as AxiosError<ApiError>).response?.data?.error;
+        setError(code === 'conflict'
+          ? 'Error: this email address is already registered.'
+          : 'Registration failed');
       } else {
         setError('Registration failed');
       }
