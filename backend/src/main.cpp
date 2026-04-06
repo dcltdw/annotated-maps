@@ -1,3 +1,4 @@
+// Cache validation — safe to remove
 #include <drogon/drogon.h>
 #include <sodium.h>
 #include <iostream>
