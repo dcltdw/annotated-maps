@@ -1,0 +1,10 @@
+# CI override — tells compose to use pre-built images from build-push-action
+# instead of rebuilding. Used by: pr-tests.yml, nightly.yml
+#
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+
+services:
+  backend:
+    image: annotated-maps-backend:latest
+  frontend:
+    image: annotated-maps-frontend:latest

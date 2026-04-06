@@ -91,9 +91,16 @@ Every pull request to `main` runs two jobs via `.github/workflows/pr-tests.yml`:
 1. **compile** — Builds only the backend builder stage (C++ compile + link).
    Uses the GitHub Actions cache so Drogon/jwt-cpp layers are cached and only
    the application code is recompiled (~30s on cache hit).
-2. **test** — Runs after compile succeeds (`needs: compile`). Builds the full
-   Docker Compose stack and runs database tests + backend integration tests
+2. **test** — Runs after compile succeeds (`needs: compile`). Builds backend
+   and frontend images individually via `docker/build-push-action` with GHA
+   cache, then starts the stack and runs database + backend integration tests
    (fast tier).
+
+Both jobs use GitHub Actions cache (`type=gha`) so Drogon, jwt-cpp, and
+node_modules layers are cached across runs. On cache hit, only application
+code is rebuilt (~30s for backend, ~10s for frontend). The CI compose
+override (`docker-compose.ci.yml`) maps the pre-built image tags to the
+services so `docker compose up` skips rebuilding.
 
 If the C++ code doesn't compile, the test job is skipped entirely, giving
 faster feedback than waiting for the full stack build.
@@ -103,23 +110,17 @@ To enable merge blocking, configure branch protection on `main`:
 2. Enable "Require status checks to pass before merging"
 3. Select both the "compile" and "test" checks from the PR Tests workflow
 
-### Nightly (e.g., 3am weekdays)
+### Nightly (weekdays 3am UTC)
 
-```bash
-# crontab -e
-0 3 * * 1-5 cd /path/to/annotated-maps && python3 backend/tests/run-tests.py --tier nightly >> /var/log/annotated-maps-tests.log 2>&1
-```
+Runs via `.github/workflows/nightly.yml`. Uses the same GHA-cached
+`docker/build-push-action` approach as the PR gate for fast image builds.
+Runs the `nightly` test tier (fast + 300s rate limit window expiry test).
 
-### Weekly (e.g., Saturday 2am)
+### Weekend (Saturday 2am UTC)
 
-```bash
-# crontab -e
-0 2 * * 6 cd /path/to/annotated-maps && python3 backend/tests/run-tests.py --tier extended >> /var/log/annotated-maps-tests.log 2>&1
-```
-
-For CI systems (GitHub Actions, GitLab CI), use the `--tier` flag in your
-pipeline config. Fast tier runs on every push; nightly and extended run on
-scheduled triggers.
+Runs via `.github/workflows/weekend.yml`. Intentionally builds with
+`--no-cache` to catch stale dependency issues. Runs the `extended` test
+tier (nightly + 5-minute soak test).
 
 ## Troubleshooting
 
