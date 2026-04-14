@@ -1,18 +1,12 @@
 #include "AuthController.h"
 #include "AuditLog.h"
+#include "ErrorResponse.h"
 #include <drogon/drogon.h>
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
 #include <chrono>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-static Json::Value errorJson(const std::string& code, const std::string& msg) {
-    Json::Value v;
-    v["error"]   = code;
-    v["message"] = msg;
-    return v;
-}
 
 static std::string hashPassword(const std::string& password) {
     char hashed[crypto_pwhash_STRBYTES];
