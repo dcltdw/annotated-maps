@@ -90,7 +90,13 @@ function DrawControls({ mapId, canEdit }: DrawControlsProps) {
         drawnItems.removeLayer(layer); // AnnotationLayer will re-render from store
       } catch {
         drawnItems.removeLayer(layer);
-        alert('Failed to save annotation.');
+        // Show a temporary error banner on the map container
+        const container = leafletMap.getContainer();
+        const banner = document.createElement('div');
+        banner.className = 'map-error-banner';
+        banner.textContent = 'Failed to save annotation.';
+        container.appendChild(banner);
+        setTimeout(() => banner.remove(), 5000);
       }
     };
 

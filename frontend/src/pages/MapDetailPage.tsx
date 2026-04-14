@@ -21,6 +21,7 @@ export function MapDetailPage() {
   // Shared notes/groups state (used by both MapView markers and NotesPanel list)
   const [notes, setNotes] = useState<Note[]>([]);
   const [groups, setGroups] = useState<NoteGroup[]>([]);
+  const [notesError, setNotesError] = useState<string | null>(null);
 
   // Map click handler for "Place on map" feature
   const mapClickCallbackRef = useRef<((lat: number, lng: number) => void) | null>(null);
@@ -37,14 +38,15 @@ export function MapDetailPage() {
   const loadNotesAndGroups = useCallback(async (groupFilter?: number) => {
     if (!mapId) return;
     try {
+      setNotesError(null);
       const [g, n] = await Promise.all([
         noteGroupsService.listGroups(Number(mapId), storedTenantId),
         notesService.listNotes(Number(mapId), groupFilter, storedTenantId),
       ]);
       setGroups(g);
       setNotes(n);
-    } catch (err) {
-      console.error('Failed to load notes/groups:', err);
+    } catch {
+      setNotesError('Failed to load notes and groups.');
     }
   }, [mapId, storedTenantId]);
 
@@ -91,6 +93,7 @@ export function MapDetailPage() {
           <p className="permission-notice">View only — sign in for more access</p>
         )}
       </div>
+      {notesError && <div className="alert alert-error">{notesError}</div>}
       <div className="map-page-content">
         <MapView
           map={activeMap}
