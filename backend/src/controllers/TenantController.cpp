@@ -1,13 +1,7 @@
 #include "TenantController.h"
 #include "AuditLog.h"
+#include "ErrorResponse.h"
 #include <drogon/drogon.h>
-
-static Json::Value errorJson(const std::string& code, const std::string& msg) {
-    Json::Value v;
-    v["error"]   = code;
-    v["message"] = msg;
-    return v;
-}
 
 // ─── GET /api/v1/tenants ──────────────────────────────────────────────────────
 

@@ -1,5 +1,6 @@
 #include "MapController.h"
 #include "AuditLog.h"
+#include "ErrorResponse.h"
 #include <drogon/drogon.h>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
@@ -10,13 +11,6 @@ static int callerUserId(const drogon::HttpRequestPtr& req) {
 static int callerOrgId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("orgId"); }
     catch (...) { return 0; }
-}
-
-static Json::Value errorJson(const std::string& code, const std::string& msg) {
-    Json::Value v;
-    v["error"]   = code;
-    v["message"] = msg;
-    return v;
 }
 
 // ─── GET /api/v1/tenants/{tenantId}/maps ──────────────────────────────────────

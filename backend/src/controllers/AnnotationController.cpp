@@ -1,16 +1,10 @@
 #include "AnnotationController.h"
+#include "ErrorResponse.h"
 #include <drogon/drogon.h>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("userId"); }
     catch (...) { return 0; }
-}
-
-static Json::Value errorJson(const std::string& code, const std::string& msg) {
-    Json::Value v;
-    v["error"]   = code;
-    v["message"] = msg;
-    return v;
 }
 
 // ─── GET /api/v1/tenants/{tenantId}/maps/{mapId}/annotations ──────────────────

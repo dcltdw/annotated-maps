@@ -1,5 +1,6 @@
 #include "SsoController.h"
 #include "AuditLog.h"
+#include "ErrorResponse.h"
 #include <drogon/drogon.h>
 #include <jwt-cpp/jwt.h>
 #include <openssl/rand.h>
@@ -62,12 +63,8 @@ void SsoController::initiate(
         "WHERE o.slug = ? LIMIT 1",
         [this, callback, orgSlug](const drogon::orm::Result& r) {
             if (r.empty()) {
-                Json::Value body;
-                body["error"]   = "bad_request";
-                body["message"] = "SSO is not available";
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                resp->setStatusCode(drogon::k400BadRequest);
-                callback(resp);
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "SSO is not available"));
                 return;
             }
 
@@ -107,12 +104,8 @@ void SsoController::initiate(
             callback(resp);
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            Json::Value body;
-            body["error"]   = "db_error";
-            body["message"] = "Database error during SSO initiation";
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Database error during SSO initiation"));
         },
         orgSlug);
 }
@@ -130,22 +123,14 @@ void SsoController::callback(
     std::string error = req->getParameter("error");
 
     if (!error.empty()) {
-        Json::Value body;
-        body["error"]   = "sso_error";
-        body["message"] = "IdP returned error: " + error;
-        auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-        resp->setStatusCode(drogon::k400BadRequest);
-        callback(resp);
+        callback(errorResponse(drogon::k400BadRequest,
+            "sso_error", "IdP returned error: " + error));
         return;
     }
 
     if (code.empty() || state.empty()) {
-        Json::Value body;
-        body["error"]   = "bad_request";
-        body["message"] = "code and state are required";
-        auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-        resp->setStatusCode(drogon::k400BadRequest);
-        callback(resp);
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "code and state are required"));
         return;
     }
 
@@ -155,12 +140,8 @@ void SsoController::callback(
         auto it = pendingStates_.find(state);
         if (it == pendingStates_.end() ||
             it->second.expiry < std::chrono::steady_clock::now()) {
-            Json::Value body;
-            body["error"]   = "invalid_state";
-            body["message"] = "SSO state is invalid or expired";
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-            resp->setStatusCode(drogon::k400BadRequest);
-            callback(resp);
+            callback(errorResponse(drogon::k400BadRequest,
+                "invalid_state", "SSO state is invalid or expired"));
             return;
         }
         savedState = it->second;
@@ -174,12 +155,8 @@ void SsoController::callback(
         "SELECT s.config FROM sso_providers s WHERE s.org_id = ? LIMIT 1",
         [this, callback, req, code, orgId](const drogon::orm::Result& r) {
             if (r.empty()) {
-                Json::Value body;
-                body["error"]   = "not_found";
-                body["message"] = "SSO provider config not found";
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                resp->setStatusCode(drogon::k404NotFound);
-                callback(resp);
+                callback(errorResponse(drogon::k404NotFound,
+                    "not_found", "SSO provider config not found"));
                 return;
             }
 
@@ -223,12 +200,8 @@ void SsoController::callback(
                 [this, callback, req, orgId, userinfoEndpoint]
                 (drogon::ReqResult result, const drogon::HttpResponsePtr& tokenResp) {
                     if (result != drogon::ReqResult::Ok) {
-                        Json::Value body;
-                        body["error"]   = "sso_error";
-                        body["message"] = "Failed to contact IdP token endpoint";
-                        auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                        resp->setStatusCode(drogon::k502BadGateway);
-                        callback(resp);
+                        callback(errorResponse(drogon::k502BadGateway,
+                            "sso_error", "Failed to contact IdP token endpoint"));
                         return;
                     }
 
@@ -237,12 +210,8 @@ void SsoController::callback(
                     reader.parse(std::string(tokenResp->getBody()), tokenData);
 
                     if (!tokenData.isMember("access_token")) {
-                        Json::Value body;
-                        body["error"]   = "sso_error";
-                        body["message"] = "No access_token in IdP response";
-                        auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                        resp->setStatusCode(drogon::k502BadGateway);
-                        callback(resp);
+                        callback(errorResponse(drogon::k502BadGateway,
+                            "sso_error", "No access_token in IdP response"));
                         return;
                     }
 
@@ -270,12 +239,8 @@ void SsoController::callback(
                         [this, callback, req, orgId]
                         (drogon::ReqResult result2, const drogon::HttpResponsePtr& uiResp) {
                             if (result2 != drogon::ReqResult::Ok) {
-                                Json::Value body;
-                                body["error"]   = "sso_error";
-                                body["message"] = "Failed to contact IdP userinfo endpoint";
-                                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                                resp->setStatusCode(drogon::k502BadGateway);
-                                callback(resp);
+                                callback(errorResponse(drogon::k502BadGateway,
+                                    "sso_error", "Failed to contact IdP userinfo endpoint"));
                                 return;
                             }
 
@@ -289,12 +254,8 @@ void SsoController::callback(
                                 uiData.get("name", email).asString()).asString();
 
                             if (externalId.empty()) {
-                                Json::Value body;
-                                body["error"]   = "sso_error";
-                                body["message"] = "IdP did not return a subject claim";
-                                auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                                resp->setStatusCode(drogon::k502BadGateway);
-                                callback(resp);
+                                callback(errorResponse(drogon::k502BadGateway,
+                                    "sso_error", "IdP did not return a subject claim"));
                                 return;
                             }
 
@@ -336,34 +297,22 @@ void SsoController::callback(
                                             callback(resp);
                                         },
                                         [callback](const drogon::orm::DrogonDbException&) {
-                                            Json::Value body;
-                                            body["error"]   = "db_error";
-                                            body["message"] = "Failed to load tenant info";
-                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                                            resp->setStatusCode(drogon::k500InternalServerError);
-                                            callback(resp);
+                                            callback(errorResponse(drogon::k500InternalServerError,
+                                                "db_error", "Failed to load tenant info"));
                                         },
                                         userId, orgId);
                                 },
                                 [callback](const drogon::orm::DrogonDbException&) {
-                                    Json::Value body;
-                                    body["error"]   = "db_error";
-                                    body["message"] = "Failed to upsert SSO user";
-                                    auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-                                    resp->setStatusCode(drogon::k500InternalServerError);
-                                    callback(resp);
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to upsert SSO user"));
                                 },
                                 username, email, orgId, externalId);
                         });
                 });
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            Json::Value body;
-            body["error"]   = "db_error";
-            body["message"] = "Failed to load SSO provider config";
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(body);
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to load SSO provider config"));
         },
         orgId);
 }
