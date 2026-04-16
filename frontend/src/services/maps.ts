@@ -3,8 +3,10 @@ import { useAuthStore } from '@/store/authStore';
 import type {
   MapRecord,
   CreateMapRequest,
+  UpdateMapRequest,
   Annotation,
   CreateAnnotationRequest,
+  UpdateAnnotationRequest,
   AnnotationMedia,
   MapPermission,
   SetPermissionRequest,
@@ -17,6 +19,7 @@ import type {
   UpdateNoteRequest,
   NoteGroup,
   CreateNoteGroupRequest,
+  UpdateNoteGroupRequest,
 } from '@/types';
 
 // Helper: resolve tenantId from store if not explicitly provided
@@ -84,7 +87,7 @@ export const mapsService = {
     return res.data;
   },
 
-  async updateMap(mapId: number, data: Partial<CreateMapRequest>, tenantId?: number): Promise<MapRecord> {
+  async updateMap(mapId: number, data: UpdateMapRequest, tenantId?: number): Promise<MapRecord> {
     const res = await apiClient.put<MapRecord>(`${tenantBase(tenantId)}/maps/${mapId}`, data);
     return res.data;
   },
@@ -120,7 +123,7 @@ export const annotationsService = {
   async updateAnnotation(
     mapId: number,
     annotationId: number,
-    data: Partial<CreateAnnotationRequest>,
+    data: UpdateAnnotationRequest,
     tenantId?: number
   ): Promise<Annotation> {
     const res = await apiClient.put<Annotation>(
@@ -232,7 +235,7 @@ export const noteGroupsService = {
 
   async updateGroup(
     mapId: number, groupId: number,
-    data: Partial<CreateNoteGroupRequest>, tenantId?: number
+    data: UpdateNoteGroupRequest, tenantId?: number
   ): Promise<void> {
     await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/note-groups/${groupId}`, data);
   },

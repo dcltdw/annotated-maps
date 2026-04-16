@@ -104,6 +104,14 @@ export interface CreateMapRequest {
   zoom: number;
 }
 
+export interface UpdateMapRequest {
+  title?: string;
+  description?: string;
+  centerLat?: number;
+  centerLng?: number;
+  zoom?: number;
+}
+
 // ─── Annotations ─────────────────────────────────────────────────────────────
 
 export type AnnotationType = 'marker' | 'polyline' | 'polygon';
@@ -142,6 +150,12 @@ export interface CreateAnnotationRequest {
   title: string;
   description?: string;
   geoJson: GeoJsonGeometry;
+}
+
+export interface UpdateAnnotationRequest {
+  title?: string;
+  description?: string;
+  geoJson?: GeoJsonGeometry;
 }
 
 // ─── Permissions ─────────────────────────────────────────────────────────────
@@ -219,6 +233,13 @@ export interface NoteGroup {
 
 export interface CreateNoteGroupRequest {
   name: string;
+  description?: string;
+  color?: string;
+  sortOrder?: number;
+}
+
+export interface UpdateNoteGroupRequest {
+  name?: string;
   description?: string;
   color?: string;
   sortOrder?: number;

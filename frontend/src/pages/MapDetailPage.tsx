@@ -5,6 +5,7 @@ import { NotesPanel } from '@/components/Notes/NotesPanel';
 import { useMap } from '@/hooks/useMap';
 import { useAuthStore } from '@/store/authStore';
 import { notesService, noteGroupsService } from '@/services/maps';
+import { extractApiError } from '@/utils/errors';
 import type { Note, NoteGroup } from '@/types';
 
 export function MapDetailPage() {
@@ -45,8 +46,8 @@ export function MapDetailPage() {
       ]);
       setGroups(g);
       setNotes(n);
-    } catch {
-      setNotesError('Failed to load notes and groups.');
+    } catch (err) {
+      setNotesError(extractApiError(err, 'Failed to load notes and groups.'));
     }
   }, [mapId, storedTenantId]);
 

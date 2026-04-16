@@ -101,8 +101,6 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
 
       if (!layer) return;
 
-      (layer as unknown as Record<string, unknown>)._annotationId = annotation.id;
-
       const popup = createPopupContent(annotation, canEdit && annotation.canEdit);
       layer.bindPopup(popup);
 

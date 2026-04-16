@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMap } from '@/hooks/useMap';
+import { extractApiError } from '@/utils/errors';
 import type { CreateMapRequest } from '@/types';
 
 export function MapListPage() {
@@ -34,8 +35,8 @@ export function MapListPage() {
       setTitle('');
       setDescription('');
       window.location.href = `/tenants/${tenantId}/maps/${map.id}`;
-    } catch {
-      setCreateError('Failed to create map.');
+    } catch (err) {
+      setCreateError(extractApiError(err, 'Failed to create map.'));
     } finally {
       setCreating(false);
     }
