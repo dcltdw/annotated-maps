@@ -1,3 +1,7 @@
+// All components catching API errors should import from this file.
+// Do not reach into AxiosError.response.data directly in component code.
+// See docs/DEVELOPER-GUIDE.md.
+
 import { AxiosError } from 'axios';
 import type { ApiError } from '@/types';
 
