@@ -6,7 +6,7 @@ Tests for the notes feature: database schema validation and backend API integrat
 
 - Docker Compose stack running (`docker compose up`)
 - Backend rebuilt with NoteController (`docker compose build --no-cache backend`)
-- Database includes migration 004 (`docker compose down -v && docker compose up` to re-initialize)
+- Database is initialized from the consolidated schema in `database/migrations/001_schema.sql` (`docker compose down -v && docker compose up` to re-initialize)
 
 ## Running all notes tests
 
@@ -74,8 +74,8 @@ python3 backend/tests/run-notes-tests.py
 **"Backend is not reachable"**
 Run `docker compose up` and wait for `starting on port 8080` in the logs.
 
-**Database test fails on migration 004**
-The `notes` table migration requires the `maps` and `users` tables from migration 001. Ensure all migrations run in order.
+**Database test fails on schema setup**
+The `notes` table has FK dependencies on `maps`, `users`, and `note_groups`. All are declared in the consolidated `001_schema.sql`; if tests fail on setup, check that MySQL is fully initialized (`docker compose exec mysql mysqladmin ping ...`).
 
 **Backend test returns 404 on notes endpoints**
 The backend binary doesn't include `NoteController`. Rebuild: `docker compose build --no-cache backend && docker compose up -d`.

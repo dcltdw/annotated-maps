@@ -136,8 +136,8 @@ CALL assert_true('map_permissions rejects duplicate (map_id, user_id)', @before 
 DROP PROCEDURE IF EXISTS test_dup_map_perm_user;
 
 -- map_permissions: duplicate (map_id, NULL user_id) is rejected
--- Migration 010 adds a generated column (COALESCE(user_id, 0)) with a unique
--- key, so the database now enforces one public permission row per map.
+-- Enforced by BEFORE INSERT/UPDATE triggers on map_permissions (see
+-- 001_schema.sql), since MySQL's UNIQUE treats each NULL as distinct.
 INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, NULL, 'view');
 SELECT COUNT(*) INTO @before FROM map_permissions WHERE map_id = 1 AND user_id IS NULL;
 CALL test_dup_map_permission();
