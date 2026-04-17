@@ -48,6 +48,28 @@ All auditable events use `AuditLog::record(...)` and are fire-and-forget
 (no callback chain). See [`backend/src/AuditLog.h`](../backend/src/AuditLog.h)
 for the signature.
 
+## CI / Docker
+
+### `docker-compose.ci.yml`
+
+The [`docker-compose.ci.yml`](../docker-compose.ci.yml) override is used by
+the PR and nightly workflows. It maps pre-built image tags
+(`annotated-maps-backend:latest`, `annotated-maps-frontend:latest`) onto the
+backend and frontend services so that `docker compose up` uses images the
+workflow just built via `docker/build-push-action` (with GHA cache) instead
+of rebuilding from scratch. Local development uses `docker-compose.yml`
+alone — the override is CI-only.
+
+### Soak test duration vs. runner timeout
+
+`backend/tests/test_10_soak.py` has `DURATION = 300` (5 minutes of
+continuous load). The test runner in `run-tests.py` gives each test a
+900-second subprocess timeout. These are set independently: 300s is the
+minimum window to catch rate-limiter over-admission under sustained load,
+and 900s gives headroom for stack-up and teardown without masking real
+soak failures. Don't change one without considering the other — see #21
+for the history.
+
 ## Frontend (React / TypeScript)
 
 ### Handling API errors in components
@@ -99,5 +121,24 @@ for the pattern: `NotesPanel.tsx` coordinates, while `NoteCard.tsx`,
 - Errors must be displayed to the user (inline banner, toast, etc.).
 - Don't use `alert()` — use the component's error state instead.
 - Don't `catch` and only `console.error()` — that's a silent failure.
-  For Leaflet popup handlers where React state isn't available, use the
-  `showMapError()` helper in [`AnnotationLayer.tsx`](../frontend/src/components/Map/AnnotationLayer.tsx).
+
+This is a convention, not a lint rule, so review PRs for it.
+
+### Errors from Leaflet popup handlers
+
+Leaflet popup button handlers run outside React, so you can't call
+`setState` from them. Use the `showMapError(map, message)` helper in
+[`AnnotationLayer.tsx`](../frontend/src/components/Map/AnnotationLayer.tsx):
+
+```ts
+try {
+  await annotationsService.updateAnnotation(...);
+} catch {
+  showMapError(leafletMap, 'Failed to update annotation.');
+}
+```
+
+It appends a `.map-error-banner` div to the map container and auto-removes
+it after 5 seconds. The CSS lives in [`frontend/src/index.css`](../frontend/src/index.css).
+Only use this pattern for Leaflet event handlers — React components
+should use component-local error state with inline banner display.
