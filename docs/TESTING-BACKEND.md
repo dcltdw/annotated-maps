@@ -109,10 +109,17 @@ pre-built image tags to the services so `docker compose up` skips rebuilding.
 If either lint or compile fails, the test job is skipped entirely, giving
 faster feedback than waiting for the full stack build.
 
-After tests run, the test job posts a summary comment on the PR with
-pass/fail counts per suite (database, backend), a table of totals, and
-a link to full logs. On failure, the specific `FAIL:` lines are included.
-The comment is updated in place on re-runs to avoid clutter.
+After tests run, the test job posts a summary comment on the PR only
+when at least one suite failed. The comment shows pass/fail counts per
+suite (database, backend), a table of totals, the specific `FAIL:`
+lines, and a link to full logs.
+
+On re-runs, the comment is updated in place (comment edits don't
+trigger email notifications, so the PR author isn't re-notified once
+they've seen the initial failure). A successful re-run after a prior
+failure still updates the existing comment to ✅ so the PR doesn't
+carry a stale failure indicator. Successful first runs post nothing —
+that's why you no longer get an email for every green build.
 
 To enable merge blocking, configure branch protection on `main`:
 1. Go to Settings → Branches → Add rule for `main`

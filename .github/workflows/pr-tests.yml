@@ -250,6 +250,10 @@ jobs:
               c.body?.startsWith(marker) || c.body?.startsWith(markerFail)
             );
 
+            // On success with no existing comment: skip posting so the PR
+            // author doesn't get a PR-comment email for every green run.
+            // On failure OR when updating an existing comment (edits don't
+            // trigger email notifications), post/update as usual.
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
@@ -257,7 +261,7 @@ jobs:
                 comment_id: existing.id,
                 body,
               });
-            } else {
+            } else if (total.failed > 0) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
