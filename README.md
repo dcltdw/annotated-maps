@@ -36,7 +36,7 @@ annotated-maps/
 │   ├── Dockerfile
 │   └── config.json
 ├── database/
-│   ├── migrations/        001–007 SQL migration scripts
+│   ├── migrations/        001 (schema) + 002 (audit log) SQL
 │   ├── tests/             Database schema tests (SQL + Python runner)
 │   ├── run_migrations.py
 │   └── seed-local-dev.py
