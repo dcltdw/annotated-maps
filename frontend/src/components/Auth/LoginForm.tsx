@@ -1,8 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AxiosError } from 'axios';
 import { useAuth } from '@/hooks/useAuth';
-import type { ApiError } from '@/types';
+import { extractApiError } from '@/utils/errors';
 
 export function LoginForm() {
   const { login } = useAuth();
@@ -20,12 +19,7 @@ export function LoginForm() {
       const ok = await login({ email, password });
       if (ok) navigate('/maps');
     } catch (err) {
-      if (err instanceof AxiosError) {
-        const data = (err as AxiosError<ApiError>).response?.data;
-        setError(data?.message ?? data?.error ?? 'Login failed');
-      } else {
-        setError('Login failed');
-      }
+      setError(extractApiError(err, 'Login failed'));
     } finally {
       setLoading(false);
     }

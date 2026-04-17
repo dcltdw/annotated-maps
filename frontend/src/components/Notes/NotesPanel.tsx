@@ -1,7 +1,13 @@
 import { useState } from 'react';
 import { notesService, noteGroupsService } from '@/services/maps';
-import type { Note, NoteGroup, CreateNoteRequest, CreateNoteGroupRequest } from '@/types';
+import { extractApiError } from '@/utils/errors';
+import type {
+  Note, NoteGroup, CreateNoteRequest, CreateNoteGroupRequest, UpdateNoteRequest,
+} from '@/types';
 import { useAuthStore } from '@/store/authStore';
+import { NoteCard, type NoteEdits } from './NoteCard';
+import { NoteForm } from './NoteForm';
+import { GroupForm } from './GroupForm';
 
 interface NotesPanelProps {
   mapId: number;
@@ -24,30 +30,14 @@ export function NotesPanel({
   const [actionError, setActionError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Note creation
   const [showCreate, setShowCreate] = useState(false);
-  const [newTitle, setNewTitle] = useState('');
-  const [newText, setNewText] = useState('');
-  const [newGroupId, setNewGroupId] = useState<number | undefined>(undefined);
-  const [newColor, setNewColor] = useState('');
-  const [newLat, setNewLat] = useState<number | null>(null);
-  const [newLng, setNewLng] = useState<number | null>(null);
-
-  // Group management
   const [showGroupForm, setShowGroupForm] = useState(false);
   const [editingGroup, setEditingGroup] = useState<NoteGroup | null>(null);
-  const [groupName, setGroupName] = useState('');
-  const [groupColor, setGroupColor] = useState('');
-  const [groupDesc, setGroupDesc] = useState('');
 
-  // Edit note
-  const [editingNote, setEditingNote] = useState<Note | null>(null);
-  const [editTitle, setEditTitle] = useState('');
-  const [editText, setEditText] = useState('');
-  const [editColor, setEditColor] = useState('');
-  const [editGroupId, setEditGroupId] = useState<number | null>(null);
+  // For "Place on map" — populated by parent's map click callback
+  const [pendingLat, setPendingLat] = useState<number | null>(null);
+  const [pendingLng, setPendingLng] = useState<number | null>(null);
 
-  // Filter notes by active group tab
   const filteredNotes = activeGroupId === null
     ? notes
     : notes.filter((n) => n.groupId === activeGroupId);
@@ -59,44 +49,26 @@ export function NotesPanel({
   const handlePlaceOnMap = () => {
     if (!onRequestMapClick) return;
     onRequestMapClick((lat, lng) => {
-      setNewLat(lat);
-      setNewLng(lng);
+      setPendingLat(lat);
+      setPendingLng(lng);
     });
   };
 
-  const handleCreateNote = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newText.trim()) return;
-
-    if (newLat === null || newLng === null) {
-      if (onRequestMapClick) {
-        setActionError('Please click "Place on map" to set the note location first.');
-        return;
-      }
+  const handleCreateNote = async (data: CreateNoteRequest) => {
+    if (data.lat === 0 && data.lng === 0 && onRequestMapClick) {
+      setActionError('Please click "Place on map" to set the note location first.');
+      return;
     }
-
-    const data: CreateNoteRequest = {
-      lat: newLat ?? 0,
-      lng: newLng ?? 0,
-      text: newText,
-      title: newTitle || undefined,
-      color: newColor || undefined,
-      groupId: newGroupId,
-    };
     clearError();
     setSaving(true);
     try {
       await notesService.createNote(mapId, data, tenantId);
-      setNewTitle('');
-      setNewText('');
-      setNewColor('');
-      setNewGroupId(undefined);
-      setNewLat(null);
-      setNewLng(null);
       setShowCreate(false);
+      setPendingLat(null);
+      setPendingLng(null);
       setTimeout(() => onNotesChanged(activeGroupId ?? undefined), 100);
-    } catch {
-      setActionError('Failed to create note.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to create note.'));
     } finally {
       setSaving(false);
     }
@@ -108,38 +80,28 @@ export function NotesPanel({
     try {
       await notesService.deleteNote(mapId, noteId, tenantId);
       onNotesChanged(activeGroupId ?? undefined);
-    } catch {
-      setActionError('Failed to delete note.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to delete note.'));
     }
   };
 
-  const handleStartEdit = (note: Note) => {
-    clearError();
-    setEditingNote(note);
-    setEditTitle(note.title || '');
-    setEditText(note.text);
-    setEditColor(note.color || '');
-    setEditGroupId(note.groupId);
-  };
-
-  const handleSaveEdit = async () => {
-    if (!editingNote) return;
+  const handleEditNote = async (note: Note, edits: NoteEdits) => {
     clearError();
     setSaving(true);
     try {
-      const updateData: Record<string, unknown> = {
-        title: editTitle,
-        text: editText,
-        color: editColor || undefined,
+      const updateData: UpdateNoteRequest = {
+        title: edits.title,
+        text: edits.text,
+        color: edits.color || undefined,
       };
-      if (editGroupId !== editingNote.groupId) {
-        updateData.groupId = editGroupId;
+      if (edits.groupId !== note.groupId) {
+        updateData.groupId = edits.groupId;
       }
-      await notesService.updateNote(mapId, editingNote.id, updateData , tenantId);
-      setEditingNote(null);
+      await notesService.updateNote(mapId, note.id, updateData, tenantId);
       onNotesChanged(activeGroupId ?? undefined);
-    } catch {
-      setActionError('Failed to update note.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to update note.'));
+      throw err; // so NoteCard keeps the edit form open
     } finally {
       setSaving(false);
     }
@@ -150,10 +112,10 @@ export function NotesPanel({
     clearError();
     onRequestMapClick(async (lat, lng) => {
       try {
-        await notesService.updateNote(mapId, note.id, { lat, lng } , tenantId);
+        await notesService.updateNote(mapId, note.id, { lat, lng }, tenantId);
         onNotesChanged(activeGroupId ?? undefined);
-      } catch {
-        setActionError('Failed to move note.');
+      } catch (err) {
+        setActionError(extractApiError(err, 'Failed to move note.'));
       }
     });
   };
@@ -162,30 +124,11 @@ export function NotesPanel({
 
   const handleOpenGroupForm = (group?: NoteGroup) => {
     clearError();
-    if (group) {
-      setEditingGroup(group);
-      setGroupName(group.name);
-      setGroupColor(group.color || '');
-      setGroupDesc(group.description || '');
-    } else {
-      setEditingGroup(null);
-      setGroupName('');
-      setGroupColor('');
-      setGroupDesc('');
-    }
+    setEditingGroup(group ?? null);
     setShowGroupForm(true);
   };
 
-  const handleSaveGroup = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!groupName.trim()) return;
-
-    const data: CreateNoteGroupRequest = {
-      name: groupName,
-      color: groupColor || undefined,
-      description: groupDesc || undefined,
-    };
-
+  const handleSaveGroup = async (data: CreateNoteGroupRequest) => {
     clearError();
     setSaving(true);
     try {
@@ -196,8 +139,8 @@ export function NotesPanel({
       }
       setShowGroupForm(false);
       onNotesChanged(activeGroupId ?? undefined);
-    } catch {
-      setActionError('Failed to save group.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to save group.'));
     } finally {
       setSaving(false);
     }
@@ -210,8 +153,8 @@ export function NotesPanel({
       await noteGroupsService.deleteGroup(mapId, groupId, tenantId);
       if (activeGroupId === groupId) setActiveGroupId(null);
       onNotesChanged();
-    } catch {
-      setActionError('Failed to delete group.');
+    } catch (err) {
+      setActionError(extractApiError(err, 'Failed to delete group.'));
     }
   };
 
@@ -231,8 +174,8 @@ export function NotesPanel({
             <button className="btn btn-sm btn-primary" onClick={() => {
               clearError();
               setShowCreate(true);
-              setNewLat(null);
-              setNewLng(null);
+              setPendingLat(null);
+              setPendingLng(null);
             }}>
               + Note
             </button>
@@ -279,150 +222,42 @@ export function NotesPanel({
         ))}
       </div>
 
-      {/* Note creation form */}
       {showCreate && (
-        <form className="notes-form" onSubmit={handleCreateNote}>
-          <input
-            placeholder="Title (optional)"
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-          />
-          <textarea
-            placeholder="Note text (required)"
-            value={newText}
-            onChange={(e) => setNewText(e.target.value)}
-            required
-            rows={3}
-          />
-          {groups.length > 0 && (
-            <select
-              value={newGroupId ?? ''}
-              onChange={(e) => setNewGroupId(e.target.value ? Number(e.target.value) : undefined)}
-            >
-              <option value="">No group</option>
-              {groups.map((g) => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
-            </select>
-          )}
-          <input
-            placeholder="Pin color (e.g. #ff0000, optional)"
-            value={newColor}
-            onChange={(e) => setNewColor(e.target.value)}
-          />
-          <div className="notes-location">
-            {newLat !== null && newLng !== null ? (
-              <span className="notes-location-set">
-                📍 {newLat.toFixed(4)}, {newLng.toFixed(4)}
-                <button type="button" className="btn-icon" onClick={() => { setNewLat(null); setNewLng(null); }}>×</button>
-              </span>
-            ) : (
-              <button type="button" className="btn btn-sm btn-ghost" onClick={handlePlaceOnMap}>
-                📍 Place on map
-              </button>
-            )}
-          </div>
-          <div className="notes-form-actions">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowCreate(false)} disabled={saving}>Cancel</button>
-            <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          </div>
-        </form>
+        <NoteForm
+          groups={groups}
+          saving={saving}
+          onCancel={() => setShowCreate(false)}
+          onSubmit={handleCreateNote}
+          onPlaceOnMap={onRequestMapClick ? handlePlaceOnMap : undefined}
+          initialLat={pendingLat}
+          initialLng={pendingLng}
+        />
       )}
 
-      {/* Group form */}
       {showGroupForm && (
-        <form className="notes-form" onSubmit={handleSaveGroup}>
-          <input
-            placeholder="Group name"
-            value={groupName}
-            onChange={(e) => setGroupName(e.target.value)}
-            required
-          />
-          <input
-            placeholder="Color (e.g. #dc2626)"
-            value={groupColor}
-            onChange={(e) => setGroupColor(e.target.value)}
-          />
-          <input
-            placeholder="Description (optional)"
-            value={groupDesc}
-            onChange={(e) => setGroupDesc(e.target.value)}
-          />
-          <div className="notes-form-actions">
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setShowGroupForm(false)} disabled={saving}>Cancel</button>
-            <button type="submit" className="btn btn-sm btn-primary" disabled={saving}>
-              {saving ? 'Saving…' : (editingGroup ? 'Update' : 'Create') + ' Group'}
-            </button>
-          </div>
-        </form>
+        <GroupForm
+          editingGroup={editingGroup}
+          saving={saving}
+          onCancel={() => setShowGroupForm(false)}
+          onSubmit={handleSaveGroup}
+        />
       )}
 
-      {/* Note list */}
       <div className="notes-list">
         {filteredNotes.length === 0 ? (
           <p className="notes-empty">No notes yet.</p>
         ) : (
           filteredNotes.map((note) => (
-            <div
+            <NoteCard
               key={note.id}
-              className={`note-card ${note.pinned ? 'pinned' : ''}`}
-              onClick={() => onNoteClick?.(note)}
-            >
-              {editingNote?.id === note.id ? (
-                <div className="note-edit-form" onClick={(e) => e.stopPropagation()}>
-                  <input
-                    value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    placeholder="Title"
-                  />
-                  <textarea
-                    value={editText}
-                    onChange={(e) => setEditText(e.target.value)}
-                    rows={3}
-                  />
-                  <input
-                    value={editColor}
-                    onChange={(e) => setEditColor(e.target.value)}
-                    placeholder="Pin color (e.g. #ff0000)"
-                  />
-                  {groups.length > 0 && (
-                    <select
-                      value={editGroupId ?? ''}
-                      onChange={(e) => setEditGroupId(e.target.value ? Number(e.target.value) : null)}
-                    >
-                      <option value="">No group</option>
-                      {groups.map((g) => (
-                        <option key={g.id} value={g.id}>{g.name}</option>
-                      ))}
-                    </select>
-                  )}
-                  <div className="notes-form-actions">
-                    <button className="btn btn-sm btn-ghost" onClick={() => setEditingNote(null)} disabled={saving}>Cancel</button>
-                    <button className="btn btn-sm btn-primary" onClick={handleSaveEdit} disabled={saving}>
-                      {saving ? 'Saving…' : 'Save'}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  {note.pinned && <span className="note-pin-badge">📌</span>}
-                  {note.title && <h4 className="note-title">{note.title}</h4>}
-                  <p className="note-text">{note.text}</p>
-                  <div className="note-meta">
-                    <small>By {note.createdByUsername || 'unknown'}</small>
-                    {note.canEdit && (
-                      <span className="note-actions">
-                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleStartEdit(note); }} title="Edit">✎</button>
-                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleMoveNote(note); }} title="Move">⤢</button>
-                        <button className="btn-icon" onClick={(e) => { e.stopPropagation(); handleDeleteNote(note.id); }} title="Delete">×</button>
-                      </span>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+              note={note}
+              groups={groups}
+              saving={saving}
+              onClick={onNoteClick}
+              onEdit={handleEditNote}
+              onMove={handleMoveNote}
+              onDelete={handleDeleteNote}
+            />
           ))
         )}
       </div>

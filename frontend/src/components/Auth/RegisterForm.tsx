@@ -1,8 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { AxiosError } from 'axios';
 import { useAuth } from '@/hooks/useAuth';
-import type { ApiError } from '@/types';
+import { extractApiError, getApiErrorCode } from '@/utils/errors';
 
 export function RegisterForm() {
   const { register } = useAuth();
@@ -26,17 +25,13 @@ export function RegisterForm() {
       const ok = await register({ username, email, password });
       if (ok) navigate('/maps');
     } catch (err) {
-      if (err instanceof AxiosError) {
-        const code = (err as AxiosError<ApiError>).response?.data?.error;
-        if (code === 'email_taken') {
-          setError('Error: this email address is already registered.');
-        } else if (code === 'username_taken') {
-          setError('Error: this username is already taken.');
-        } else {
-          setError('Registration failed');
-        }
+      const code = getApiErrorCode(err);
+      if (code === 'email_taken') {
+        setError('Error: this email address is already registered.');
+      } else if (code === 'username_taken') {
+        setError('Error: this username is already taken.');
       } else {
-        setError('Registration failed');
+        setError(extractApiError(err, 'Registration failed'));
       }
     } finally {
       setLoading(false);
