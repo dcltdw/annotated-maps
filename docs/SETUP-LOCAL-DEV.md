@@ -169,7 +169,29 @@ docker compose exec mysql mysql -uroot -prootpassword annotated_maps \
 
 ---
 
-## 5. Day-to-day development
+## 5. Running frontend checks locally
+
+Before opening a PR, run the same checks CI runs so you don't eat a slow
+round-trip. These run in the local npm install, not in Docker:
+
+```bash
+cd frontend
+
+# TypeScript type check (no output on success)
+npx tsc --noEmit
+
+# ESLint (fails on any warning — max-warnings 0)
+npm run lint
+
+# npm audit (PR CI fails only on critical; lower severities are noted in #31)
+npm audit --audit-level=critical
+```
+
+The ESLint config lives at [`frontend/.eslintrc.cjs`](../frontend/.eslintrc.cjs).
+If you need to disable a rule on a specific line, use
+`// eslint-disable-next-line <rule-name>` with a comment explaining why.
+
+## 6. Day-to-day development
 
 ```bash
 # Rebuild after code changes
@@ -192,7 +214,7 @@ docker compose exec mysql mysql -uroot -prootpassword annotated_maps
 
 ---
 
-## 6. Resource usage
+## 7. Resource usage
 
 | Resource | Approximate usage |
 |---|---|

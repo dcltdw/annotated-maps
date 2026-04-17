@@ -1,5 +1,9 @@
 #pragma once
 
+// All controllers should include this header and use errorJson() /
+// errorResponse() instead of defining their own local helpers or
+// constructing error JSON inline. See docs/DEVELOPER-GUIDE.md.
+
 #include <drogon/HttpResponse.h>
 #include <json/json.h>
 #include <string>
