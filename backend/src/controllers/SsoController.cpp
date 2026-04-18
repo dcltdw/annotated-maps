@@ -12,7 +12,13 @@
 
 std::string SsoController::generateRandom(int bytes) {
     std::vector<unsigned char> buf(bytes);
-    RAND_bytes(buf.data(), bytes);
+    // RAND_bytes returns 1 on success, 0 if not seeded, -1 if unsupported.
+    // Without this check, a failed RNG leaves `buf` zero-initialized and
+    // produces a predictable state/nonce, defeating SSO CSRF and replay
+    // defenses.
+    if (RAND_bytes(buf.data(), bytes) != 1) {
+        throw std::runtime_error("RAND_bytes failed — cannot generate SSO random value");
+    }
     std::ostringstream oss;
     for (auto b : buf)
         oss << std::hex << std::setw(2) << std::setfill('0') << (int)b;
@@ -77,8 +83,15 @@ void SsoController::initiate(
             std::string clientId     = ssoConfig["client_id"].asString();
             std::string redirectUri  = ssoConfig["redirect_uri"].asString();
 
-            std::string state = generateRandom(16);
-            std::string nonce = generateRandom(16);
+            std::string state, nonce;
+            try {
+                state = generateRandom(16);
+                nonce = generateRandom(16);
+            } catch (const std::exception&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "server_error", "SSO is not available"));
+                return;
+            }
 
             {
                 std::lock_guard<std::mutex> lock(stateMutex_);

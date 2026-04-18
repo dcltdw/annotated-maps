@@ -142,3 +142,52 @@ It appends a `.map-error-banner` div to the map container and auto-removes
 it after 5 seconds. The CSS lives in [`frontend/src/index.css`](../frontend/src/index.css).
 Only use this pattern for Leaflet event handlers — React components
 should use component-local error state with inline banner display.
+
+### Building Leaflet popup content — DOM nodes, not HTML strings
+
+**Never pass an HTML string built from user-controlled fields to
+`layer.bindPopup(...)`.** Leaflet renders strings as HTML, so
+`title: '<img src=x onerror=...>'` in an annotation executes for every
+viewer.
+
+Build popup content as DOM nodes using `document.createElement` and
+`textContent`, then pass the element to `bindPopup`. `textContent` is
+parsed as literal text, not HTML, so injection is impossible:
+
+```ts
+const popupEl = document.createElement('div');
+popupEl.className = 'annotation-popup';
+
+const h3 = document.createElement('h3');
+h3.textContent = annotation.title;  // ✓ safe even if title contains HTML
+popupEl.appendChild(h3);
+
+layer.bindPopup(popupEl);
+```
+
+For links and images, also validate the URL scheme (defense in depth
+against backend validation gaps):
+
+```ts
+function isSafeMediaUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+```
+
+See [`AnnotationLayer.tsx`](../frontend/src/components/Map/AnnotationLayer.tsx)
+and [`NoteMarkers.tsx`](../frontend/src/components/Map/NoteMarkers.tsx)
+for the pattern in context.
+
+### JWT secret placeholder is fatal at startup
+
+The backend refuses to start when `config.json` contains a
+`CHANGE_ME...` JWT secret and `JWT_SECRET` is not set in the
+environment. Local dev and CI override this by setting
+`ALLOW_PLACEHOLDER_SECRETS=1` in `docker-compose.yml` — this env var
+**must never** be set in production compose/env files. Production
+deployment must supply a real `JWT_SECRET` (min 32 chars).

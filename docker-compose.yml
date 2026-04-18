@@ -49,6 +49,11 @@ services:
         condition: service_healthy
     environment:
       - TZ=UTC
+      # Local dev uses the CHANGE_ME placeholder from config.docker.json.
+      # The backend refuses to start with a placeholder secret unless this
+      # env var is set. Production deployments MUST NOT set this — they
+      # must supply a real JWT_SECRET instead.
+      - ALLOW_PLACEHOLDER_SECRETS=1
 
   # ── React Frontend (Vite dev server) ────────────────────────────────────────
   frontend:

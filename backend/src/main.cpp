@@ -19,21 +19,36 @@ int main(int argc, char* argv[]) {
     drogon::app().loadConfigFile(configPath);
 
     // ── C2 fix: Override JWT secret from environment variable if set ─────────
-    const char* envSecret = std::getenv("JWT_SECRET");
+    // Refuse to start with a placeholder JWT secret. A silent startup with a
+    // known-bad secret allows token forgery against any account. Set
+    // ALLOW_PLACEHOLDER_SECRETS=1 if you're deliberately running a dev build
+    // with the placeholder for local experimentation.
+    const char* envSecret  = std::getenv("JWT_SECRET");
+    const char* allowPlace = std::getenv("ALLOW_PLACEHOLDER_SECRETS");
+    const bool allowPlaceholder = allowPlace && std::string(allowPlace) == "1";
+
     if (envSecret && std::string(envSecret).size() >= 32) {
         auto& cfg = const_cast<Json::Value&>(drogon::app().getCustomConfig());
         cfg["jwt"]["secret"] = std::string(envSecret);
-    } else if (!envSecret) {
-        // Warn if using the config file default (which may be a placeholder)
+    } else {
+        if (envSecret) {
+            // Env var is set but too short — don't silently fall back to config.
+            std::cerr << "FATAL: JWT_SECRET is set but shorter than 32 characters.\n";
+            return 1;
+        }
         const auto& secret = drogon::app().getCustomConfig()["jwt"]["secret"].asString();
         if (secret.find("CHANGE_ME") != std::string::npos) {
-            std::cerr << "WARNING: JWT secret is a placeholder. "
-                      << "Set JWT_SECRET environment variable (min 32 chars) "
-                      << "before production use.\n";
+            if (allowPlaceholder) {
+                std::cerr << "WARNING: JWT secret is a placeholder. "
+                          << "Running anyway because ALLOW_PLACEHOLDER_SECRETS=1. "
+                          << "DO NOT use this in production.\n";
+            } else {
+                std::cerr << "FATAL: JWT secret is a placeholder. "
+                          << "Set JWT_SECRET environment variable (min 32 chars), "
+                          << "or set ALLOW_PLACEHOLDER_SECRETS=1 for a local dev run.\n";
+                return 1;
+            }
         }
-    } else {
-        std::cerr << "WARNING: JWT_SECRET is set but shorter than 32 characters. "
-                  << "Using config file value.\n";
     }
 
     // ── M5 fix: Validate frontend_url at startup ─────────────────────────────
