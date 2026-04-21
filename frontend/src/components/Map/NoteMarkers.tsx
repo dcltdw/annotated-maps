@@ -45,14 +45,23 @@ export function NoteMarkers({ notes, groups, onNoteClick }: NoteMarkersProps) {
         fillOpacity: 0.85,
       });
 
-      const popupContent = `
-        <div class="note-popup">
-          ${note.title ? `<h4>${note.title}</h4>` : ''}
-          <p>${note.text}</p>
-          <small>By ${note.createdByUsername || 'unknown'}</small>
-        </div>
-      `;
-      marker.bindPopup(popupContent);
+      // Build popup as DOM nodes (not HTML strings) so user-controlled
+      // fields (title, text, username) cannot inject script. Leaflet
+      // accepts HTMLElement for bindPopup.
+      const popupEl = document.createElement('div');
+      popupEl.className = 'note-popup';
+      if (note.title) {
+        const h4 = document.createElement('h4');
+        h4.textContent = note.title;
+        popupEl.appendChild(h4);
+      }
+      const pEl = document.createElement('p');
+      pEl.textContent = note.text;
+      popupEl.appendChild(pEl);
+      const smallEl = document.createElement('small');
+      smallEl.textContent = `By ${note.createdByUsername || 'unknown'}`;
+      popupEl.appendChild(smallEl);
+      marker.bindPopup(popupEl);
 
       marker.on('click', () => {
         onNoteClick?.(note);

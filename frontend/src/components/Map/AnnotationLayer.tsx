@@ -4,7 +4,7 @@ import L from 'leaflet';
 import { useMapStore } from '@/store/mapStore';
 import { useAuthStore } from '@/store/authStore';
 import { annotationsService } from '@/services/maps';
-import type { Annotation, GeoJsonGeometry } from '@/types';
+import type { GeoJsonGeometry } from '@/types';
 
 interface AnnotationLayerProps {
   mapId: number;
@@ -20,36 +20,17 @@ function showMapError(map: L.Map, message: string) {
   setTimeout(() => banner.remove(), 5000);
 }
 
-function createPopupContent(annotation: Annotation, canEdit: boolean): string {
-  const mediaHtml = annotation.media && annotation.media.length > 0
-    ? `<div class="annotation-media">
-        ${annotation.media
-          .map((m) =>
-            m.mediaType === 'image'
-              ? `<img src="${m.url}" alt="${m.caption || ''}" />`
-              : `<a href="${m.url}" target="_blank">${m.caption || m.url}</a>`
-          )
-          .join('')}
-      </div>`
-    : '';
-
-  const editButtons = canEdit
-    ? `<div class="annotation-actions">
-        <button class="btn-edit-annotation" data-id="${annotation.id}">Edit</button>
-        <button class="btn-move-annotation" data-id="${annotation.id}">Move</button>
-        <button class="btn-delete-annotation" data-id="${annotation.id}">Delete</button>
-      </div>`
-    : '';
-
-  return `
-    <div class="annotation-popup">
-      <h3>${annotation.title}</h3>
-      ${annotation.description ? `<p>${annotation.description}</p>` : ''}
-      ${mediaHtml}
-      <small>By ${annotation.createdByUsername || 'unknown'}</small>
-      ${editButtons}
-    </div>
-  `;
+// Defense-in-depth scheme check for media URLs.
+// The backend also validates this on submit; this guards against ever
+// rendering a stored javascript: or data: URL that slipped past server
+// validation.
+function isSafeMediaUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
@@ -101,18 +82,57 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
 
       if (!layer) return;
 
-      const popup = createPopupContent(annotation, canEdit && annotation.canEdit);
-      layer.bindPopup(popup);
+      // Build popup as DOM nodes (not HTML strings) so user-controlled
+      // fields cannot inject script. `textContent` is parsed as literal
+      // text, not HTML.
+      const popupEl = document.createElement('div');
+      popupEl.className = 'annotation-popup';
 
-      layer.on('click', () => setSelectedAnnotationId(annotation.id));
+      const h3 = document.createElement('h3');
+      h3.textContent = annotation.title;
+      popupEl.appendChild(h3);
 
-      layer.on('popupopen', () => {
-        const container = layer!.getPopup()?.getElement();
-        if (!container) return;
+      if (annotation.description) {
+        const p = document.createElement('p');
+        p.textContent = annotation.description;
+        popupEl.appendChild(p);
+      }
 
-        // ─── Edit button ─────────────────────────────────────────────
-        const editBtn = container.querySelector('.btn-edit-annotation');
-        editBtn?.addEventListener('click', async () => {
+      if (annotation.media && annotation.media.length > 0) {
+        const mediaDiv = document.createElement('div');
+        mediaDiv.className = 'annotation-media';
+        annotation.media.forEach((m) => {
+          if (!isSafeMediaUrl(m.url)) return;
+          if (m.mediaType === 'image') {
+            const img = document.createElement('img');
+            img.src = m.url;
+            img.alt = m.caption || '';
+            mediaDiv.appendChild(img);
+          } else {
+            const a = document.createElement('a');
+            a.href = m.url;
+            a.target = '_blank';
+            a.rel = 'noopener noreferrer';
+            a.textContent = m.caption || m.url;
+            mediaDiv.appendChild(a);
+          }
+        });
+        popupEl.appendChild(mediaDiv);
+      }
+
+      const smallEl = document.createElement('small');
+      smallEl.textContent = `By ${annotation.createdByUsername || 'unknown'}`;
+      popupEl.appendChild(smallEl);
+
+      const canActOnThis = canEdit && annotation.canEdit;
+      if (canActOnThis) {
+        const actionsDiv = document.createElement('div');
+        actionsDiv.className = 'annotation-actions';
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'btn-edit-annotation';
+        editBtn.textContent = 'Edit';
+        editBtn.addEventListener('click', async () => {
           const newTitle = window.prompt('New title:', annotation.title);
           if (newTitle === null) return;
           const newDesc = window.prompt('New description:', annotation.description || '');
@@ -133,17 +153,17 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
             showMapError(leafletMap, 'Failed to update annotation.');
           }
         });
+        actionsDiv.appendChild(editBtn);
 
-        // ─── Move button (markers only) ──────────────────────────────
-        const moveBtn = container.querySelector('.btn-move-annotation');
-        moveBtn?.addEventListener('click', () => {
+        const moveBtn = document.createElement('button');
+        moveBtn.className = 'btn-move-annotation';
+        moveBtn.textContent = 'Move';
+        moveBtn.addEventListener('click', () => {
           layer!.closePopup();
 
-          // Enter move mode: change cursor, listen for next map click
           const mapContainer = leafletMap.getContainer();
           mapContainer.style.cursor = 'crosshair';
 
-          // Show a toast/hint
           const hint = document.createElement('div');
           hint.className = 'move-hint';
           hint.textContent = 'Click the new location (Esc to cancel)';
@@ -169,7 +189,6 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
               newGeoJson = { type: 'Point', coordinates: [clickLng, clickLat] };
             } else if (oldGeo.type === 'LineString') {
               const coords = oldGeo.coordinates as number[][];
-              // Compute centroid
               const cLng = coords.reduce((s, c) => s + c[0], 0) / coords.length;
               const cLat = coords.reduce((s, c) => s + c[1], 0) / coords.length;
               const dLng = clickLng - cLng;
@@ -218,10 +237,12 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
 
           moveStateRef.current = { annotationId: annotation.id, cleanup: cancelMove };
         });
+        actionsDiv.appendChild(moveBtn);
 
-        // ─── Delete button ───────────────────────────────────────────
-        const deleteBtn = container.querySelector('.btn-delete-annotation');
-        deleteBtn?.addEventListener('click', async () => {
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'btn-delete-annotation';
+        deleteBtn.textContent = 'Delete';
+        deleteBtn.addEventListener('click', async () => {
           if (!window.confirm(`Delete "${annotation.title}"?`)) return;
 
           try {
@@ -233,7 +254,14 @@ export function AnnotationLayer({ mapId, canEdit }: AnnotationLayerProps) {
             showMapError(leafletMap, 'Failed to delete annotation.');
           }
         });
-      });
+        actionsDiv.appendChild(deleteBtn);
+
+        popupEl.appendChild(actionsDiv);
+      }
+
+      layer.bindPopup(popupEl);
+
+      layer.on('click', () => setSelectedAnnotationId(annotation.id));
 
       featureGroup.addLayer(layer);
       layerMapRef.current.set(annotation.id, layer);

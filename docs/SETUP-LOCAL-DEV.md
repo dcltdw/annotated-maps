@@ -245,3 +245,12 @@ database wipe.
 **Seed script shows "HTTP 429"**
 You hit the rate limiter by running the seed script too many times in a row.
 Wait 60 seconds or restart the backend (`docker compose restart backend`).
+
+**Backend logs `FATAL: JWT secret is a placeholder`**
+`docker-compose.yml` sets `ALLOW_PLACEHOLDER_SECRETS=1` in the backend
+service's environment specifically to allow local dev with the
+`CHANGE_ME...` placeholder in `config.docker.json`. If you removed that
+env var, either add it back or set a real `JWT_SECRET` (min 32 chars).
+**Do not set `ALLOW_PLACEHOLDER_SECRETS` in any production
+deployment** — it's a safety gate specifically to prevent silent
+placeholder deployments.

