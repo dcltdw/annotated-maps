@@ -254,3 +254,15 @@ env var, either add it back or set a real `JWT_SECRET` (min 32 chars).
 **Do not set `ALLOW_PLACEHOLDER_SECRETS` in any production
 deployment** — it's a safety gate specifically to prevent silent
 placeholder deployments.
+
+**SSO flow returns "SSO is not available" in callback**
+The backend reads SSO client secrets from the environment, not the
+database. Set `SSO_CLIENT_SECRET_<ORG_ID>=...` in a
+`docker-compose.override.yml` (gitignored) for your test IdP. See
+`docs/DEVELOPER-GUIDE.md` → "SSO client_secret storage".
+
+**Login/registration feels fast — is Argon2id OK?**
+By default the backend uses `ARGON2_OPSLIMIT_MIN` / `ARGON2_MEMLIMIT_MIN`
+(1 iteration, 8 MiB), which is dev-safe but weak for production.
+See `docs/DEVELOPER-GUIDE.md` → "Argon2id cost parameters" for the
+production settings.

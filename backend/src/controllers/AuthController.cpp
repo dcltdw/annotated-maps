@@ -5,17 +5,40 @@
 #include <jwt-cpp/jwt.h>
 #include <sodium.h>
 #include <chrono>
+#include <cstdlib>
+#include <cstring>
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Argon2id cost parameters. Configurable via environment:
+//   ARGON2_OPSLIMIT  — iteration count (default: MIN = 1)
+//   ARGON2_MEMLIMIT  — memory in bytes (default: MIN = 8 MiB)
+//
+// Defaults are MIN-safe for local dev on x86_64-on-ARM emulation, where
+// INTERACTIVE (4 iter, 64 MiB) hangs. Production deployments MUST set
+// these to at least INTERACTIVE: ARGON2_OPSLIMIT=4, ARGON2_MEMLIMIT=67108864.
+// See docs/DEVELOPER-GUIDE.md.
+static unsigned long long getArgon2OpsLimit() {
+    const char* env = std::getenv("ARGON2_OPSLIMIT");
+    if (env && std::strlen(env) > 0) {
+        try { return std::stoull(env); } catch (...) {}
+    }
+    return crypto_pwhash_OPSLIMIT_MIN;
+}
+
+static size_t getArgon2MemLimit() {
+    const char* env = std::getenv("ARGON2_MEMLIMIT");
+    if (env && std::strlen(env) > 0) {
+        try { return std::stoull(env); } catch (...) {}
+    }
+    return crypto_pwhash_MEMLIMIT_MIN;
+}
+
 static std::string hashPassword(const std::string& password) {
     char hashed[crypto_pwhash_STRBYTES];
-    // Use MODERATE params: 3 iterations, 256MB memory.
-    // INTERACTIVE (2 iter, 64MB) hangs under x86_64 emulation on Apple Silicon.
-    // For production on native hardware, consider OPSLIMIT_INTERACTIVE/MEMLIMIT_INTERACTIVE.
     if (crypto_pwhash_str(hashed, password.c_str(), password.size(),
-                          crypto_pwhash_OPSLIMIT_MIN,
-                          crypto_pwhash_MEMLIMIT_MIN) != 0) {
+                          getArgon2OpsLimit(),
+                          getArgon2MemLimit()) != 0) {
         throw std::runtime_error("Argon2id hashing failed (out of memory?)");
     }
     return std::string(hashed);

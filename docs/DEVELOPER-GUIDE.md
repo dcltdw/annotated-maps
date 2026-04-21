@@ -191,3 +191,50 @@ environment. Local dev and CI override this by setting
 `ALLOW_PLACEHOLDER_SECRETS=1` in `docker-compose.yml` — this env var
 **must never** be set in production compose/env files. Production
 deployment must supply a real `JWT_SECRET` (min 32 chars).
+
+### Argon2id cost parameters
+
+Password hashing cost is configurable via environment variables read
+at hash time (not startup) in `AuthController.cpp`:
+
+- `ARGON2_OPSLIMIT` — iteration count. Default: `crypto_pwhash_OPSLIMIT_MIN` (1).
+- `ARGON2_MEMLIMIT` — memory in bytes. Default: `crypto_pwhash_MEMLIMIT_MIN` (8 MiB).
+
+Dev/CI uses the MIN defaults because `OPSLIMIT_INTERACTIVE`
+(4 iterations, 64 MiB) hangs under x86_64 emulation on Apple Silicon.
+
+**Production MUST set at least INTERACTIVE:**
+
+```
+ARGON2_OPSLIMIT=4
+ARGON2_MEMLIMIT=67108864   # 64 MiB
+```
+
+Higher values (`SENSITIVE`: 8 ops, 256 MiB) are appropriate if you
+have the CPU budget. Measure login latency at whatever value you
+choose — you want it to be a couple hundred ms, not many seconds.
+
+### SSO `client_secret` storage
+
+`sso_providers.config` in the database holds SSO provider metadata
+(endpoints, `client_id`, `redirect_uri`) but **NEVER** the client
+secret. The backend reads `client_secret` from the environment variable
+`SSO_CLIENT_SECRET_<ORG_ID>` (e.g. `SSO_CLIENT_SECRET_1`) at request
+time. If the env var is missing or empty, the SSO flow returns a
+generic `500 SSO is not available`.
+
+This moves the highest-value secret out of the DB. Production
+deployments typically wire these env vars up via the platform's secret
+manager (Kubernetes Secrets, AWS Secrets Manager + External Secrets,
+Docker Secrets, etc.). Never commit real client secrets to `.env`
+files that are tracked by git.
+
+For local dev against a test IdP, add a `docker-compose.override.yml`
+(gitignored) with entries like:
+
+```yaml
+services:
+  backend:
+    environment:
+      - SSO_CLIENT_SECRET_1=your-real-test-idp-secret
+```

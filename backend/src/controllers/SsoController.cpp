@@ -180,8 +180,18 @@ void SsoController::callback(
             std::string tokenEndpoint    = ssoConfig["token_endpoint"].asString();
             std::string userinfoEndpoint = ssoConfig["userinfo_endpoint"].asString();
             std::string clientId         = ssoConfig["client_id"].asString();
-            std::string clientSecret     = ssoConfig["client_secret"].asString();
             std::string redirectUri      = ssoConfig["redirect_uri"].asString();
+
+            // H5: client_secret is read from SSO_CLIENT_SECRET_<ORG_ID> env var,
+            // never from the database. See docs/DEVELOPER-GUIDE.md.
+            std::string secretEnv = "SSO_CLIENT_SECRET_" + std::to_string(orgId);
+            const char* clientSecretPtr = std::getenv(secretEnv.c_str());
+            if (!clientSecretPtr || std::string(clientSecretPtr).empty()) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "server_error", "SSO is not available"));
+                return;
+            }
+            std::string clientSecret = clientSecretPtr;
 
             std::string tokenBody =
                 "grant_type=authorization_code"

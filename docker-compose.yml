@@ -54,6 +54,13 @@ services:
       # env var is set. Production deployments MUST NOT set this — they
       # must supply a real JWT_SECRET instead.
       - ALLOW_PLACEHOLDER_SECRETS=1
+      # Argon2id cost parameters (dev-safe defaults; production MUST set
+      # ARGON2_OPSLIMIT=4 ARGON2_MEMLIMIT=67108864 or higher). See
+      # docs/DEVELOPER-GUIDE.md.
+      #
+      # SSO client_secret is read from SSO_CLIENT_SECRET_<ORG_ID> env vars,
+      # e.g. SSO_CLIENT_SECRET_1=my-real-idp-secret. Not set by default
+      # because there's no dev IdP. See docs/DEVELOPER-GUIDE.md.
 
   # ── React Frontend (Vite dev server) ────────────────────────────────────────
   frontend:

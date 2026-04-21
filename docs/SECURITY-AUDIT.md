@@ -11,11 +11,11 @@
 
 | Severity | Total open | Fixed since audit |
 |---|---:|---:|
-| High | 2 | 3 (H1, H2, H3 — see #55) |
+| High | 0 | 5 (H1, H2, H3 in #55; H4, H5 in #56) |
 | Medium | 12 | 1 (M13 — fixed with H1) |
 | Low | 5 | 0 |
 
-No critical findings. Remaining High items are production-deployment concerns (Argon2id parameters, SSO `client_secret` storage — tracked in #56).
+All High findings are closed. Remaining open items are Mediums (SSO hardening, rate limiter scope, JWT storage, and the Medium grab-bag tracked in #57, #58) and Lows.
 
 Deliberate design trade-offs are listed separately below.
 
@@ -29,7 +29,7 @@ The application implements the following security controls (verified in this aud
 
 ### Backend
 - **Parameterized queries:** All SQL uses Drogon's `execSqlAsync` bind arguments. No string concatenation, no dynamic column names.
-- **Argon2id password hashing:** libsodium's `crypto_pwhash_str`. Legacy SHA-256 hashes rejected at login.
+- **Argon2id password hashing:** libsodium's `crypto_pwhash_str`. Cost parameters (`OPSLIMIT`/`MEMLIMIT`) are configurable via `ARGON2_OPSLIMIT`/`ARGON2_MEMLIMIT` env vars; defaults are dev-safe MIN values. Production must set at least INTERACTIVE (4 ops, 64 MiB). Legacy SHA-256 hashes rejected at login.
 - **Per-request user verification:** `JwtFilter` checks `users.status` against the database on every authenticated request. Status changes take effect immediately.
 - **JWT scoping:** HS256, `issuer` + `audience` (`annotated-maps`) + `orgId` claims all validated.
 - **Shared error helpers:** `ErrorResponse.h` provides `errorJson()`/`errorResponse()` — removes duplication and ensures consistent `{error, message}` shape.
@@ -40,7 +40,7 @@ The application implements the following security controls (verified in this aud
 - **Audit logging:** `audit_log` records security events (login success/failure, registration, SSO login, member add/remove, permission changes) with atomic success/failure counters.
 - **Security headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`.
 - **CORS allowlist:** Origins listed in `allowed_origins` config; unknown origins receive no CORS headers.
-- **Secrets management:** `JWT_SECRET` env var overrides config, minimum 32 characters enforced. Config placeholders (`CHANGE_ME...`) cause fatal startup exit unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set (dev-only).
+- **Secrets management:** `JWT_SECRET` env var overrides config, minimum 32 characters enforced. Config placeholders (`CHANGE_ME...`) cause fatal startup exit unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set (dev-only). SSO `client_secret` is read from `SSO_CLIENT_SECRET_<ORG_ID>` env vars and never stored in the database.
 - **Registration privacy at the login endpoint:** Login returns identical error for wrong password and nonexistent email.
 - **SSO enumeration resistance:** SSO initiate returns generic "SSO is not available" for all error cases.
 
@@ -59,32 +59,6 @@ The application implements the following security controls (verified in this aud
 ---
 
 ## Open findings
-
-### High
-
-#### H4 (NEW): Argon2id parameters set to `*_MIN` values
-
-**File:** `backend/src/controllers/AuthController.cpp:17-27`
-
-Current settings (`OPSLIMIT_MIN`, `MEMLIMIT_MIN`) were chosen to work around x86_64-on-ARM emulation slowness during development. The in-code comment notes this is not appropriate for production. `OPSLIMIT_MIN = 1` and `MEMLIMIT_MIN = 8 MB` are meaningfully weaker than `OPSLIMIT_INTERACTIVE = 4` and `MEMLIMIT_INTERACTIVE = 64 MB`.
-
-**Fix:** Make the parameters configurable via env var (`ARGON2_OPSLIMIT`, `ARGON2_MEMLIMIT`) and document recommended production values.
-
-**Effort:** Small (~20 lines).
-
----
-
-#### H5 (NEW): SSO provider `client_secret` stored in plaintext in the database
-
-**File:** `database/migrations/001_schema.sql:92-99`, `backend/src/controllers/SsoController.cpp:170`
-
-The `sso_providers.config` JSON column contains `client_secret` as plaintext. Any actor with database read access (DBAs, backup systems, replicas, compromised application) can retrieve every tenant's IdP credential.
-
-**Fix:** Two options — (a) application-layer encryption of the secret field before insert and on read, with key in a secret manager/env var, or (b) move `client_secret` out of the database entirely and into a secret manager keyed by `org_id`. Option (b) is cleaner operationally.
-
-**Effort:** Moderate (~100 lines + deployment runbook change).
-
----
 
 ### Medium
 
@@ -354,3 +328,36 @@ unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set. The dev
 must never appear in production compose/env files. An env var
 `JWT_SECRET` shorter than 32 characters also now exits fatally instead
 of silently falling back to the config value.
+
+### H4 — Argon2id parameters at `*_MIN` values
+
+**Closed by PR #56 (2026-04-21).**
+
+Password hashing used `crypto_pwhash_OPSLIMIT_MIN` / `crypto_pwhash_MEMLIMIT_MIN`
+(1 iteration, 8 MiB) hardcoded. The MIN values were chosen to work
+around x86_64-on-ARM emulation slowness during local dev but are far
+weaker than the recommended INTERACTIVE values (4 iterations, 64 MiB)
+for online authentication.
+
+**Fix applied:** `hashPassword()` now reads `ARGON2_OPSLIMIT` and
+`ARGON2_MEMLIMIT` from the environment and falls back to MIN if unset.
+`docker-compose.yml` comments document the expected production values
+(`ARGON2_OPSLIMIT=4`, `ARGON2_MEMLIMIT=67108864`). Dev/CI defaults
+remain MIN for performance.
+
+### H5 — SSO `client_secret` stored in plaintext in the database
+
+**Closed by PR #56 (2026-04-21).**
+
+The `sso_providers.config` JSON column held `client_secret` in
+plaintext. Any actor with database read access (DBAs, backups, replicas,
+compromised backend) could retrieve every tenant's IdP credential.
+
+**Fix applied:** `SsoController::callback` now reads the client secret
+from the `SSO_CLIENT_SECRET_<ORG_ID>` environment variable (e.g.
+`SSO_CLIENT_SECRET_1`) instead of the DB. If the env var is missing or
+empty, the controller returns a generic 500 "SSO is not available",
+consistent with the SSO enumeration-resistance posture. The
+`sso_providers.config` JSON is no longer expected to contain
+`client_secret` — any legacy value is ignored. No DB migration is
+required for v0.1 because no production SSO data exists yet.
