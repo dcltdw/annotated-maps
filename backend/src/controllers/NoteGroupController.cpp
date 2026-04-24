@@ -1,4 +1,5 @@
 #include "NoteGroupController.h"
+#include "AuditLog.h"
 #include "ErrorResponse.h"
 #include <drogon/drogon.h>
 
@@ -89,6 +90,10 @@ void NoteGroupController::createGroup(
     std::string color = (*body).get("color", "").asString();
     int sortOrder     = (*body).get("sortOrder", 0).asInt();
 
+    // M8: length limits
+    if (!checkMaxLen("name", name, MAX_NAME_LEN, callback)) return;
+    if (!checkMaxLen("description", desc, MAX_DESCRIPTION_LEN, callback)) return;
+
     // Validate color if provided
     if (!color.empty()) {
         bool validColor = color[0] == '#' &&
@@ -174,6 +179,7 @@ void NoteGroupController::updateGroup(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int mapId, int id) {
 
+    int userId = callerUserId(req);
     std::string role = callerTenantRole(req);
     if (role != "admin") {
         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -194,6 +200,10 @@ void NoteGroupController::updateGroup(
 
     std::string newName  = (*body).get("name", "").asString();
     std::string newDesc  = (*body).get("description", "").asString();
+
+    // M8: length limits
+    if (!checkMaxLen("name", newName, MAX_NAME_LEN, callback)) return;
+    if (!checkMaxLen("description", newDesc, MAX_DESCRIPTION_LEN, callback)) return;
     std::string newColor = (*body).get("color", "").asString();
     bool hasSortOrder    = body->isMember("sortOrder");
     int newSortOrder     = (*body).get("sortOrder", 0).asInt();
@@ -230,14 +240,17 @@ void NoteGroupController::updateGroup(
         "    ng.color       = IF(?='', ng.color, ?), "
         "    ng.sort_order  = IF(?=0, ng.sort_order, ?) "
         "WHERE ng.id = ? AND ng.map_id = ? AND m.tenant_id = ?",
-        [callback, id](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("not_found", "Note group not found"));
-                resp->setStatusCode(drogon::k404NotFound);
-                callback(resp);
+                callback(errorResponse(drogon::k404NotFound,
+                    "not_found", "Note group not found"));
                 return;
             }
+            // M12: audit the update
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["noteGroupId"] = id;
+            AuditLog::record("notegroup_update", req, userId, 0, tenantId, detail);
             Json::Value v;
             v["id"]      = id;
             v["updated"] = true;
@@ -268,12 +281,11 @@ void NoteGroupController::deleteGroup(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int mapId, int id) {
 
+    int userId = callerUserId(req);
     std::string role = callerTenantRole(req);
     if (role != "admin") {
-        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-            errorJson("forbidden", "Only tenant admins can delete note groups"));
-        resp->setStatusCode(drogon::k403Forbidden);
-        callback(resp);
+        callback(errorResponse(drogon::k403Forbidden,
+            "forbidden", "Only tenant admins can delete note groups"));
         return;
     }
 
@@ -282,23 +294,24 @@ void NoteGroupController::deleteGroup(
         "DELETE ng FROM note_groups ng "
         "JOIN maps m ON m.id = ng.map_id "
         "WHERE ng.id = ? AND ng.map_id = ? AND m.tenant_id = ?",
-        [callback](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("not_found", "Note group not found"));
-                resp->setStatusCode(drogon::k404NotFound);
-                callback(resp);
+                callback(errorResponse(drogon::k404NotFound,
+                    "not_found", "Note group not found"));
                 return;
             }
+            // M12: audit the deletion
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["noteGroupId"] = id;
+            AuditLog::record("notegroup_delete", req, userId, 0, tenantId, detail);
             auto resp = drogon::HttpResponse::newHttpResponse();
             resp->setStatusCode(drogon::k204NoContent);
             callback(resp);
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to delete note group"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to delete note group"));
         },
         id, mapId, tenantId);
 }

@@ -20,22 +20,22 @@ public:
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(AnnotationController::createAnnotation,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations",
-                      drogon::Post, "JwtFilter", "TenantFilter");
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(AnnotationController::getAnnotation,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations/{id}",
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(AnnotationController::updateAnnotation,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations/{id}",
-                      drogon::Put, "JwtFilter", "TenantFilter");
+                      drogon::Put, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(AnnotationController::deleteAnnotation,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations/{id}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(AnnotationController::addMedia,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations/{id}/media",
-                      drogon::Post, "JwtFilter", "TenantFilter");
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(AnnotationController::deleteMedia,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/annotations/{id}/media/{mediaId}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listAnnotations(const drogon::HttpRequestPtr&,

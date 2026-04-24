@@ -1,4 +1,5 @@
 #include "AnnotationController.h"
+#include "AuditLog.h"
 #include "ErrorResponse.h"
 #include <drogon/drogon.h>
 
@@ -98,6 +99,10 @@ void AnnotationController::createAnnotation(
     std::string title       = (*body)["title"].asString();
     std::string description = (*body).get("description", "").asString();
 
+    // M8: length limits
+    if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("description", description, MAX_DESCRIPTION_LEN, callback)) return;
+
     // Validate GeoJSON structure
     const auto& geoObj = (*body)["geoJson"];
     if (!geoObj.isObject() || !geoObj.isMember("type") || !geoObj.isMember("coordinates")) {
@@ -142,26 +147,19 @@ void AnnotationController::createAnnotation(
                 callback(resp);
                 return;
             }
-            // L4 fix: enforce per-map annotation limit
+            // M9 + L4: atomic INSERT-with-limit-check (see MapController for rationale)
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
-                "SELECT COUNT(*) AS cnt FROM annotations WHERE map_id=?",
-                [callback, mapId, userId, callerUsername, type, title, description, geoJsonStr]
-                (const drogon::orm::Result& rc) {
-                    static const int MAX_ANNOTATIONS_PER_MAP = 5000;
-                    if (!rc.empty() && rc[0]["cnt"].as<int>() >= MAX_ANNOTATIONS_PER_MAP) {
-                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                            errorJson("limit_exceeded", "Annotation limit reached for this map"));
-                        resp->setStatusCode(drogon::k400BadRequest);
-                        callback(resp);
-                        return;
-                    }
-                    auto db3 = drogon::app().getDbClient();
-                    db3->execSqlAsync(
                 "INSERT INTO annotations (map_id, created_by, type, title, description, geo_json) "
-                "VALUES (?,?,?,?,?,?)",
+                "SELECT ?,?,?,?,?,? FROM dual "
+                "WHERE (SELECT COUNT(*) FROM annotations WHERE map_id=?) < 5000",
                 [callback, mapId, userId, callerUsername, type, title, description, geoJsonStr]
                 (const drogon::orm::Result& r2) {
+                    if (r2.affectedRows() == 0) {
+                        callback(errorResponse(drogon::k400BadRequest,
+                            "limit_exceeded", "Annotation limit reached for this map"));
+                        return;
+                    }
                     int newId = static_cast<int>(r2.insertId());
                     Json::Value a;
                     a["id"]                = newId;
@@ -183,20 +181,10 @@ void AnnotationController::createAnnotation(
                     callback(resp);
                 },
                 [callback](const drogon::orm::DrogonDbException&) {
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                        errorJson("db_error", "Failed to create annotation"));
-                    resp->setStatusCode(drogon::k500InternalServerError);
-                    callback(resp);
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to create annotation"));
                 },
-                mapId, userId, type, title, description, geoJsonStr);
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                        errorJson("db_error", "Failed to check annotation count"));
-                    resp->setStatusCode(drogon::k500InternalServerError);
-                    callback(resp);
-                },
-                mapId);
+                mapId, userId, type, title, description, geoJsonStr, mapId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -284,6 +272,10 @@ void AnnotationController::updateAnnotation(
     std::string newTitle = (*body).get("title", "").asString();
     std::string newDesc  = (*body).get("description", "").asString();
 
+    // M8: length limits
+    if (!checkMaxLen("title", newTitle, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("description", newDesc, MAX_DESCRIPTION_LEN, callback)) return;
+
     // Serialize geoJson if provided
     std::string newGeoJson;
     bool hasGeoJson = body->isMember("geoJson") && !(*body)["geoJson"].isNull();
@@ -302,24 +294,25 @@ void AnnotationController::updateAnnotation(
         "    a.geo_json    = IF(?=0, a.geo_json, ?) "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
         "  AND (m.owner_id=? OR mp.level IN ('edit','moderate','admin') OR a.created_by=?)",
-        [callback, id](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Cannot update annotation"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Cannot update annotation"));
                 return;
             }
+            // M12: audit the update
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["annotationId"] = id;
+            AuditLog::record("annotation_update", req, userId, 0, tenantId, detail);
             Json::Value v;
             v["id"]      = id;
             v["updated"] = true;
             callback(drogon::HttpResponse::newHttpJsonResponse(v));
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to update annotation"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to update annotation"));
         },
         userId,
         newTitle, newTitle,
@@ -343,23 +336,24 @@ void AnnotationController::deleteAnnotation(
         "LEFT JOIN map_permissions mp ON mp.map_id=m.id AND mp.user_id=? "
         "WHERE a.id=? AND a.map_id=? AND m.tenant_id=? "
         "  AND (m.owner_id=? OR mp.level IN ('edit','moderate','admin') OR a.created_by=?)",
-        [callback](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Cannot delete annotation"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Cannot delete annotation"));
                 return;
             }
+            // M12: audit the deletion
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["annotationId"] = id;
+            AuditLog::record("annotation_delete", req, userId, 0, tenantId, detail);
             auto resp = drogon::HttpResponse::newHttpResponse();
             resp->setStatusCode(drogon::k204NoContent);
             callback(resp);
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to delete annotation"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to delete annotation"));
         },
         userId, id, mapId, tenantId, userId, userId);
 }

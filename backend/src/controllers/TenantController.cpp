@@ -169,10 +169,15 @@ void TenantController::updateBranding(
     Json::StreamWriterBuilder wb;
     std::string brandingStr = Json::writeString(wb, branding);
 
+    int userId = 0;
+    try { userId = req->getAttributes()->get<int>("userId"); } catch (...) {}
+
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE tenants SET branding=? WHERE id=?",
-        [callback, branding](const drogon::orm::Result&) {
+        [callback, req, userId, tenantId, branding](const drogon::orm::Result&) {
+            // M12: audit the update
+            AuditLog::record("branding_update", req, userId, 0, tenantId, branding);
             callback(drogon::HttpResponse::newHttpJsonResponse(branding));
         },
         [callback](const drogon::orm::DrogonDbException&) {

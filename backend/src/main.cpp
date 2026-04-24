@@ -80,14 +80,45 @@ int main(int argc, char* argv[]) {
         allowedOrigins.insert("http://localhost:8080");
     }
 
-    // ── H2 fix: Security headers + CORS ──────────────────────────────────────
+    // ── Production flag (controls HSTS emission) ─────────────────────────────
+    // Set PRODUCTION=1 in production deployments. Also triggers HSTS when the
+    // request is served over HTTPS (detected via X-Forwarded-Proto from the
+    // trusted reverse proxy — see docs/DEVELOPER-GUIDE.md "Proxy trust").
+    const char* prodEnv = std::getenv("PRODUCTION");
+    const bool isProduction = prodEnv && std::string(prodEnv) == "1";
+
+    // ── H2 + M6 + M7 + L4: Security headers + CORS ───────────────────────────
     drogon::app().registerPreSendingAdvice(
-        [allowedOrigins](const drogon::HttpRequestPtr& req,
-                         const drogon::HttpResponsePtr& resp) {
-            // Security headers
+        [allowedOrigins, isProduction](const drogon::HttpRequestPtr& req,
+                                       const drogon::HttpResponsePtr& resp) {
+            // Baseline security headers on every response
             resp->addHeader("X-Content-Type-Options", "nosniff");
             resp->addHeader("X-Frame-Options", "DENY");
             resp->addHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+            // M6: Content-Security-Policy. This backend serves a JSON API;
+            // `default-src 'none'` is the tightest default. The frontend
+            // static files are served by Vite/nginx in a separate origin;
+            // their CSP is configured there.
+            resp->addHeader("Content-Security-Policy",
+                            "default-src 'none'; frame-ancestors 'none'");
+
+            // L4: Permissions-Policy — disable browser features we don't use.
+            resp->addHeader("Permissions-Policy",
+                            "geolocation=(), microphone=(), camera=(), usb=()");
+
+            // M7: HSTS only when both (a) running in production, and (b) the
+            // request arrived via HTTPS at the trusted proxy. Emitting HSTS
+            // on HTTP responses is harmless but misleading; emitting it in
+            // dev would cache the requirement on localhost and break http
+            // dev access for a year.
+            if (isProduction) {
+                const auto& proto = req->getHeader("X-Forwarded-Proto");
+                if (proto == "https") {
+                    resp->addHeader("Strict-Transport-Security",
+                                    "max-age=31536000; includeSubDomains");
+                }
+            }
 
             // CORS — only allow whitelisted origins
             const auto& origin = req->getHeader("Origin");

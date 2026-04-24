@@ -25,3 +25,31 @@ inline drogon::HttpResponsePtr errorResponse(
     resp->setStatusCode(status);
     return resp;
 }
+
+// ─── Input length limits ─────────────────────────────────────────────────────
+// Server-side caps on user-supplied string fields. These are the ceiling the
+// application enforces; the database columns are VARCHAR(255) for name-like
+// fields and TEXT (64 KiB) for long-form content. Keeping app limits below
+// DB limits avoids silent truncation.
+
+inline constexpr size_t MAX_TITLE_LEN       = 255;
+inline constexpr size_t MAX_NAME_LEN        = 255;
+inline constexpr size_t MAX_DESCRIPTION_LEN = 10000;
+inline constexpr size_t MAX_TEXT_LEN        = 10000;
+
+// Returns true if `value.size() <= max`. If too long, sends a 400 response
+// via `callback` (caller should `return` immediately on false). Use this at
+// controller entry so oversized input is rejected before any DB work.
+inline bool checkMaxLen(
+    const std::string& fieldName,
+    const std::string& value,
+    size_t max,
+    const std::function<void(const drogon::HttpResponsePtr&)>& callback) {
+    if (value.size() > max) {
+        callback(errorResponse(drogon::k400BadRequest, "bad_request",
+            "Field '" + fieldName + "' exceeds maximum length (" +
+            std::to_string(max) + " characters)"));
+        return false;
+    }
+    return true;
+}

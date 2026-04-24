@@ -16,25 +16,25 @@ public:
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(MapController::createMap,
                       "/api/v1/tenants/{tenantId}/maps",
-                      drogon::Post, "JwtFilter", "TenantFilter");
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(MapController::getMap,
                       "/api/v1/tenants/{tenantId}/maps/{id}",
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(MapController::updateMap,
                       "/api/v1/tenants/{tenantId}/maps/{id}",
-                      drogon::Put, "JwtFilter", "TenantFilter");
+                      drogon::Put, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(MapController::deleteMap,
                       "/api/v1/tenants/{tenantId}/maps/{id}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(MapController::listPermissions,
                       "/api/v1/tenants/{tenantId}/maps/{id}/permissions",
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(MapController::setPermission,
                       "/api/v1/tenants/{tenantId}/maps/{id}/permissions",
-                      drogon::Put, "JwtFilter", "TenantFilter");
+                      drogon::Put, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(MapController::removePermission,
                       "/api/v1/tenants/{tenantId}/maps/{id}/permissions/{target}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listMaps(const drogon::HttpRequestPtr&,

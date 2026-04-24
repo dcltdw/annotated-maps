@@ -115,27 +115,28 @@ void MapController::createMap(
     double      centerLng   = (*body).get("centerLng", 0.0).asDouble();
     int         zoom        = (*body).get("zoom", 3).asInt();
 
-    // L4 fix: enforce per-tenant map limit
+    // M8: enforce input length limits before any DB work
+    if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("description", description, MAX_DESCRIPTION_LEN, callback)) return;
+
+    // M9 + L4: enforce per-tenant map limit atomically. The previous pattern
+    // (SELECT COUNT then INSERT in separate queries) raced — two concurrent
+    // creates could both pass the count check. INSERT ... SELECT ... WHERE
+    // (subquery) evaluates the count and inserts in a single statement; the
+    // affectedRows() == 0 case means the limit was hit.
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
-        "SELECT COUNT(*) AS cnt FROM maps WHERE tenant_id=?",
-        [callback, userId, tenantId, title, description, centerLat, centerLng, zoom]
-        (const drogon::orm::Result& r) {
-            static const int MAX_MAPS_PER_TENANT = 1000;
-            if (!r.empty() && r[0]["cnt"].as<int>() >= MAX_MAPS_PER_TENANT) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("limit_exceeded", "Tenant map limit reached"));
-                resp->setStatusCode(drogon::k400BadRequest);
-                callback(resp);
-                return;
-            }
-            auto db2 = drogon::app().getDbClient();
-            db2->execSqlAsync(
         "INSERT INTO maps (owner_id, tenant_id, title, description, "
         "                  center_lat, center_lng, zoom) "
-        "VALUES (?,?,?,?,?,?,?)",
+        "SELECT ?,?,?,?,?,?,? FROM dual "
+        "WHERE (SELECT COUNT(*) FROM maps WHERE tenant_id=?) < 1000",
         [callback, userId, tenantId, title, description, centerLat, centerLng, zoom]
         (const drogon::orm::Result& r) {
+            if (r.affectedRows() == 0) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "limit_exceeded", "Tenant map limit reached"));
+                return;
+            }
             int newId = static_cast<int>(r.insertId());
             Json::Value m;
             m["id"]          = newId;
@@ -152,20 +153,10 @@ void MapController::createMap(
             callback(resp);
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to create map"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to create map"));
         },
-        userId, tenantId, title, description, centerLat, centerLng, zoom);
-        },
-        [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to check map count"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
-        },
-        tenantId);
+        userId, tenantId, title, description, centerLat, centerLng, zoom, tenantId);
 }
 
 // ─── GET /api/v1/tenants/{tenantId}/maps/{id} ─────────────────────────────────
@@ -261,6 +252,11 @@ void MapController::updateMap(
     // passing pointers to temporaries (which don't compile).
     std::string title       = (*body).get("title", "").asString();
     std::string description = (*body).get("description", "").asString();
+
+    // M8: length limits apply on update too
+    if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("description", description, MAX_DESCRIPTION_LEN, callback)) return;
+
     bool hasLat  = body->isMember("centerLat");
     bool hasLng  = body->isMember("centerLng");
     bool hasZoom = body->isMember("zoom");
@@ -277,24 +273,24 @@ void MapController::updateMap(
         "center_lng  = IF(?, ?, center_lng), "
         "zoom        = IF(?, ?, zoom) "
         "WHERE id=? AND tenant_id=? AND owner_id=?",
-        [callback, id](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Map not found or insufficient permissions"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Map not found or insufficient permissions"));
                 return;
             }
+            // M12: audit the update
+            Json::Value detail;
+            detail["mapId"] = id;
+            AuditLog::record("map_update", req, userId, 0, tenantId, detail);
             Json::Value v;
             v["id"]      = id;
             v["updated"] = true;
             callback(drogon::HttpResponse::newHttpJsonResponse(v));
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to update map"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to update map"));
         },
         title, title,
         description, description,
@@ -315,23 +311,23 @@ void MapController::deleteMap(
     auto db    = drogon::app().getDbClient();
     db->execSqlAsync(
         "DELETE FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
-        [callback](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Map not found or insufficient permissions"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Map not found or insufficient permissions"));
                 return;
             }
+            // M12: audit the deletion
+            Json::Value detail;
+            detail["mapId"] = id;
+            AuditLog::record("map_delete", req, userId, 0, tenantId, detail);
             auto resp = drogon::HttpResponse::newHttpResponse();
             resp->setStatusCode(drogon::k204NoContent);
             callback(resp);
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to delete map"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to delete map"));
         },
         id, tenantId, userId);
 }
