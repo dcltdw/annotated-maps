@@ -33,6 +33,8 @@ def assert_status(test_name: str, expected: int, actual: int):
         _errors.append(msg)
 
 
+
+
 def assert_json_field(test_name: str, body: dict, keys: list, expected):
     global _passed, _failed
     try:
@@ -75,13 +77,13 @@ def assert_json_exists(test_name: str, body: dict, keys: list):
         _errors.append(msg)
 
 
-def assert_true(test_name: str, condition: bool):
+def assert_true(test_name: str, condition: bool, detail: str = ""):
     global _passed, _failed
     if condition:
         print(f"PASS: {test_name}")
         _passed += 1
     else:
-        msg = f"FAIL: {test_name}"
+        msg = f"FAIL: {test_name}" + (f" — {detail}" if detail else "")
         print(msg)
         _failed += 1
         _errors.append(msg)
@@ -134,6 +136,32 @@ def http_put(path: str, data: dict = None, token: str = None) -> tuple:
 
 def http_delete(path: str, token: str = None) -> tuple:
     return _request("DELETE", path, token=token)
+
+
+SERVER = API.rsplit("/api/", 1)[0]  # e.g. http://localhost:8080
+
+
+def http_options(path: str, origin: str = None) -> tuple:
+    """OPTIONS preflight request.
+
+    `path` is server-absolute (must start with /), so this can hit paths
+    outside the /api/v1 prefix (e.g., '/foo' to verify single-segment
+    OPTIONS handling).
+
+    Returns (status_code, headers_dict).
+    """
+    url = f"{SERVER}{path}"
+    headers = {"Access-Control-Request-Method": "POST"}
+    if origin is not None:
+        headers["Origin"] = origin
+    req = urllib.request.Request(url, headers=headers, method="OPTIONS")
+    try:
+        with urllib.request.urlopen(req, timeout=CURL_TIMEOUT) as resp:
+            return resp.status, dict(resp.headers)
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers)
+    except Exception:
+        return 0, {}
 
 
 def http_get_headers(path: str) -> dict:

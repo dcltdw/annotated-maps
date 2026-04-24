@@ -44,6 +44,7 @@ FAST_TESTS = [
     "test_11_notes.py",
     "test_12_annotation_edit_delete_move.py",
     "test_13_note_groups.py",
+    "test_15_cors.py",
 ]
 
 NIGHTLY_EXTRA = ["test_07_rate_limit_slow.py"]
