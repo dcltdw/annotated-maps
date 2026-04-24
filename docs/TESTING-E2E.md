@@ -52,13 +52,13 @@ frontend/
 │       ├── auth.spec.ts        # registration / login / logout (#34)
 │       ├── maps.spec.ts        # map CRUD (#35 + #70)
 │       ├── annotations.spec.ts # annotation CRUD + move, 3 geometries (#36)
+│       ├── notes.spec.ts       # note CRUD + move + note groups (#37)
 │       └── *.spec.ts           # one file per feature area
 └── ...
 ```
 
 Per-area suites land incrementally — auth (#34), maps (#35 + edit/delete
-from #70), annotations (#36); notes and cross-tenant are tracked in
-#37–#38.
+from #70), annotations (#36), notes (#37); cross-tenant is tracked in #38.
 
 ## Configuration
 
