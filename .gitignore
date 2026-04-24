@@ -6,6 +6,12 @@ frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 
+# Playwright artifacts
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+
 # ─── Backend ──────────────────────────────────────────────────────────────────
 backend/build/
 backend/logs/
