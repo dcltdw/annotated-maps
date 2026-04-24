@@ -145,6 +145,24 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
+      # Install frontend deps on the runner BEFORE starting the stack so
+      # frontend/node_modules exists owned by `runner`. The frontend
+      # container bind-mounts ./frontend:/app with an anonymous volume on
+      # /app/node_modules to shadow the host dir, but Docker still creates
+      # an empty root-owned node_modules on the host as a side effect of
+      # the nested mount. If the runner's npm ci runs after that, it
+      # EACCES'es. Pre-creating node_modules as `runner` avoids the race.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
       - name: Start stack
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
 
@@ -191,19 +209,8 @@ jobs:
       # Runs the full E2E suite (currently smoke + auth, ~7s wall-clock). The
       # frontend container is part of the compose stack started above. Caches
       # the chromium binary across runs since it's ~100 MB and rarely changes.
-      - name: Set up Node.js for E2E
-        if: always() && steps.db_tests.outcome != 'skipped'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install frontend dependencies
-        if: always() && steps.db_tests.outcome != 'skipped'
-        run: npm ci
-        working-directory: frontend
-
+      # Node.js + npm ci already ran before the stack started (see comment
+      # there for the ordering rationale).
       - name: Cache Playwright browsers
         if: always() && steps.db_tests.outcome != 'skipped'
         id: pw_cache
