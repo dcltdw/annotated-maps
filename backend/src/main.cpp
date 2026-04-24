@@ -132,18 +132,37 @@ int main(int argc, char* argv[]) {
             }
         });
 
-    // Handle preflight OPTIONS globally
-    drogon::app().registerHandler(
-        "/{path}",
-        [](const drogon::HttpRequestPtr& req,
-           std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
-            if (req->method() == drogon::Options) {
-                auto resp = drogon::HttpResponse::newHttpResponse();
-                resp->setStatusCode(drogon::k204NoContent);
-                callback(resp);
+    // Handle preflight OPTIONS globally via sync advice. This runs before
+    // any route matching, so it catches OPTIONS for every URL regardless
+    // of whether a handler is registered for that path.
+    //
+    // Previously this used `registerHandler("/{path}", ...)` which only
+    // matched single-segment paths — multi-segment routes like
+    // /api/v1/auth/register returned 403/404 on OPTIONS and broke the
+    // CORS preflight in the browser.
+    //
+    // Sync advice short-circuits the response BEFORE pre-sending advice
+    // runs, so we must set the CORS headers here rather than rely on the
+    // shared advice below.
+    drogon::app().registerSyncAdvice(
+        [allowedOrigins](const drogon::HttpRequestPtr& req) -> drogon::HttpResponsePtr {
+            if (req->method() != drogon::Options) {
+                return drogon::HttpResponsePtr{};
             }
-        },
-        {drogon::Options});
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            resp->setStatusCode(drogon::k204NoContent);
+
+            const auto& origin = req->getHeader("Origin");
+            if (!origin.empty() && allowedOrigins.count(origin) > 0) {
+                resp->addHeader("Access-Control-Allow-Origin", origin);
+                resp->addHeader("Access-Control-Allow-Credentials", "true");
+                resp->addHeader("Access-Control-Allow-Methods",
+                                "GET,POST,PUT,DELETE,OPTIONS");
+                resp->addHeader("Access-Control-Allow-Headers",
+                                "Content-Type,Authorization");
+            }
+            return resp;
+        });
 
     std::cout << "Annotated Maps backend starting on port 8080…\n";
     drogon::app().run();

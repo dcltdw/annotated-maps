@@ -157,6 +157,10 @@ These are known decisions, not findings. Documented for future auditors.
 
 Three parallel explore agents independently audited backend, frontend, and database layers. Their raw findings were cross-checked against source code by reading the cited file:line references. Findings that turned out to be non-issues (e.g., agents flagged `listTenants` as missing `TenantFilter` — correct behavior, no tenantId in path; flagged `username_taken` distinction as user-enumeration — intentional trade-off documented above) were removed. Severities were calibrated downward where agents were generous, and upward for a few items where agents underestimated exploitability.
 
+### Bugs found by E2E tests after the audit
+
+While building the auth-flow E2E suite (#34), Playwright caught a CORS preflight bug that all three audit agents had missed: the global OPTIONS fallback in `main.cpp` registered against `/{path}`, which Drogon only matches as a single segment. Multi-segment routes like `/api/v1/auth/register` returned 403 on OPTIONS, breaking the browser CORS preflight for every authenticated API call. The bug was masked locally because (a) the dev workflow was clicking through the UI infrequently, and (b) the integration tests use Python's `urllib`, which doesn't trigger CORS preflight. The audit agents read the response-header logic and saw `Access-Control-Allow-Origin` being added on every response — which was true for matched routes, but not for unmatched OPTIONS requests that never reached the pre-sending advice. **Lesson for the next audit:** explicitly check that OPTIONS preflights succeed on every route family, not just that CORS headers are present in successful responses. This is exactly the class of regression that motivated #34-#38 in the first place.
+
 ---
 
 ## Closed findings (audit trail)
