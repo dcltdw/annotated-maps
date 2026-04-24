@@ -12,10 +12,10 @@
 | Severity | Total open | Fixed since audit |
 |---|---:|---:|
 | High | 0 | 5 (H1, H2, H3 in #55; H4, H5 in #56) |
-| Medium | 5 | 8 (M6, M7, M8, M9, M10, M11, M12, M13 — see #55, #57) |
+| Medium | 2 | 11 (M1, M3, M4 in #58; M6-M12 in #57; M13 with H1 in #55) |
 | Low | 4 | 1 (L4 — fixed with M6/M7 in #57) |
 
-Remaining open items are the 4 SSO-hardening Mediums carried from the previous audit (M1, M3, M4 tracked in #58; M2 deferred), the in-process rate-limiter Medium (M5, also #58/deferred), and four Lows.
+Remaining open items are M2 (JWT in localStorage, deferred — large refactor) and M5 (in-process rate limiter, deferred — only matters multi-instance), plus four Lows.
 
 Deliberate design trade-offs are listed separately below.
 
@@ -49,7 +49,7 @@ The application implements the following security controls (verified in this aud
 - **No `dangerouslySetInnerHTML`, no `eval`, no `innerHTML` assignments** in component code (React's default escaping handles all component output safely).
 - **Shared error extraction:** `utils/errors.ts` provides `extractApiError()` — removes scattered AxiosError handling and ensures errors reach the UI consistently.
 - **401 interceptor:** Axios interceptor clears auth state and redirects to login, skipping `/auth/*` endpoints so wrong-password errors don't cause mid-form redirects.
-- **PKCE-like state protection on backend:** SSO state parameter validated before issuing JWT in callback.
+- **PKCE-like state protection on backend:** SSO state parameter validated before issuing JWT in callback. **Nonce verification:** ID token's `nonce` claim is checked against the value generated at initiate, blocking replay (#58 / M1). **Authorization-code token delivery:** SSO callback redirects to `/sso/callback?code=<one-time-code>`; the frontend POSTs the code to `/auth/sso/exchange` to retrieve the JWT, eliminating fragment-based leakage paths (#58 / M3). **Identity collision detection:** SSO user upsert fails closed if an existing `(org_id, external_id)` row's email differs from the IdP's payload, audited as `sso_identity_collision` (#58 / M4).
 
 ### Database
 - **Foreign key integrity:** CASCADE/SET NULL/RESTRICT chosen appropriately per table. Audit log records survive entity deletion via SET NULL.
@@ -63,16 +63,6 @@ The application implements the following security controls (verified in this aud
 
 ### Medium
 
-#### M1 (CARRIED): OIDC nonce not verified against ID token
-
-**File:** `backend/src/controllers/SsoController.cpp`
-
-Nonce is generated and stored at initiate but never compared against the ID token's `nonce` claim in the callback. Leaves the OIDC flow open to token replay.
-
-**Fix:** Decode the ID token (separate from access token) and compare `nonce`. ~20 lines.
-
----
-
 #### M2 (CARRIED): JWT stored in localStorage
 
 **File:** `frontend/src/store/authStore.ts`
@@ -82,26 +72,6 @@ Persisted via Zustand's `persist` middleware. Any XSS reads the token.
 **Mitigations:** Security headers, input validation, and the popup-XSS fix in #55 (H1, now closed) removed the most exploitable XSS vector.
 
 **Fix:** HttpOnly cookies require CSRF token infrastructure and backend changes (~100+ lines). Lower-effort intermediate: move to sessionStorage so the token is cleared on tab close.
-
----
-
-#### M3 (CARRIED): SSO token passed in URL fragment
-
-**Files:** `backend/src/controllers/SsoController.cpp`, `frontend/src/pages/SsoCallbackPage.tsx`
-
-URL fragments can leak via browser history, `Referer` headers on outbound link clicks, and some browser extensions.
-
-**Fix:** One-time authorization code: backend stores JWT server-side keyed by a short-lived code, redirects with the code in a query parameter, frontend POSTs to exchange it for the JWT. ~50 backend lines.
-
----
-
-#### M4 (CARRIED): SSO user upsert race / identity collision
-
-**File:** `backend/src/controllers/SsoController.cpp:297-306`
-
-`ON DUPLICATE KEY UPDATE username=VALUES(username), email=VALUES(email)` silently overwrites email and username on matching `(org_id, external_id)`. If an IdP reuses subject IDs (against spec but observed in practice), this reassigns an existing account to a new person.
-
-**Fix:** Detect email change and require admin approval, or log and reject.
 
 ---
 
@@ -359,3 +329,42 @@ Event types: `map_update`, `map_delete`, `annotation_update`,
 **Fix applied:** Backend pre-send advice now emits
 `Permissions-Policy: geolocation=(), microphone=(), camera=(), usb=()`.
 Done opportunistically while editing the same code block for M6/M7.
+
+### M1 — OIDC nonce not verified
+
+**Closed by PR #58 (2026-04-24).**
+
+**Fix applied:** `SsoController::callback` now extracts the `id_token` from
+the IdP's token-endpoint response, decodes the JWT (no signature check —
+sufficient for nonce comparison since the value is server-secret), and
+compares the `nonce` payload claim to the value stored in `pendingStates_`
+at initiate. Mismatched/missing nonce → 400 `invalid_nonce`. The
+backend already required `id_token` to be present in the token-endpoint
+response.
+
+### M3 — SSO token passed in URL fragment
+
+**Closed by PR #58 (2026-04-24).**
+
+**Fix applied:** Replaced the URL-fragment delivery with a one-time
+authorization-code pattern. After successful login the backend mints
+the JWT, stores it under a 32-byte random `code` in a new in-process
+`pendingAppCodes_` map (2-minute TTL, one-time use), and redirects to
+`/sso/callback?code=<code>`. New endpoint `POST /api/v1/auth/sso/exchange`
+accepts the code, returns `{token, tenantId}` once, and erases the
+entry. Frontend `SsoCallbackPage` reads `?code=` from the query string
+(no fragment touched) and POSTs to the exchange endpoint. Code is
+rate-limited via `RateLimitFilter`.
+
+### M4 — SSO user upsert silently overwrote identity
+
+**Closed by PR #58 (2026-04-24).**
+
+**Fix applied:** Replaced `INSERT ... ON DUPLICATE KEY UPDATE` with a
+SELECT-then-INSERT-or-UPDATE pattern. When the
+`(org_id, external_id)` row already exists, the controller compares
+the stored email to the IdP-supplied email. Mismatch → 409
+`identity_collision`, with an `sso_identity_collision` audit log entry
+containing both emails for admin reconciliation. Matching email →
+username refresh proceeds normally. New `(org_id, external_id)` →
+INSERT.

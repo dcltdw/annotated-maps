@@ -279,3 +279,41 @@ services:
     environment:
       - SSO_CLIENT_SECRET_1=your-real-test-idp-secret
 ```
+
+### SSO authorization-code flow (frontend ↔ backend handshake)
+
+The backend never delivers the application JWT in a URL fragment.
+After a successful OIDC callback it stores the JWT under a one-time
+random code (32-byte hex, 2-minute TTL, in-process map) and redirects:
+
+```
+GET  /api/v1/auth/sso/{slug}/callback?code=<idp-code>&state=<state>
+  ↓ backend exchanges with IdP, verifies nonce, upserts user
+  ↓ stores JWT under <app-code>
+302 Location: <frontend>/sso/callback?code=<app-code>
+```
+
+The frontend's `SsoCallbackPage` reads `?code=` from the query string
+and POSTs to `/api/v1/auth/sso/exchange`:
+
+```
+POST /api/v1/auth/sso/exchange   { "code": "<app-code>" }
+  ↓ backend pops the entry from pendingAppCodes_
+200 { "token": "<jwt>", "tenantId": <int> }
+```
+
+The exchange endpoint is rate-limited (`RateLimitFilter`) and
+single-use — a second POST with the same code returns `400 invalid_code`.
+
+### SSO identity collision
+
+The OIDC spec requires `sub` claims to be stable per-user, but in
+practice some IdPs reuse them when an account is recreated. The
+backend guards against this: on every SSO login, if a user row already
+exists for `(org_id, external_id)` and the IdP-supplied email differs
+from the stored email, the controller returns `409 identity_collision`
+and writes an `sso_identity_collision` audit log entry containing both
+emails. An admin must reconcile manually before that user can log in
+again. Resolution depends on which side is "right" — typically delete
+the stale `users` row (after migrating their content) so the next SSO
+login creates a fresh account.

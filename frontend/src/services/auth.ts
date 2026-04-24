@@ -27,4 +27,14 @@ export const authService = {
     const base = import.meta.env.VITE_API_URL ?? '/api/v1';
     window.location.href = `${base}/auth/sso/${encodeURIComponent(orgSlug)}`;
   },
+
+  // M3: exchange a one-time SSO code (delivered via ?code= query param
+  // after the IdP callback) for the application JWT and tenant ID. The
+  // code lives server-side for ~2 minutes and is consumed on first use.
+  async ssoExchange(code: string): Promise<{ token: string; tenantId: number }> {
+    const res = await apiClient.post<{ token: string; tenantId: number }>(
+      '/auth/sso/exchange', { code }
+    );
+    return res.data;
+  },
 };

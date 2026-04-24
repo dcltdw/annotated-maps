@@ -34,6 +34,15 @@ void SsoController::purgeExpiredStates() {
     }
 }
 
+void SsoController::purgeExpiredAppCodes() {
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(codeMutex_);
+    for (auto it = pendingAppCodes_.begin(); it != pendingAppCodes_.end();) {
+        if (it->second.expiry < now) it = pendingAppCodes_.erase(it);
+        else ++it;
+    }
+}
+
 std::string SsoController::issueToken(int userId, const std::string& username,
                                       int orgId) const {
     const auto& cfg = drogon::app().getCustomConfig()["jwt"];
@@ -162,11 +171,12 @@ void SsoController::callback(
     }
 
     int orgId = savedState.orgId;
+    std::string expectedNonce = savedState.nonce;
 
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT s.config FROM sso_providers s WHERE s.org_id = ? LIMIT 1",
-        [this, callback, req, code, orgId](const drogon::orm::Result& r) {
+        [this, callback, req, code, orgId, expectedNonce](const drogon::orm::Result& r) {
             if (r.empty()) {
                 callback(errorResponse(drogon::k404NotFound,
                     "not_found", "SSO provider config not found"));
@@ -220,7 +230,7 @@ void SsoController::callback(
 
             tokenClient->sendRequest(
                 tokenReq,
-                [this, callback, req, orgId, userinfoEndpoint]
+                [this, callback, req, orgId, userinfoEndpoint, expectedNonce]
                 (drogon::ReqResult result, const drogon::HttpResponsePtr& tokenResp) {
                     if (result != drogon::ReqResult::Ok) {
                         callback(errorResponse(drogon::k502BadGateway,
@@ -235,6 +245,42 @@ void SsoController::callback(
                     if (!tokenData.isMember("access_token")) {
                         callback(errorResponse(drogon::k502BadGateway,
                             "sso_error", "No access_token in IdP response"));
+                        return;
+                    }
+
+                    // M1: verify the ID token's `nonce` claim matches what we
+                    // generated at initiate. This protects against token replay
+                    // where an attacker reuses a previously-captured ID token
+                    // (the nonce is generated fresh per-flow and only known to
+                    // the IdP via the original authorize redirect).
+                    //
+                    // We decode the JWT locally without signature verification.
+                    // The signature would require fetching the IdP's JWKS;
+                    // sufficient for nonce checking is that the value matches
+                    // what we sent — an attacker forging an ID token would not
+                    // know our generated nonce.
+                    if (!tokenData.isMember("id_token")) {
+                        callback(errorResponse(drogon::k502BadGateway,
+                            "sso_error", "No id_token in IdP response"));
+                        return;
+                    }
+                    try {
+                        auto decoded = jwt::decode(tokenData["id_token"].asString());
+                        if (!decoded.has_payload_claim("nonce")) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "invalid_nonce", "ID token missing nonce claim"));
+                            return;
+                        }
+                        std::string idTokenNonce =
+                            decoded.get_payload_claim("nonce").as_string();
+                        if (idTokenNonce != expectedNonce) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "invalid_nonce", "ID token nonce does not match"));
+                            return;
+                        }
+                    } catch (const std::exception&) {
+                        callback(errorResponse(drogon::k400BadRequest,
+                            "invalid_nonce", "Failed to parse ID token"));
                         return;
                     }
 
@@ -282,54 +328,83 @@ void SsoController::callback(
                                 return;
                             }
 
+                            // M4: SELECT-then-INSERT-or-UPDATE rather than blind
+                            // upsert. If a user already exists with this
+                            // (org_id, external_id) and a different email, an
+                            // IdP subject-ID collision is possible (against
+                            // OIDC spec but observed in practice) — fail closed
+                            // and log so an admin can investigate.
                             auto db = drogon::app().getDbClient();
                             db->execSqlAsync(
-                                "INSERT INTO users (username, email, org_id, external_id) "
-                                "VALUES (?,?,?,?) "
-                                "ON DUPLICATE KEY UPDATE "
-                                "  username=VALUES(username), "
-                                "  email=VALUES(email), "
-                                "  id=LAST_INSERT_ID(id)",
-                                [this, callback, req, orgId, username]
-                                (const drogon::orm::Result& r) {
-                                    int userId = static_cast<int>(r.insertId());
+                                "SELECT id, email FROM users "
+                                "WHERE org_id=? AND external_id=? LIMIT 1",
+                                [this, callback, req, orgId, username, email, externalId]
+                                (const drogon::orm::Result& existing) {
+                                    if (!existing.empty()) {
+                                        int existingId = existing[0]["id"].as<int>();
+                                        std::string existingEmail =
+                                            existing[0]["email"].isNull() ? ""
+                                            : existing[0]["email"].as<std::string>();
 
-                                    auto db2 = drogon::app().getDbClient();
-                                    db2->execSqlAsync(
-                                        "SELECT t.id AS tenant_id "
-                                        "FROM tenant_members tm "
-                                        "JOIN tenants t ON t.id = tm.tenant_id "
-                                        "WHERE tm.user_id = ? AND t.org_id = ? "
-                                        "ORDER BY tm.created_at ASC LIMIT 1",
-                                        [this, callback, req, orgId, userId, username]
-                                        (const drogon::orm::Result& r2) {
-                                            int tenantId = r2.empty() ? 0 : r2[0]["tenant_id"].as<int>();
-                                            AuditLog::record("sso_login", req, userId);
-                                            std::string token = issueToken(userId, username, orgId);
+                                        if (!existingEmail.empty() && !email.empty() &&
+                                            existingEmail != email) {
+                                            // Email change on SSO-linked account.
+                                            // Audit the rejection so an admin can
+                                            // investigate and reconcile manually.
+                                            Json::Value detail;
+                                            detail["existingEmail"] = existingEmail;
+                                            detail["incomingEmail"] = email;
+                                            detail["externalId"]    = externalId;
+                                            AuditLog::record("sso_identity_collision",
+                                                req, existingId, 0, 0, detail);
+                                            callback(errorResponse(drogon::k409Conflict,
+                                                "identity_collision",
+                                                "SSO account email changed; admin must reconcile"));
+                                            return;
+                                        }
 
-                                            const auto& cfg = drogon::app().getCustomConfig();
-                                            std::string frontendUrl =
-                                                cfg.get("frontend_url", "http://localhost:5173").asString();
-                                            std::string location =
-                                                frontendUrl + "/sso/callback#token=" + token +
-                                                "&tenantId=" + std::to_string(tenantId);
+                                        // Same email or no change — refresh username,
+                                        // then proceed with the existing user id.
+                                        auto db2 = drogon::app().getDbClient();
+                                        db2->execSqlAsync(
+                                            "UPDATE users SET username=? WHERE id=?",
+                                            [this, callback, req, orgId, existingId, username]
+                                            (const drogon::orm::Result&) {
+                                                this->purgeExpiredAppCodes();
+                                                this->postIssueAppCode(callback, req, existingId, username, orgId);
+                                            },
+                                            [callback](const drogon::orm::DrogonDbException&) {
+                                                callback(errorResponse(
+                                                    drogon::k500InternalServerError,
+                                                    "db_error", "Failed to update SSO user"));
+                                            },
+                                            username, existingId);
+                                        return;
+                                    }
 
-                                            auto resp = drogon::HttpResponse::newHttpResponse();
-                                            resp->setStatusCode(drogon::k302Found);
-                                            resp->addHeader("Location", location);
-                                            callback(resp);
+                                    // New user — INSERT.
+                                    auto db3 = drogon::app().getDbClient();
+                                    db3->execSqlAsync(
+                                        "INSERT INTO users (username, email, org_id, external_id) "
+                                        "VALUES (?,?,?,?)",
+                                        [this, callback, req, orgId, username]
+                                        (const drogon::orm::Result& ins) {
+                                            int newId = static_cast<int>(ins.insertId());
+                                            this->purgeExpiredAppCodes();
+                                            this->postIssueAppCode(callback, req, newId, username, orgId);
                                         },
                                         [callback](const drogon::orm::DrogonDbException&) {
-                                            callback(errorResponse(drogon::k500InternalServerError,
-                                                "db_error", "Failed to load tenant info"));
+                                            callback(errorResponse(
+                                                drogon::k500InternalServerError,
+                                                "db_error", "Failed to create SSO user"));
                                         },
-                                        userId, orgId);
+                                        username, email, orgId, externalId);
                                 },
                                 [callback](const drogon::orm::DrogonDbException&) {
                                     callback(errorResponse(drogon::k500InternalServerError,
-                                        "db_error", "Failed to upsert SSO user"));
+                                        "db_error", "Failed to look up SSO user"));
                                 },
-                                username, email, orgId, externalId);
+                                orgId, externalId);
                         });
                 });
         },
@@ -338,4 +413,108 @@ void SsoController::callback(
                 "db_error", "Failed to load SSO provider config"));
         },
         orgId);
+}
+
+// Helper used by both the existing-user-update and new-user-insert paths
+// in callback(). Issues a JWT, stores it under a one-time app code with a
+// 2-minute TTL, and redirects the browser to the frontend's
+// /sso/callback?code=... URL.
+void SsoController::postIssueAppCode(
+    std::function<void(const drogon::HttpResponsePtr&)> callback,
+    const drogon::HttpRequestPtr& req,
+    int userId, const std::string& username, int orgId) {
+
+    auto db = drogon::app().getDbClient();
+    db->execSqlAsync(
+        "SELECT t.id AS tenant_id "
+        "FROM tenant_members tm "
+        "JOIN tenants t ON t.id = tm.tenant_id "
+        "WHERE tm.user_id = ? AND t.org_id = ? "
+        "ORDER BY tm.created_at ASC LIMIT 1",
+        [this, callback, req, userId, username, orgId]
+        (const drogon::orm::Result& r2) {
+            int tenantId = r2.empty() ? 0 : r2[0]["tenant_id"].as<int>();
+            AuditLog::record("sso_login", req, userId);
+            std::string token = issueToken(userId, username, orgId);
+
+            std::string appCode;
+            try {
+                appCode = generateRandom(32);
+            } catch (const std::exception&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "server_error", "SSO is not available"));
+                return;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(codeMutex_);
+                pendingAppCodes_[appCode] = {
+                    token, tenantId,
+                    std::chrono::steady_clock::now() + std::chrono::minutes(2)
+                };
+            }
+
+            const auto& cfg = drogon::app().getCustomConfig();
+            std::string frontendUrl =
+                cfg.get("frontend_url", "http://localhost:5173").asString();
+            std::string location =
+                frontendUrl + "/sso/callback?code=" + appCode;
+
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            resp->setStatusCode(drogon::k302Found);
+            resp->addHeader("Location", location);
+            callback(resp);
+        },
+        [callback](const drogon::orm::DrogonDbException&) {
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to load tenant info"));
+        },
+        userId, orgId);
+}
+
+// ─── POST /api/v1/auth/sso/exchange ───────────────────────────────────────────
+
+void SsoController::exchange(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback) {
+
+    auto body = req->getJsonObject();
+    if (!body || !(*body).isMember("code")) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "code is required"));
+        return;
+    }
+
+    std::string code = (*body)["code"].asString();
+    if (code.empty()) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "code is required"));
+        return;
+    }
+
+    AppCode found;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(codeMutex_);
+        auto it = pendingAppCodes_.find(code);
+        if (it != pendingAppCodes_.end() &&
+            it->second.expiry >= std::chrono::steady_clock::now()) {
+            found = it->second;
+            ok = true;
+        }
+        // Always erase if found, even if expired — one-time use.
+        if (it != pendingAppCodes_.end()) pendingAppCodes_.erase(it);
+    }
+    purgeExpiredAppCodes();
+
+    if (!ok) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "invalid_code", "SSO code is invalid or expired"));
+        return;
+    }
+
+    Json::Value resp;
+    resp["token"]    = found.token;
+    resp["tenantId"] = found.tenantId;
+    callback(drogon::HttpResponse::newHttpJsonResponse(resp));
 }
