@@ -50,12 +50,14 @@ frontend/
 │       ├── helpers.ts          # shared utilities (e.g. makeUser())
 │       ├── smoke.spec.ts       # minimal: login page renders
 │       ├── auth.spec.ts        # registration / login / logout (#34)
+│       ├── maps.spec.ts        # map create / view (#35); edit/delete fixme'd until #70
 │       └── *.spec.ts           # one file per feature area
 └── ...
 ```
 
-Per-area suites land incrementally — `auth.spec.ts` is in (#34); maps,
-annotations, notes, and cross-tenant are tracked in #35–#38.
+Per-area suites land incrementally — `auth.spec.ts` is in (#34),
+`maps.spec.ts` is in (#35, with edit/delete deferred to #70 until the
+UI exists); annotations, notes, and cross-tenant are tracked in #36–#38.
 
 ## Configuration
 
