@@ -47,13 +47,15 @@ frontend/
 ├── playwright.config.ts        # config
 ├── tests/
 │   └── e2e/
+│       ├── helpers.ts          # shared utilities (e.g. makeUser())
 │       ├── smoke.spec.ts       # minimal: login page renders
-│       └── *.spec.ts           # one file per feature area (auth, maps, etc.)
+│       ├── auth.spec.ts        # registration / login / logout (#34)
+│       └── *.spec.ts           # one file per feature area
 └── ...
 ```
 
-Per-area suites are tracked in #34–#38. Until those land, only the smoke
-test exists.
+Per-area suites land incrementally — `auth.spec.ts` is in (#34); maps,
+annotations, notes, and cross-tenant are tracked in #35–#38.
 
 ## Configuration
 
