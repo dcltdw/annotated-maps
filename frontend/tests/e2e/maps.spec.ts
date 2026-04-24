@@ -111,11 +111,83 @@ test.describe('Maps — view', () => {
   });
 });
 
-test.describe('Maps — edit / delete', () => {
-  // The frontend has no map edit/delete UI yet — services exist but
-  // no page wires them up. Tracked in #70. When that ships, replace
-  // these fixmes with real specs.
-  test.fixme('editing the title persists on reload (UI not yet built — see #70)', async () => {});
-  test.fixme('editing the description persists on reload (UI not yet built — see #70)', async () => {});
-  test.fixme('deleting a map removes it from the list (UI not yet built — see #70)', async () => {});
+test.describe('Maps — edit', () => {
+  test('editing the title persists on reload', async ({ page }) => {
+    await registerAndLand(page, 'maps_edit_title');
+    const original = `Original ${Date.now().toString(36)}`;
+    const updated  = `Updated ${Date.now().toString(36)}`;
+    await createMap(page, original);
+    await expect(page.getByRole('heading', { name: original })).toBeVisible();
+
+    await page.getByRole('button', { name: /edit map/i }).click();
+    const titleField = page.getByLabel('Title');
+    await expect(titleField).toHaveValue(original);
+    await titleField.fill(updated);
+    await page.getByRole('button', { name: /^save$/i }).click();
+
+    // Modal closes; the heading reflects the new title.
+    await expect(page.getByRole('heading', { name: updated })).toBeVisible();
+    await expect(page.getByRole('heading', { name: original })).toHaveCount(0);
+
+    // Reload to prove the change actually persisted server-side.
+    await page.reload();
+    await expect(page.getByRole('heading', { name: updated })).toBeVisible();
+  });
+
+  test('editing the description persists on reload', async ({ page }) => {
+    await registerAndLand(page, 'maps_edit_desc');
+    const title = `DescEdit ${Date.now().toString(36)}`;
+    await createMap(page, title, 'Original description.');
+    await expect(page.getByText(/original description\./i)).toBeVisible();
+
+    await page.getByRole('button', { name: /edit map/i }).click();
+    const descField = page.getByLabel('Description');
+    await expect(descField).toHaveValue('Original description.');
+    await descField.fill('Updated description!');
+    await page.getByRole('button', { name: /^save$/i }).click();
+
+    await expect(page.getByText(/updated description!/i)).toBeVisible();
+    await expect(page.getByText(/original description\./i)).toHaveCount(0);
+
+    await page.reload();
+    await expect(page.getByText(/updated description!/i)).toBeVisible();
+  });
+});
+
+test.describe('Maps — delete', () => {
+  test('deleting a map removes it from the list and navigates back', async ({ page }) => {
+    await registerAndLand(page, 'maps_delete');
+    const title = `Doomed ${Date.now().toString(36)}`;
+    await createMap(page, title);
+    const detailUrl = page.url();
+
+    // Auto-accept the window.confirm prompt the delete button triggers.
+    page.once('dialog', (d) => d.accept());
+    await page.getByRole('button', { name: /delete map/i }).click();
+
+    // Lands back on the map list.
+    await expect(page).toHaveURL(MAPS_URL_RE);
+    // The empty-state copy proves the map is actually gone (this user
+    // had only the one map).
+    await expect(page.getByText(/you don't have any maps yet/i)).toBeVisible();
+
+    // And the detail URL is no longer reachable.
+    await page.goto(detailUrl);
+    await expect(
+      page.getByText(/map not found or you do not have permission/i)
+    ).toBeVisible();
+  });
+
+  test('cancelling the delete confirmation keeps the map', async ({ page }) => {
+    await registerAndLand(page, 'maps_delete_cancel');
+    const title = `Survivor ${Date.now().toString(36)}`;
+    await createMap(page, title);
+
+    page.once('dialog', (d) => d.dismiss());
+    await page.getByRole('button', { name: /delete map/i }).click();
+
+    // Still on the detail page, map still visible.
+    await expect(page).toHaveURL(MAP_DETAIL_RE);
+    await expect(page.getByRole('heading', { name: title })).toBeVisible();
+  });
 });
