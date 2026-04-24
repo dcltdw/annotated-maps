@@ -93,8 +93,21 @@ annotations, notes, and cross-tenant are tracked in #35–#38.
 
 ## CI integration
 
-Currently local-only. PR-workflow integration is tracked in #39
-(smoke only) and nightly/weekend in #40/#41.
+The full E2E suite runs on every PR via `.github/workflows/pr-tests.yml`,
+in the `test` job after the database and backend integration tests pass.
+The frontend container (already part of the Docker Compose stack the
+job uses) serves the app at port 5173, and Playwright runs against
+that. The chromium browser binary is cached across runs (~100 MB,
+keyed on `frontend/package-lock.json`).
+
+If the E2E suite fails, the workflow uploads `frontend/playwright-report/`
+as a `playwright-report` artifact. Download it from the run page and
+open `index.html` to see traces, screenshots, and videos.
+
+Nightly/weekend integration is deferred — the suite is fast enough
+(<10s on the current set) that running it on every PR is the only
+tier currently needed. Tracked in #40/#41 if/when the suite grows
+slow enough to warrant a separate cadence.
 
 ## Troubleshooting
 
