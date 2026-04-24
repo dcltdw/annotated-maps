@@ -87,10 +87,26 @@ int main(int argc, char* argv[]) {
     const char* prodEnv = std::getenv("PRODUCTION");
     const bool isProduction = prodEnv && std::string(prodEnv) == "1";
 
+    // CORS header helper. Both the OPTIONS sync advice (preflight) and the
+    // pre-sending advice (every other response) need to add the same
+    // headers when Origin is in the allowlist. Single source of truth.
+    auto applyCorsHeaders =
+        [allowedOrigins](const drogon::HttpRequestPtr& req,
+                         const drogon::HttpResponsePtr& resp) {
+            const auto& origin = req->getHeader("Origin");
+            if (origin.empty() || allowedOrigins.count(origin) == 0) return;
+            resp->addHeader("Access-Control-Allow-Origin", origin);
+            resp->addHeader("Access-Control-Allow-Credentials", "true");
+            resp->addHeader("Access-Control-Allow-Methods",
+                            "GET,POST,PUT,DELETE,OPTIONS");
+            resp->addHeader("Access-Control-Allow-Headers",
+                            "Content-Type,Authorization");
+        };
+
     // ── H2 + M6 + M7 + L4: Security headers + CORS ───────────────────────────
     drogon::app().registerPreSendingAdvice(
-        [allowedOrigins, isProduction](const drogon::HttpRequestPtr& req,
-                                       const drogon::HttpResponsePtr& resp) {
+        [applyCorsHeaders, isProduction](const drogon::HttpRequestPtr& req,
+                                         const drogon::HttpResponsePtr& resp) {
             // Baseline security headers on every response
             resp->addHeader("X-Content-Type-Options", "nosniff");
             resp->addHeader("X-Frame-Options", "DENY");
@@ -120,16 +136,7 @@ int main(int argc, char* argv[]) {
                 }
             }
 
-            // CORS — only allow whitelisted origins
-            const auto& origin = req->getHeader("Origin");
-            if (!origin.empty() && allowedOrigins.count(origin) > 0) {
-                resp->addHeader("Access-Control-Allow-Origin", origin);
-                resp->addHeader("Access-Control-Allow-Credentials", "true");
-                resp->addHeader("Access-Control-Allow-Methods",
-                                "GET,POST,PUT,DELETE,OPTIONS");
-                resp->addHeader("Access-Control-Allow-Headers",
-                                "Content-Type,Authorization");
-            }
+            applyCorsHeaders(req, resp);
         });
 
     // Handle preflight OPTIONS globally via sync advice. This runs before
@@ -142,25 +149,17 @@ int main(int argc, char* argv[]) {
     // CORS preflight in the browser.
     //
     // Sync advice short-circuits the response BEFORE pre-sending advice
-    // runs, so we must set the CORS headers here rather than rely on the
-    // shared advice below.
+    // runs, so we must apply CORS headers inline here too rather than
+    // rely on the pre-sending advice. The helper above keeps the two
+    // sites consistent.
     drogon::app().registerSyncAdvice(
-        [allowedOrigins](const drogon::HttpRequestPtr& req) -> drogon::HttpResponsePtr {
+        [applyCorsHeaders](const drogon::HttpRequestPtr& req) -> drogon::HttpResponsePtr {
             if (req->method() != drogon::Options) {
                 return drogon::HttpResponsePtr{};
             }
             auto resp = drogon::HttpResponse::newHttpResponse();
             resp->setStatusCode(drogon::k204NoContent);
-
-            const auto& origin = req->getHeader("Origin");
-            if (!origin.empty() && allowedOrigins.count(origin) > 0) {
-                resp->addHeader("Access-Control-Allow-Origin", origin);
-                resp->addHeader("Access-Control-Allow-Credentials", "true");
-                resp->addHeader("Access-Control-Allow-Methods",
-                                "GET,POST,PUT,DELETE,OPTIONS");
-                resp->addHeader("Access-Control-Allow-Headers",
-                                "Content-Type,Authorization");
-            }
+            applyCorsHeaders(req, resp);
             return resp;
         });
 

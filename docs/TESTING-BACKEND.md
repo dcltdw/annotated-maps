@@ -50,6 +50,7 @@ python3 backend/tests/run-tests.py --only 1
 | `test_11_notes.py` | fast | Notes CRUD, cross-org isolation |
 | `test_12_annotation_edit_delete_move.py` | fast | Annotation edit, delete, move for all geometry types |
 | `test_13_note_groups.py` | fast | Note group CRUD, note-group assignment, filtering, permissions |
+| `test_15_cors.py` | fast | CORS preflight: OPTIONS at all path depths, Allow-Origin echo for allowed Origins, absence for bogus ones |
 
 ## How it works
 
