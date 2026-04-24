@@ -43,7 +43,7 @@ def examine_directory(path):
         if filename.is_dir():
             if filename.name not in IGNORE_DIRECTORIES:
                 count += examine_directory(filename)
-        elif filename.suffix in DESIRED_SUFFIXES:
+        elif filename.suffix in DESIRED_SUFFIXES and filename.name not in IGNORE_FILES:
             data = filename.read_text()
             count += len(data.split('\n'))
             if (count == 0):
