@@ -109,7 +109,7 @@ jobs:
           cache-from: type=gha,scope=backend-compile
           cache-to: type=gha,scope=backend-compile,mode=max
 
-  test:
+  integration:
     needs: [lint, compile]
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -206,19 +206,16 @@ jobs:
           CURL_TIMEOUT: "30"
 
       # ── E2E (Playwright) ────────────────────────────────────────────────────
-      # Runs the full E2E suite (currently smoke + auth, ~7s wall-clock). The
-      # frontend container is part of the compose stack started above. Caches
-      # the chromium binary across runs since it's ~100 MB and rarely changes.
-      # Node.js + npm ci already ran before the stack started (see comment
-      # there for the ordering rationale).
-      - name: Cache Playwright browsers
-        if: always() && steps.db_tests.outcome != 'skipped'
-        id: pw_cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-
+      # Runs the full E2E suite. The frontend container is part of the compose
+      # stack started above. Node.js + npm ci already ran before the stack
+      # started (see comment there for the ordering rationale).
+      #
+      # We do NOT cache ~/.cache/ms-playwright. The cache is workflow-trigger
+      # scoped: this workflow only runs on `pull_request`, so each PR has its
+      # own scope and can never read another PR's cache → every first run is
+      # a MISS and uploads ~265 MB on cleanup. The Azure-blob upload was
+      # observed to stall at ~75% indefinitely in PR #72, hanging the job
+      # until timeout. Saving ~30s on chromium reinstall isn't worth that.
       - name: Install Playwright + system deps
         if: always() && steps.db_tests.outcome != 'skipped'
         run: npx playwright install --with-deps chromium

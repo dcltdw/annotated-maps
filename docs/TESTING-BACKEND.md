@@ -97,22 +97,23 @@ Every pull request to `main` runs four jobs via `.github/workflows/pr-tests.yml`
 3. **compile** — Builds only the backend builder stage (C++ compile + link).
    Uses the GitHub Actions cache so Drogon/jwt-cpp layers are cached and only
    the application code is recompiled (~30s on cache hit).
-4. **test** — Runs after both lint and compile succeed
+4. **integration** — Runs after both lint and compile succeed
    (`needs: [lint, compile]`). Builds backend and frontend images individually
    via `docker/build-push-action` with GHA cache, then starts the stack and
    runs (in order): database tests, backend integration tests (fast tier),
-   and the Playwright E2E suite (smoke + auth, see [TESTING-E2E.md](TESTING-E2E.md)).
-   The chromium browser binary is cached across runs.
+   and the Playwright E2E suite (smoke + auth + maps, see [TESTING-E2E.md](TESTING-E2E.md)).
+   Chromium is reinstalled each run (~30s); see workflow comment for why we
+   no longer cache `~/.cache/ms-playwright`.
 
 The lint, security, and compile jobs run in parallel. All use GitHub Actions
 cache (`type=gha`) so Drogon, jwt-cpp, and node_modules layers are cached
 across runs. The CI compose override (`docker-compose.ci.yml`) maps the
 pre-built image tags to the services so `docker compose up` skips rebuilding.
 
-If either lint or compile fails, the test job is skipped entirely, giving
-faster feedback than waiting for the full stack build.
+If either lint or compile fails, the integration job is skipped entirely,
+giving faster feedback than waiting for the full stack build.
 
-After tests run, the test job posts a summary comment on the PR only
+After tests run, the integration job posts a summary comment on the PR only
 when at least one suite failed. The comment shows pass/fail counts per
 suite (database, backend, E2E), a table of totals, the specific
 failed test names, and a link to full logs. On E2E failure the
@@ -129,7 +130,11 @@ that's why you no longer get an email for every green build.
 To enable merge blocking, configure branch protection on `main`:
 1. Go to Settings → Branches → Add rule for `main`
 2. Enable "Require status checks to pass before merging"
-3. Select the "lint", "security", "compile", and "test" checks from the PR Tests workflow
+3. Select the "lint", "security", "compile", and "integration" checks from the PR Tests workflow
+
+> ℹ️ The fourth check was renamed from `test` → `integration` in PR #72. If your
+> branch protection / ruleset still references the old name, update it after
+> merge to keep the merge gate working.
 
 ### Nightly (weekdays 3am UTC)
 
