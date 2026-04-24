@@ -60,8 +60,9 @@ export function MapListPage() {
             <form onSubmit={handleCreate} className="auth-form">
               {createError && <div className="alert alert-error">{createError}</div>}
               <div className="form-group">
-                <label>Title</label>
+                <label htmlFor="map-title">Title</label>
                 <input
+                  id="map-title"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   required
@@ -69,8 +70,9 @@ export function MapListPage() {
                 />
               </div>
               <div className="form-group">
-                <label>Description</label>
+                <label htmlFor="map-description">Description</label>
                 <textarea
+                  id="map-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Optional description…"
