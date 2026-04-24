@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useMapStore } from '@/store/mapStore';
 import { mapsService, annotationsService } from '@/services/maps';
-import type { CreateMapRequest, CreateAnnotationRequest } from '@/types';
+import type { CreateMapRequest, UpdateMapRequest, CreateAnnotationRequest } from '@/types';
 
 export function useMap() {
   const {
@@ -46,6 +46,28 @@ export function useMap() {
     [maps, setMaps]
   );
 
+  const updateMap = useCallback(
+    async (mapId: number, data: UpdateMapRequest) => {
+      await mapsService.updateMap(mapId, data);
+      // PUT returns {id, updated:true} only — re-fetch the row so we
+      // pick up the server's authoritative title/description/updatedAt.
+      const fresh = await mapsService.getMap(mapId);
+      setActiveMap(fresh);
+      setMaps(maps.map((m) => (m.id === mapId ? fresh : m)));
+      return fresh;
+    },
+    [maps, setMaps, setActiveMap]
+  );
+
+  const deleteMap = useCallback(
+    async (mapId: number) => {
+      await mapsService.deleteMap(mapId);
+      setMaps(maps.filter((m) => m.id !== mapId));
+      setActiveMap(null);
+    },
+    [maps, setMaps, setActiveMap]
+  );
+
   const createAnnotation = useCallback(
     async (data: CreateAnnotationRequest) => {
       const annotation = await annotationsService.createAnnotation(data);
@@ -74,6 +96,8 @@ export function useMap() {
     loadMaps,
     loadMap,
     createMap,
+    updateMap,
+    deleteMap,
     createAnnotation,
     deleteAnnotation,
     updateAnnotation,

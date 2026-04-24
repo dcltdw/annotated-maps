@@ -96,11 +96,11 @@ UI exists); annotations, notes, and cross-tenant are tracked in #36–#38.
 ## CI integration
 
 The full E2E suite runs on every PR via `.github/workflows/pr-tests.yml`,
-in the `test` job after the database and backend integration tests pass.
-The frontend container (already part of the Docker Compose stack the
-job uses) serves the app at port 5173, and Playwright runs against
-that. The chromium browser binary is cached across runs (~100 MB,
-keyed on `frontend/package-lock.json`).
+in the `integration` job after the database and backend integration tests
+pass. The frontend container (already part of the Docker Compose stack the
+job uses) serves the app at port 5173, and Playwright runs against that.
+Chromium is reinstalled each run (~30s) — see the workflow comment on the
+"Install Playwright + system deps" step for why we don't cache it.
 
 If the E2E suite fails, the workflow uploads `frontend/playwright-report/`
 as a `playwright-report` artifact. Download it from the run page and

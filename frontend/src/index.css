@@ -45,6 +45,9 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
 .btn-ghost { background: transparent; color: var(--color-text); border: 1px solid var(--color-border); }
 .btn-ghost:hover { background: var(--color-bg); }
+.btn-danger { background: var(--color-danger); color: #fff; }
+.btn-danger:hover { filter: brightness(0.92); }
+.btn-danger:disabled { opacity: .6; cursor: not-allowed; }
 .btn-full { width: 100%; }
 
 /* ─── Auth ──────────────────────────────────────────────────────────────────── */
@@ -84,9 +87,10 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 
 /* ─── Map Page ──────────────────────────────────────────────────────────────── */
 .map-page { display: flex; flex-direction: column; height: calc(100vh - var(--nav-height)); }
-.map-page-header { padding: .75rem 1rem; background: var(--color-surface); border-bottom: 1px solid var(--color-border); }
+.map-page-header { padding: .75rem 1rem; background: var(--color-surface); border-bottom: 1px solid var(--color-border); display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem; }
 .map-page-header h2 { font-size: 1.1rem; }
 .map-page-header p { font-size: .85rem; color: var(--color-text-muted); }
+.map-page-actions { margin-left: auto; display: flex; gap: .5rem; }
 .map-wrapper { flex: 1; }
 .leaflet-map { height: 100%; width: 100%; }
 .permission-notice { font-size: .8rem; color: var(--color-text-muted); margin-top: .25rem; }
