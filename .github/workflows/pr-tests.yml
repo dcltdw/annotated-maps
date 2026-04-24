@@ -145,6 +145,24 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
+      # Install frontend deps on the runner BEFORE starting the stack so
+      # frontend/node_modules exists owned by `runner`. The frontend
+      # container bind-mounts ./frontend:/app with an anonymous volume on
+      # /app/node_modules to shadow the host dir, but Docker still creates
+      # an empty root-owned node_modules on the host as a side effect of
+      # the nested mount. If the runner's npm ci runs after that, it
+      # EACCES'es. Pre-creating node_modules as `runner` avoids the race.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
       - name: Start stack
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
 
@@ -187,6 +205,56 @@ jobs:
         env:
           CURL_TIMEOUT: "30"
 
+      # ── E2E (Playwright) ────────────────────────────────────────────────────
+      # Runs the full E2E suite (currently smoke + auth, ~7s wall-clock). The
+      # frontend container is part of the compose stack started above. Caches
+      # the chromium binary across runs since it's ~100 MB and rarely changes.
+      # Node.js + npm ci already ran before the stack started (see comment
+      # there for the ordering rationale).
+      - name: Cache Playwright browsers
+        if: always() && steps.db_tests.outcome != 'skipped'
+        id: pw_cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+
+      - name: Install Playwright + system deps
+        if: always() && steps.db_tests.outcome != 'skipped'
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Wait for frontend
+        if: always() && steps.db_tests.outcome != 'skipped'
+        run: |
+          echo "Waiting for frontend..."
+          for i in $(seq 1 18); do
+            if curl -sf -o /dev/null http://localhost:5173 2>/dev/null; then
+              echo "Frontend is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Run E2E tests (Playwright)
+        id: e2e_tests
+        if: always() && steps.db_tests.outcome != 'skipped'
+        run: |
+          npm run test:e2e 2>&1 | tee /tmp/e2e-tests.log
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+        working-directory: frontend
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report on failure
+        if: always() && steps.e2e_tests.outputs.exit_code != '0' && steps.e2e_tests.outputs.exit_code != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
       - name: Post test summary to PR
         if: always() && steps.db_tests.outcome != 'skipped'
         uses: actions/github-script@v7
@@ -194,7 +262,8 @@ jobs:
           script: |
             const fs = require('fs');
 
-            function parseCounts(log) {
+            // Python integration tests print "N passed, M failed" lines.
+            function parsePythonCounts(log) {
               let passed = 0, failed = 0;
               for (const line of log.split('\n')) {
                 const m = line.match(/(\d+)\s+passed,\s+(\d+)\s+failed/);
@@ -206,22 +275,43 @@ jobs:
               return { passed, failed };
             }
 
-            let dbLog = '', backendLog = '';
+            // Playwright prints "N passed (Xs)" on success; on failure it
+            // prints "M failed" then "N passed". Match each independently.
+            function parsePlaywrightCounts(log) {
+              let passed = 0, failed = 0;
+              const passMatch = log.match(/(\d+)\s+passed/);
+              if (passMatch) passed = parseInt(passMatch[1]);
+              const failMatch = log.match(/(\d+)\s+failed/);
+              if (failMatch) failed = parseInt(failMatch[1]);
+              return { passed, failed };
+            }
+
+            let dbLog = '', backendLog = '', e2eLog = '';
             try { dbLog = fs.readFileSync('/tmp/db-tests.log', 'utf8'); } catch {}
             try { backendLog = fs.readFileSync('/tmp/backend-tests.log', 'utf8'); } catch {}
+            try { e2eLog = fs.readFileSync('/tmp/e2e-tests.log', 'utf8'); } catch {}
 
-            const db = parseCounts(dbLog);
-            const backend = parseCounts(backendLog);
-            const total = { passed: db.passed + backend.passed, failed: db.failed + backend.failed };
+            const db = parsePythonCounts(dbLog);
+            const backend = parsePythonCounts(backendLog);
+            const e2e = parsePlaywrightCounts(e2eLog);
+            const total = {
+              passed: db.passed + backend.passed + e2e.passed,
+              failed: db.failed + backend.failed + e2e.failed,
+            };
             const status = total.failed > 0 ? '❌' : '✅';
             const logsUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            // Extract failed test names
+            // Extract failed test names — Python tests prefix lines with "FAIL:";
+            // Playwright prints failed test paths as "[chromium] › path › name".
             const failures = [];
             for (const line of (dbLog + '\n' + backendLog).split('\n')) {
               if (line.trim().startsWith('FAIL:')) {
                 failures.push(line.trim());
               }
+            }
+            for (const line of e2eLog.split('\n')) {
+              const m = line.match(/\[chromium\]\s+›\s+(.+)/);
+              if (m) failures.push('E2E: ' + m[1].trim());
             }
 
             let body = `## ${status} Test Results\n\n`;
@@ -229,6 +319,7 @@ jobs:
             body += `|-------|-------:|-------:|\n`;
             body += `| Database | ${db.passed} | ${db.failed} |\n`;
             body += `| Backend (fast) | ${backend.passed} | ${backend.failed} |\n`;
+            body += `| E2E (Playwright) | ${e2e.passed} | ${e2e.failed} |\n`;
             body += `| **Total** | **${total.passed}** | **${total.failed}** |\n\n`;
 
             if (failures.length > 0) {
@@ -275,8 +366,9 @@ jobs:
         run: |
           db_exit="${{ steps.db_tests.outputs.exit_code }}"
           backend_exit="${{ steps.backend_tests.outputs.exit_code }}"
-          if [ "$db_exit" != "0" ] || [ "$backend_exit" != "0" ]; then
-            echo "Tests failed (db=$db_exit, backend=$backend_exit)"
+          e2e_exit="${{ steps.e2e_tests.outputs.exit_code }}"
+          if [ "$db_exit" != "0" ] || [ "$backend_exit" != "0" ] || [ "$e2e_exit" != "0" ]; then
+            echo "Tests failed (db=$db_exit, backend=$backend_exit, e2e=$e2e_exit)"
             exit 1
           fi
 

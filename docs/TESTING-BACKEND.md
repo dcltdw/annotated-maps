@@ -100,7 +100,9 @@ Every pull request to `main` runs four jobs via `.github/workflows/pr-tests.yml`
 4. **test** — Runs after both lint and compile succeed
    (`needs: [lint, compile]`). Builds backend and frontend images individually
    via `docker/build-push-action` with GHA cache, then starts the stack and
-   runs database + backend integration tests (fast tier).
+   runs (in order): database tests, backend integration tests (fast tier),
+   and the Playwright E2E suite (smoke + auth, see [TESTING-E2E.md](TESTING-E2E.md)).
+   The chromium browser binary is cached across runs.
 
 The lint, security, and compile jobs run in parallel. All use GitHub Actions
 cache (`type=gha`) so Drogon, jwt-cpp, and node_modules layers are cached
@@ -112,8 +114,10 @@ faster feedback than waiting for the full stack build.
 
 After tests run, the test job posts a summary comment on the PR only
 when at least one suite failed. The comment shows pass/fail counts per
-suite (database, backend), a table of totals, the specific `FAIL:`
-lines, and a link to full logs.
+suite (database, backend, E2E), a table of totals, the specific
+failed test names, and a link to full logs. On E2E failure the
+Playwright HTML report is also uploaded as a `playwright-report` workflow
+artifact.
 
 On re-runs, the comment is updated in place (comment edits don't
 trigger email notifications, so the PR author isn't re-notified once
