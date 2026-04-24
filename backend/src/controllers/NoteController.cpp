@@ -1,4 +1,5 @@
 #include "NoteController.h"
+#include "AuditLog.h"
 #include "ErrorResponse.h"
 #include <drogon/drogon.h>
 
@@ -111,6 +112,10 @@ void NoteController::createNote(
     bool hasGroupId   = body->isMember("groupId") && !(*body)["groupId"].isNull();
     int groupId       = hasGroupId ? (*body)["groupId"].asInt() : 0;
 
+    // M8: length limits
+    if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("text", text, MAX_TEXT_LEN, callback)) return;
+
     // Verify map exists in this tenant and user has at least view access
     // (any member who can see the map can leave a note)
     auto db = drogon::app().getDbClient();
@@ -132,59 +137,43 @@ void NoteController::createNote(
                 return;
             }
 
-            // Resource limit: 10,000 notes per map
+            // M9: atomic INSERT-with-limit-check (10,000 notes per map; see
+            // MapController for rationale).
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
-                "SELECT COUNT(*) AS cnt FROM notes WHERE map_id = ?",
+                "INSERT INTO notes (map_id, created_by, lat, lng, title, text, color, group_id) "
+                "SELECT ?,?,?,?,?,?,NULLIF(?,''),NULLIF(?,0) FROM dual "
+                "WHERE (SELECT COUNT(*) FROM notes WHERE map_id=?) < 10000",
                 [callback, mapId, userId, callerUsername, lat, lng, title, text, color, groupId]
-                (const drogon::orm::Result& rc) {
-                    if (!rc.empty() && rc[0]["cnt"].as<int>() >= 10000) {
-                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                            errorJson("limit_exceeded", "Note limit reached for this map"));
-                        resp->setStatusCode(drogon::k400BadRequest);
-                        callback(resp);
+                (const drogon::orm::Result& r2) {
+                    if (r2.affectedRows() == 0) {
+                        callback(errorResponse(drogon::k400BadRequest,
+                            "limit_exceeded", "Note limit reached for this map"));
                         return;
                     }
-
-                    auto db3 = drogon::app().getDbClient();
-                    db3->execSqlAsync(
-                        "INSERT INTO notes (map_id, created_by, lat, lng, title, text, color, group_id) "
-                        "VALUES (?,?,?,?,?,?,NULLIF(?,''),NULLIF(?,0))",
-                        [callback, mapId, userId, callerUsername, lat, lng, title, text, color, groupId]
-                        (const drogon::orm::Result& r2) {
-                            int newId = static_cast<int>(r2.insertId());
-                            Json::Value n;
-                            n["id"]                = newId;
-                            n["mapId"]             = mapId;
-                            n["createdBy"]         = userId;
-                            n["createdByUsername"] = callerUsername;
-                            n["lat"]       = lat;
-                            n["lng"]       = lng;
-                            n["title"]     = title;
-                            n["text"]      = text;
-                            n["pinned"]    = false;
-                            n["color"]     = color.empty() ? Json::Value() : Json::Value(color);
-                            n["groupId"]   = groupId > 0 ? Json::Value(groupId) : Json::Value();
-                            n["canEdit"]   = true;
-                            auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
-                            resp->setStatusCode(drogon::k201Created);
-                            callback(resp);
-                        },
-                        [callback](const drogon::orm::DrogonDbException&) {
-                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                errorJson("db_error", "Failed to create note"));
-                            resp->setStatusCode(drogon::k500InternalServerError);
-                            callback(resp);
-                        },
-                        mapId, userId, lat, lng, title, text, color, groupId);
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                        errorJson("db_error", "Failed to check note count"));
-                    resp->setStatusCode(drogon::k500InternalServerError);
+                    int newId = static_cast<int>(r2.insertId());
+                    Json::Value n;
+                    n["id"]                = newId;
+                    n["mapId"]             = mapId;
+                    n["createdBy"]         = userId;
+                    n["createdByUsername"] = callerUsername;
+                    n["lat"]       = lat;
+                    n["lng"]       = lng;
+                    n["title"]     = title;
+                    n["text"]      = text;
+                    n["pinned"]    = false;
+                    n["color"]     = color.empty() ? Json::Value() : Json::Value(color);
+                    n["groupId"]   = groupId > 0 ? Json::Value(groupId) : Json::Value();
+                    n["canEdit"]   = true;
+                    auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
+                    resp->setStatusCode(drogon::k201Created);
                     callback(resp);
                 },
-                mapId);
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to create note"));
+                },
+                mapId, userId, lat, lng, title, text, color, groupId, mapId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -272,6 +261,11 @@ void NoteController::updateNote(
     std::string newTitle = (*body).get("title", "").asString();
     std::string newText  = (*body).get("text", "").asString();
     std::string newColor = (*body).get("color", "").asString();
+
+    // M8: length limits
+    if (!checkMaxLen("title", newTitle, MAX_TITLE_LEN, callback)) return;
+    if (!checkMaxLen("text", newText, MAX_TEXT_LEN, callback)) return;
+
     bool hasLat          = body->isMember("lat");
     bool hasLng          = body->isMember("lng");
     double newLat        = hasLat ? (*body)["lat"].asDouble() : 0.0;
@@ -295,24 +289,25 @@ void NoteController::updateNote(
         "                      ELSE ? END "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin') OR n.created_by = ?)",
-        [callback, id](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Cannot update note"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Cannot update note"));
                 return;
             }
+            // M12: audit the update
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["noteId"] = id;
+            AuditLog::record("note_update", req, userId, 0, tenantId, detail);
             Json::Value v;
             v["id"]      = id;
             v["updated"] = true;
             callback(drogon::HttpResponse::newHttpJsonResponse(v));
         },
         [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Failed to update note"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to update note"));
         },
         userId,
         newTitle, newTitle,
@@ -341,14 +336,17 @@ void NoteController::deleteNote(
         "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin') OR n.created_by = ?)",
-        [callback](const drogon::orm::Result& r) {
+        [callback, req, userId, tenantId, mapId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "Cannot delete note"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Cannot delete note"));
                 return;
             }
+            // M12: audit the deletion
+            Json::Value detail;
+            detail["mapId"] = mapId;
+            detail["noteId"] = id;
+            AuditLog::record("note_delete", req, userId, 0, tenantId, detail);
             auto resp = drogon::HttpResponse::newHttpResponse();
             resp->setStatusCode(drogon::k204NoContent);
             callback(resp);

@@ -12,10 +12,10 @@
 | Severity | Total open | Fixed since audit |
 |---|---:|---:|
 | High | 0 | 5 (H1, H2, H3 in #55; H4, H5 in #56) |
-| Medium | 12 | 1 (M13 — fixed with H1) |
-| Low | 5 | 0 |
+| Medium | 5 | 8 (M6, M7, M8, M9, M10, M11, M12, M13 — see #55, #57) |
+| Low | 4 | 1 (L4 — fixed with M6/M7 in #57) |
 
-All High findings are closed. Remaining open items are Mediums (SSO hardening, rate limiter scope, JWT storage, and the Medium grab-bag tracked in #57, #58) and Lows.
+Remaining open items are the 4 SSO-hardening Mediums carried from the previous audit (M1, M3, M4 tracked in #58; M2 deferred), the in-process rate-limiter Medium (M5, also #58/deferred), and four Lows.
 
 Deliberate design trade-offs are listed separately below.
 
@@ -34,12 +34,13 @@ The application implements the following security controls (verified in this aud
 - **JWT scoping:** HS256, `issuer` + `audience` (`annotated-maps`) + `orgId` claims all validated.
 - **Shared error helpers:** `ErrorResponse.h` provides `errorJson()`/`errorResponse()` — removes duplication and ensures consistent `{error, message}` shape.
 - **Tenant isolation:** `TenantFilter` runs before every tenant-scoped endpoint and verifies `tenant_members` membership before any controller code runs. Superuser bypass is explicit.
-- **Rate limiting:** `RateLimitFilter` applies a sliding-window limit to login, registration, and SSO endpoints. Returns 429 with `Retry-After`. Configurable via `custom_config.rate_limit`.
-- **Input validation:** GeoJSON structure, media URL schemes (`http`/`https`), branding colors (hex), branding URLs (HTTPS-only), display-name length, and pagination bounds all validated.
-- **Resource limits:** 1,000 maps/tenant, 5,000 annotations/map, 10,000 notes/map.
-- **Audit logging:** `audit_log` records security events (login success/failure, registration, SSO login, member add/remove, permission changes) with atomic success/failure counters.
-- **Security headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`.
+- **Rate limiting:** `RateLimitFilter` applies a sliding-window limit to auth/SSO endpoints (IP-keyed) and to all content POST/PUT/DELETE endpoints (user-keyed when JWT is present, IP-keyed otherwise). Returns 429 with `Retry-After`. Configurable via `custom_config.rate_limit`.
+- **Input validation:** GeoJSON structure, media URL schemes (`http`/`https`), branding colors (hex), branding URLs (HTTPS-only), display-name length, pagination bounds, and per-field length limits (title/name ≤ 255, description/text ≤ 10 KB) all validated server-side via `checkMaxLen()` and field-specific checks.
+- **Resource limits:** 1,000 maps/tenant, 5,000 annotations/map, 10,000 notes/map. Enforced by atomic `INSERT ... SELECT WHERE COUNT < limit` so concurrent creates can't race past the cap.
+- **Audit logging:** `audit_log` records auth events (login success/failure, registration, SSO login), membership/permission changes (member add/remove, permission_change), and content mutations (map/annotation/note/notegroup update + delete, branding update). Atomic success/failure counters for monitoring.
+- **Security headers:** `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`, `Permissions-Policy: geolocation=(), microphone=(), camera=(), usb=()`. HSTS (`Strict-Transport-Security: max-age=31536000; includeSubDomains`) is emitted only when `PRODUCTION=1` and `X-Forwarded-Proto: https`.
 - **CORS allowlist:** Origins listed in `allowed_origins` config; unknown origins receive no CORS headers.
+- **Proxy trust:** `RateLimitFilter` and HSTS read `X-Forwarded-For`/`X-Forwarded-Proto` from a trusted reverse proxy. Production deployments must put a proxy in front that strips client-supplied values; documented in `docs/DEVELOPER-GUIDE.md` "Proxy trust".
 - **Secrets management:** `JWT_SECRET` env var overrides config, minimum 32 characters enforced. Config placeholders (`CHANGE_ME...`) cause fatal startup exit unless `ALLOW_PLACEHOLDER_SECRETS=1` is explicitly set (dev-only). SSO `client_secret` is read from `SSO_CLIENT_SECRET_<ORG_ID>` env vars and never stored in the database.
 - **Registration privacy at the login endpoint:** Login returns identical error for wrong password and nonexistent email.
 - **SSO enumeration resistance:** SSO initiate returns generic "SSO is not available" for all error cases.
@@ -114,90 +115,6 @@ Multi-instance deployments each keep independent counters; attacker multiplies e
 
 ---
 
-#### M6 (NEW): No Content-Security-Policy header
-
-**Files:** `backend/src/main.cpp:68-87`, `frontend/index.html`
-
-No CSP is set by the backend or via meta tag. A CSP is the main defense-in-depth when XSS protections fail.
-
-**Fix:** Add `Content-Security-Policy: default-src 'self'; img-src 'self' https: data:; connect-src 'self' https://tile.openstreetmap.org; frame-ancestors 'none'` (plus `style-src 'self' 'unsafe-inline'` for Leaflet). Set from the backend's pre-send advice.
-
-**Effort:** Small. Test carefully — CSP breakage is subtle.
-
----
-
-#### M7 (NEW): No HSTS header
-
-**File:** `backend/src/main.cpp:68-87`
-
-Without `Strict-Transport-Security`, a user connecting over HTTP once (before the app forces HTTPS) is vulnerable to a MITM downgrade.
-
-**Fix:** Add `Strict-Transport-Security: max-age=31536000; includeSubDomains` in production only (detect via `X-Forwarded-Proto` or a production flag).
-
-**Effort:** Trivial.
-
----
-
-#### M8 (NEW): No length limits on title/description/text fields
-
-**Files:** `backend/src/controllers/MapController.cpp` (`title`, `description`), `AnnotationController.cpp` (`title`, `description`), `NoteController.cpp` (`text`, `title`), `NoteGroupController.cpp` (`name`, `description`)
-
-Fields are inserted into `VARCHAR(255)` or `TEXT` columns without server-side length checks; the database truncates silently on VARCHAR and accepts up to 64KB on TEXT. An unauthenticated-after-register user could flood the DB with max-size TEXT payloads.
-
-**Fix:** Validate lengths at controller entry (e.g., 255 for titles, 10KB for descriptions, 64KB for notes) and return 400 if exceeded.
-
-**Effort:** Small.
-
----
-
-#### M9 (NEW): Race conditions in resource-limit enforcement
-
-**Files:** `MapController.cpp:119-131`, `AnnotationController.cpp:145-158`, `NoteController.cpp:135-147`
-
-Pattern: `SELECT COUNT(*)` → compare to limit → `INSERT`. Two concurrent requests can both pass the check and both insert, exceeding the limit.
-
-**Fix:** Either combine into atomic `INSERT ... SELECT ... WHERE (SELECT COUNT(*) ...) < limit` or enforce at the database level via a trigger.
-
-**Effort:** Small-moderate (three controllers, plus a test).
-
----
-
-#### M10 (NEW): No rate limit on content-creation endpoints
-
-**Files:** `backend/src/main.cpp` filter registration
-
-`RateLimitFilter` applies only to auth endpoints. An authenticated attacker can spam map/annotation/note creation up to the resource cap and fill `audit_log`.
-
-**Fix:** Apply a per-user or per-tenant rate limit to POST/PUT/DELETE content endpoints. Requires a user-scoped key instead of IP-scoped in `RateLimitFilter`.
-
-**Effort:** Moderate.
-
----
-
-#### M11 (NEW): X-Forwarded-For trust is implicit
-
-**File:** `backend/src/filters/RateLimitFilter.cpp:14-21`
-
-`RateLimitFilter` uses `X-Forwarded-For` without verifying that the request came from a trusted reverse proxy. Direct requests to the Drogon process (or requests through a proxy that forwards client headers) can spoof IPs.
-
-**Fix:** Document that the app must only accept traffic via a trusted proxy that strips client `X-Forwarded-For`, OR only trust the rightmost entry when a fixed number of trusted proxies is configured.
-
-**Effort:** Small (config + doc).
-
----
-
-#### M12 (NEW): Missing audit logs for delete/update operations
-
-**Files:** `MapController.cpp`, `AnnotationController.cpp`, `NoteController.cpp`, `NoteGroupController.cpp`, `TenantController.cpp` (branding update)
-
-Audit log currently captures: register, login success/failure, SSO login, member add/remove, permission change. It does not capture: map/annotation/note/group deletions, map/annotation/note updates, branding changes. These are the destructive/mutative operations most important for incident investigation.
-
-**Fix:** Add `AuditLog::record(...)` calls to each delete and update path, with enough detail to identify the affected resource.
-
-**Effort:** Small-moderate.
-
----
-
 ### Low
 
 #### L1 (NEW): GeoJSON coordinate ranges not validated
@@ -211,12 +128,6 @@ Same as L1 for notes. `DECIMAL(10,7)` field prevents worse outcomes.
 #### L3 (NEW): Missing composite index on `audit_log(event_type, created_at)`
 
 Separate indexes exist on each column. Time-range queries filtered by event type will use one index and filter with the other in memory. Performance concern, not security, but matters for incident-investigation workflows.
-
-#### L4 (NEW): No `Permissions-Policy` header
-
-Standard hardening header; disables unused browser features (camera, mic, geolocation, etc.).
-
-**Fix:** `Permissions-Policy: geolocation=(), microphone=(), camera=(), usb=()`. One-liner in `main.cpp`.
 
 #### L5 (NEW): `leaflet-draw` is effectively unmaintained
 
@@ -361,3 +272,90 @@ consistent with the SSO enumeration-resistance posture. The
 `sso_providers.config` JSON is no longer expected to contain
 `client_secret` — any legacy value is ignored. No DB migration is
 required for v0.1 because no production SSO data exists yet.
+
+### M6 — Content-Security-Policy header
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** Backend pre-send advice now emits
+`Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`.
+The backend serves a JSON API; `default-src 'none'` is the tightest
+possible default. The frontend bundle is served by Vite/nginx in a
+separate origin and configures its own CSP there.
+
+### M7 — HSTS header
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** Backend emits `Strict-Transport-Security: max-age=31536000;
+includeSubDomains` only when `PRODUCTION=1` env var is set AND the
+request arrived with `X-Forwarded-Proto: https`. Avoids caching the
+requirement on localhost during dev.
+
+### M8 — Server-side length limits
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** New `checkMaxLen()` helper in `ErrorResponse.h`
+(constants `MAX_TITLE_LEN=255`, `MAX_NAME_LEN=255`,
+`MAX_DESCRIPTION_LEN=10000`, `MAX_TEXT_LEN=10000`). Applied at the
+entry of every create and update path in MapController,
+AnnotationController, NoteController, NoteGroupController. Returns
+400 with field name and limit.
+
+### M9 — Resource-limit race conditions
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** Replaced separate `SELECT COUNT(*)` + `INSERT` with
+atomic `INSERT ... SELECT ... FROM dual WHERE (SELECT COUNT(*) ...) <
+limit` in MapController, AnnotationController, NoteController. The
+INSERT either succeeds (and `affectedRows() > 0`) or is rejected
+(`affectedRows() == 0` triggers the limit-exceeded response). Eliminates
+the COUNT-then-INSERT window.
+
+### M10 — Per-user rate limit on content endpoints
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** `RateLimitFilter` now keys by `user:<id>` when the
+upstream JwtFilter has set a `userId` request attribute, falling back
+to `ip:<ip>` otherwise. `RateLimitFilter` added to POST/PUT/DELETE
+routes on Map, Annotation, Note, and NoteGroup controllers (after
+JwtFilter+TenantFilter so the user attribute is available). Same
+config knob (`custom_config.rate_limit`) governs both auth and content
+limits.
+
+### M11 — `X-Forwarded-For` trust documentation
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** New "Proxy trust and `X-Forwarded-For`" section in
+`docs/DEVELOPER-GUIDE.md` covering deployment requirements (trusted
+proxy must strip client-supplied XFF, set XFF to real client IP, set
+`X-Forwarded-Proto: https` on TLS connections) and warns against
+`$proxy_add_x_forwarded_for` in nginx. Code unchanged — the leftmost-
+entry behavior was already correct under the documented model.
+
+### M12 — Audit log coverage for delete/update operations
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** Added `AuditLog::record(...)` calls to the success
+path of: `MapController::updateMap`, `MapController::deleteMap`,
+`AnnotationController::updateAnnotation`,
+`AnnotationController::deleteAnnotation`, `NoteController::updateNote`,
+`NoteController::deleteNote`, `NoteGroupController::updateGroup`,
+`NoteGroupController::deleteGroup`, `TenantController::updateBranding`.
+Detail JSON includes `mapId` and the resource's own ID where applicable.
+Event types: `map_update`, `map_delete`, `annotation_update`,
+`annotation_delete`, `note_update`, `note_delete`, `notegroup_update`,
+`notegroup_delete`, `branding_update`.
+
+### L4 — `Permissions-Policy` header
+
+**Closed by PR #57 (2026-04-22).**
+
+**Fix applied:** Backend pre-send advice now emits
+`Permissions-Policy: geolocation=(), microphone=(), camera=(), usb=()`.
+Done opportunistically while editing the same code block for M6/M7.

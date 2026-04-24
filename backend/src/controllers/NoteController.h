@@ -18,16 +18,16 @@ public:
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(NoteController::createNote,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/notes",
-                      drogon::Post, "JwtFilter", "TenantFilter");
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(NoteController::getNote,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}",
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(NoteController::updateNote,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}",
-                      drogon::Put, "JwtFilter", "TenantFilter");
+                      drogon::Put, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(NoteController::deleteNote,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listNotes(const drogon::HttpRequestPtr&,

@@ -17,13 +17,13 @@ public:
                       drogon::Get, "JwtFilter", "TenantFilter");
         ADD_METHOD_TO(NoteGroupController::createGroup,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/note-groups",
-                      drogon::Post, "JwtFilter", "TenantFilter");
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(NoteGroupController::updateGroup,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/note-groups/{id}",
-                      drogon::Put, "JwtFilter", "TenantFilter");
+                      drogon::Put, "JwtFilter", "TenantFilter", "RateLimitFilter");
         ADD_METHOD_TO(NoteGroupController::deleteGroup,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/note-groups/{id}",
-                      drogon::Delete, "JwtFilter", "TenantFilter");
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listGroups(const drogon::HttpRequestPtr&,

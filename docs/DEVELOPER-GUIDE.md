@@ -48,6 +48,47 @@ All auditable events use `AuditLog::record(...)` and are fire-and-forget
 (no callback chain). See [`backend/src/AuditLog.h`](../backend/src/AuditLog.h)
 for the signature.
 
+Currently audited:
+
+- Auth: `register`, `login_success`, `login_failure`, `sso_login`
+- Membership: `member_add`, `member_remove`, `permission_change`
+- Content (added in #57): `map_update`, `map_delete`, `annotation_update`,
+  `annotation_delete`, `note_update`, `note_delete`, `notegroup_update`,
+  `notegroup_delete`, `branding_update`
+
+Add a new event when introducing any destructive or privilege-changing
+operation. Read paths (GET) are not audited.
+
+### Proxy trust and `X-Forwarded-For`
+
+Several controls (rate limiting in [`RateLimitFilter`](../backend/src/filters/RateLimitFilter.cpp),
+HSTS conditional emission, future client-IP-based audit) read the
+`X-Forwarded-For` and `X-Forwarded-Proto` headers. **These headers are
+client-supplied unless a trusted reverse proxy strips and rewrites them.**
+
+Deployment requirements:
+
+- The backend must only accept traffic via a trusted reverse proxy
+  (nginx, Caddy, ALB, etc.) on the production host. Direct connections
+  to the backend port from outside the host should be blocked at the
+  network layer.
+- The proxy must:
+  - Strip any client-supplied `X-Forwarded-For` and `X-Forwarded-Proto`
+    headers before forwarding.
+  - Set `X-Forwarded-For` to the real client IP it observed.
+  - Set `X-Forwarded-Proto` to `https` when the client connected via TLS.
+- For `nginx`, the standard recipe is `proxy_set_header X-Forwarded-For
+  $remote_addr;` (note: `$proxy_add_x_forwarded_for` would *append* and
+  preserve any client-supplied value — don't use it here).
+
+`RateLimitFilter` uses only the leftmost entry of `X-Forwarded-For`,
+which is the IP injected by the trusted proxy. Without the proxy
+discipline above, an attacker can spoof IPs by setting the header
+themselves and rotate around per-IP rate limits.
+
+For local dev (no proxy), `X-Forwarded-For` is empty and the filter
+falls back to `req->getPeerAddr()`, so dev workflow is unaffected.
+
 ## CI / Docker
 
 ### `docker-compose.ci.yml`
