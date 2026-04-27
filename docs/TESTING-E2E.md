@@ -108,10 +108,10 @@ If the E2E suite fails, the workflow uploads `frontend/playwright-report/`
 as a `playwright-report` artifact. Download it from the run page and
 open `index.html` to see traces, screenshots, and videos.
 
-Nightly/weekend integration is deferred — the suite is fast enough
-(<10s on the current set) that running it on every PR is the only
-tier currently needed. Tracked in #40/#41 if/when the suite grows
-slow enough to warrant a separate cadence.
+The same suite also runs in `.github/workflows/nightly.yml` (#40)
+after the nightly backend tier — flake-detection on a real schedule.
+Failed-run reports are kept as `playwright-report` artifacts for 14
+days. Weekend integration is tracked in #41.
 
 ## Troubleshooting
 

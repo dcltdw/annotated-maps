@@ -42,6 +42,23 @@ jobs:
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
 
+      # Install frontend deps on the runner BEFORE starting the stack so
+      # frontend/node_modules exists owned by `runner`. The frontend
+      # container bind-mounts ./frontend:/app with an anonymous volume on
+      # /app/node_modules to shadow the host dir; without pre-creating the
+      # dir as `runner`, Docker creates it as root and the runner's later
+      # npm ci EACCES'es. Same fix as pr-tests.yml.
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
       - name: Start stack
         run: docker compose -f docker-compose.yml -f docker-compose.ci.yml up -d
 
@@ -76,6 +93,41 @@ jobs:
         run: python3 backend/tests/run-tests.py --tier nightly
         env:
           CURL_TIMEOUT: "30"
+
+      # ── E2E (Playwright) ────────────────────────────────────────────────────
+      # Runs the full E2E suite. Chromium is reinstalled each run (~30s);
+      # we don't cache ~/.cache/ms-playwright — the cache is workflow-trigger
+      # scoped and on first MISS the upload can stall at ~75% indefinitely
+      # (see pr-tests.yml comment for the full story).
+      - name: Install Playwright + system deps
+        run: npx playwright install --with-deps chromium
+        working-directory: frontend
+
+      - name: Wait for frontend
+        run: |
+          echo "Waiting for frontend..."
+          for i in $(seq 1 18); do
+            if curl -sf -o /dev/null http://localhost:5173 2>/dev/null; then
+              echo "Frontend is ready"
+              break
+            fi
+            echo "  attempt $i..."
+            sleep 5
+          done
+
+      - name: Run E2E tests (Playwright)
+        run: npm run test:e2e
+        working-directory: frontend
+        env:
+          CI: "true"
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14
 
       - name: Show backend logs on failure
         if: failure()
