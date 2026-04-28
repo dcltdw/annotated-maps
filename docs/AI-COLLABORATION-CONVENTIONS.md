@@ -31,16 +31,19 @@ agent instructions:
    explicitly; if neither needs updating, say so in the PR description.
 6. **Include a `## Test expectations` table only when some CI checks are
    expected to fail.** Skip the section entirely when everything is green.
-7. **Stamp commits with the current AI model name** (not a previously-used
+7. **Capture the agent's task-tracker breakdown in a `## Work breakdown`
+   section of the PR body** so the work sequence is durable next to the
+   diff.
+8. **Stamp commits with the current AI model name** (not a previously-used
    string) in the `Co-Authored-By:` trailer.
-8. **Scan the actual diff for secrets, PII, and internal references before
+9. **Scan the actual diff for secrets, PII, and internal references before
    opening every PR** in a public repository.
-9. **For long-running branches, extending the CI workflow to trigger on the
-   branch is action #1**, before any feature ticket starts.
-10. **This document is the master record; agent-memory entries are thin
+10. **For long-running branches, extending the CI workflow to trigger on
+    the branch is action #1**, before any feature ticket starts.
+11. **This document is the master record; agent-memory entries are thin
     replicas pointing back here.** When a rule changes, edit the doc; the
     memory pointer's frontmatter is updated to match.
-11. **When a cached operational value fails with a staleness-pattern error
+12. **When a cached operational value fails with a staleness-pattern error
     (404 / "not found" / "no such resource"), re-derive from the live
     source and update the cache before retrying.** Don't blindly retry,
     don't ask the user — refresh on first failure, escalate only if the
@@ -269,7 +272,55 @@ mid-state inconsistency is expected by design.
 | `integration` (E2E) | ❌ expected fail | Frontend still references old API; rebuild lands in #92, #101, #102. |
 ```
 
-### 7. Stamp commits with the current AI model name
+### 7. Capture the agent's task-tracker breakdown in the PR body
+
+> **Rule:** When opening a PR, include a `## Work breakdown` section that
+> mirrors the agent's task-tracker list (e.g., Claude Code's TodoWrite)
+> used while implementing the change. The list captures the work
+> sequence next to the diff itself, so it stays durable after the
+> originating conversation ends.
+
+**Why:** The agent's internal task list captures planning and progress
+tracking during a ticket — what was sequenced first, what got added
+mid-implementation, where blockers led to course corrections. By
+default that list disappears when the conversation ends. Promoting it
+to the PR body preserves the trail next to the diff, which is more
+durable and more discoverable than the conversation transcript. For
+someone reviewing the PR or doing later archaeology ("why was this
+split into these particular steps?"), the breakdown is concrete signal
+about how the implementation actually unfolded.
+
+**How to apply:**
+
+- Place the section between the PR's **Summary** and **Files changed**
+  sections.
+- Render as a numbered or bulleted list of the task contents in the
+  order they were tackled. Match the granularity the agent actually used
+  internally — don't rewrite for the PR. The point is showing the real
+  sequence, not a cleaned-up post-hoc narrative.
+- By the time the PR opens, every item is done; status emojis are
+  redundant. If a task was deferred or abandoned, note it explicitly:
+  `~~Add X~~ — deferred to follow-up #NNN`.
+- For tasks added mid-implementation (after the initial plan), include
+  them in their actual position so the trail reflects reality, not the
+  original plan.
+
+**Example:**
+
+```markdown
+## Work breakdown
+
+1. Read NoteController to understand current shape
+2. Add tagging endpoints (GET/POST .../notes/{id}/visibility)
+3. Build note effective-visibility CTE (note → node → parent chain)
+4. Apply filter to listNotes + getNote with admin/xray bypass
+5. Build backend
+6. Add tagging + filtering integration tests
+7. Run tests + iterate
+8. Open PR into nodes-rebuild
+```
+
+### 8. Stamp commits with the current AI model name
 
 > **Rule:** When adding a `Co-Authored-By:` trailer to commits, use the
 > actual current model name from the runtime environment — don't copy a
@@ -292,7 +343,7 @@ that's wrong after any model upgrade.
 
 ## Repo-level practices
 
-### 8. Public-repo diff scan before every PR
+### 9. Public-repo diff scan before every PR
 
 > **Rule:** If the repository is public, scan the actual diff
 > (`git diff <base>...HEAD`) for secrets, PII, internal references, and
@@ -335,7 +386,7 @@ If anything ambiguous turns up, ask before pushing.
   manifests.
 - Avoid committing temporary debug files (`*.log`, `tmp_*.txt`, etc.).
 
-### 9. Long-running branches — extend CI as action #1
+### 10. Long-running branches — extend CI as action #1
 
 > **Rule:** When creating a long-running branch (a "rebuild" / "phase-N"
 > branch where many PRs will land before merging back to main), the very
@@ -383,7 +434,7 @@ Sequence for any future long-running branch:
 
 ## Meta — keeping these conventions current
 
-### 10. Doc is the master record; memory entries are thin replicas
+### 11. Doc is the master record; memory entries are thin replicas
 
 > **Rule:** This document is the authoritative source for the working
 > agreements. The agent's per-project memory entries (e.g.,
@@ -452,7 +503,7 @@ See [docs/AI-COLLABORATION-CONVENTIONS.md](docs/AI-COLLABORATION-CONVENTIONS.md)
 The split rule: **rule content → doc; project-specific operational
 caches → memory body.**
 
-### 11. Refresh stale operational caches on failure (don't ask, don't retry blindly)
+### 12. Refresh stale operational caches on failure (don't ask, don't retry blindly)
 
 > **Rule:** When a cached operational value (e.g., a project board ID,
 > a resource UUID, a known file path) is used in an operation and the
@@ -463,7 +514,7 @@ caches → memory body.**
 > retry with the stale value, and don't ask the user — the operational
 > cache is the agent's responsibility to maintain.
 
-**Why:** Per rule 10, project-specific operational caches live in memory
+**Why:** Per rule 11, project-specific operational caches live in memory
 bodies (not the doc) — they're local shortcuts that bypass repeated API
 queries. They drift silently when the underlying resource changes (board
 rename, workflow file moved, ID-bearing entity recreated). Without a
@@ -523,7 +574,10 @@ When porting to another project:
 
 - **Rules 1, 4, 5, 6** are fully tooling-agnostic — the rule statements
   transfer directly.
-- **Rule 10 (doc as master)** transfers as a concept, but the specific
+- **Rule 7 (Work breakdown in PR body)** transfers as a concept; the
+  specific name of the task-tracker tool (`TodoWrite` here) is Claude
+  Code-specific. For other agents, swap in the equivalent tracker name.
+- **Rule 11 (doc as master)** transfers as a concept, but the specific
   memory-file format (`feedback_*.md` with frontmatter) is Claude Code-
   specific. For other agents, adapt the "thin replica" pointer shape to
   whatever per-rule storage that agent uses.
@@ -531,16 +585,16 @@ When porting to another project:
   **How to apply** that needs replacement with the new project's IDs.
 - **Rule 3 (default project)** has the project number / owner hardcoded —
   swap for your project's equivalents.
-- **Rule 7 (Co-Authored-By trailer)** assumes Claude; for other agents
+- **Rule 8 (Co-Authored-By trailer)** assumes Claude; for other agents
   (Cursor, Aider, etc.) adjust the trailer format to match what the agent
   actually identifies as.
-- **Rule 8 (public-repo scan)** only applies if the repo is public. Skip it
+- **Rule 9 (public-repo scan)** only applies if the repo is public. Skip it
   for private repos, but consider keeping the secrets-scan portion anyway —
   leaked credentials in private-repo history are still a risk if the repo's
   visibility ever changes.
-- **Rule 9 (long-running branch CI)** assumes GitHub Actions; adapt the
+- **Rule 10 (long-running branch CI)** assumes GitHub Actions; adapt the
   "extend the workflow" mechanics for other CI systems (GitLab CI, Buildkite,
   etc.).
-- **Rule 11 (refresh stale caches)** transfers as a concept; the specific
+- **Rule 12 (refresh stale caches)** transfers as a concept; the specific
   re-derive commands depend on what type of cache value is at stake (project
   board IDs, file paths, external service IDs, etc.).
