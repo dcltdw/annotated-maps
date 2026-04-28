@@ -31,15 +31,20 @@ agent instructions:
    explicitly; if neither needs updating, say so in the PR description.
 6. **Include a `## Test expectations` table only when some CI checks are
    expected to fail.** Skip the section entirely when everything is green.
-7. **Scan the actual diff for secrets, PII, and internal references before
-   opening every PR** in a public repository.
-8. **For long-running branches, extending the CI workflow to trigger on the
-   branch is action #1**, before any feature ticket starts.
-9. **Stamp commits with the current AI model name** (not a previously-used
+7. **Stamp commits with the current AI model name** (not a previously-used
    string) in the `Co-Authored-By:` trailer.
+8. **Scan the actual diff for secrets, PII, and internal references before
+   opening every PR** in a public repository.
+9. **For long-running branches, extending the CI workflow to trigger on the
+   branch is action #1**, before any feature ticket starts.
 10. **This document is the master record; agent-memory entries are thin
     replicas pointing back here.** When a rule changes, edit the doc; the
     memory pointer's frontmatter is updated to match.
+11. **When a cached operational value fails with a staleness-pattern error
+    (404 / "not found" / "no such resource"), re-derive from the live
+    source and update the cache before retrying.** Don't blindly retry,
+    don't ask the user — refresh on first failure, escalate only if the
+    fresh value also fails.
 
 ---
 
@@ -447,6 +452,69 @@ See [docs/AI-COLLABORATION-CONVENTIONS.md](docs/AI-COLLABORATION-CONVENTIONS.md)
 The split rule: **rule content → doc; project-specific operational
 caches → memory body.**
 
+### 11. Refresh stale operational caches on failure (don't ask, don't retry blindly)
+
+> **Rule:** When a cached operational value (e.g., a project board ID,
+> a resource UUID, a known file path) is used in an operation and the
+> operation fails with an error pattern consistent with cache staleness
+> (404 / "not found" / "no such resource" against an ID that previously
+> worked), re-derive the value from the live source, update the cache
+> in the relevant memory file, then retry the operation. Don't blindly
+> retry with the stale value, and don't ask the user — the operational
+> cache is the agent's responsibility to maintain.
+
+**Why:** Per rule 10, project-specific operational caches live in memory
+bodies (not the doc) — they're local shortcuts that bypass repeated API
+queries. They drift silently when the underlying resource changes (board
+rename, workflow file moved, ID-bearing entity recreated). Without a
+refresh-on-failure rule, the agent's options are: (a) retry blindly and
+fail again, (b) ask the user "what's the new ID?", or (c) silently skip
+the operation. All three are bad. A "stale → refresh → retry once"
+pattern catches drift loudly, self-heals, and doesn't burn user attention.
+
+**Why not refresh proactively at every task start?** Most tasks don't
+touch the cached resource, so a proactive refresh is wasteful — both in
+API calls and in conversation context. First-failure refresh is the
+sweet spot: cheap when the cache is valid (the common case), self-healing
+when it isn't.
+
+**How to apply:**
+
+When using a cached value in an operation:
+
+1. Run the operation with the cached value.
+2. If it fails with a staleness-suggesting error:
+   - Re-derive from the live source (specific command depends on what
+     type of value — see the table below).
+   - Update the cached value in the relevant `feedback_*.md` memory file.
+   - Retry the operation with the fresh value.
+3. If the fresh-derived value also fails: escalate to the user (the
+   problem isn't cache staleness).
+
+**What counts as a staleness-pattern error:**
+
+- 404 / "not found" against a known-cached ID.
+- "Project not found" / "field not found" against a project-board operation.
+- "No such file or directory" against a known-cached path.
+- Permission errors that suggest the resource was recreated under
+  different ownership.
+
+**NOT** staleness-pattern errors (different handling needed):
+
+- Rate limiting (429) — back off and retry.
+- Network timeouts — retry, no cache change.
+- Validation errors (400) — fix the input, no cache change.
+- Auth-token expiry — re-auth, no cache change.
+
+**Common cache types and their re-derive sources:**
+
+| Cache | Re-derive command |
+|---|---|
+| Project board IDs (Project, field, option) | `gh api graphql` query (see §2 for shape) |
+| GitHub repo metadata | `gh api repos/<owner>/<repo>` |
+| File paths in the project | `find` / `Glob` |
+| External service IDs (Slack channel, JIRA project, etc.) | each service's API |
+
 ---
 
 ## Adapting these conventions to other projects
@@ -463,13 +531,16 @@ When porting to another project:
   **How to apply** that needs replacement with the new project's IDs.
 - **Rule 3 (default project)** has the project number / owner hardcoded —
   swap for your project's equivalents.
-- **Rule 7 (public-repo scan)** only applies if the repo is public. Skip it
+- **Rule 7 (Co-Authored-By trailer)** assumes Claude; for other agents
+  (Cursor, Aider, etc.) adjust the trailer format to match what the agent
+  actually identifies as.
+- **Rule 8 (public-repo scan)** only applies if the repo is public. Skip it
   for private repos, but consider keeping the secrets-scan portion anyway —
   leaked credentials in private-repo history are still a risk if the repo's
   visibility ever changes.
-- **Rule 8 (long-running branch CI)** assumes GitHub Actions; adapt the
+- **Rule 9 (long-running branch CI)** assumes GitHub Actions; adapt the
   "extend the workflow" mechanics for other CI systems (GitLab CI, Buildkite,
   etc.).
-- **Rule 9 (Co-Authored-By trailer)** assumes Claude; for other agents
-  (Cursor, Aider, etc.) adjust the trailer format to match what the agent
-  actually identifies as.
+- **Rule 11 (refresh stale caches)** transfers as a concept; the specific
+  re-derive commands depend on what type of cache value is at stake (project
+  board IDs, file paths, external service IDs, etc.).
