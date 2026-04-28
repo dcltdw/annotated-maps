@@ -1,5 +1,6 @@
 #include "VisibilityGroupController.h"
 #include "ErrorResponse.h"
+#include "VisibilityAuth.h"
 #include <drogon/drogon.h>
 
 // Phase 2b.i.b: Member management endpoints + the manages_visibility-
@@ -20,55 +21,6 @@ static int callerOrgId(const drogon::HttpRequestPtr& req) {
 }
 
 namespace {
-
-bool isTenantAdmin(const drogon::HttpRequestPtr& req) {
-    try {
-        return req->getAttributes()->get<std::string>("tenantRole") == "admin";
-    } catch (...) { return false; }
-}
-
-// Authorization helper for visibility-group management. Allowed if:
-//   * Caller is a tenant admin (sync path), OR
-//   * Caller is a member of any visibility_group in this tenant with
-//     manages_visibility = TRUE (async path — one DB query).
-//
-// On success, calls onAllowed(). On denial or DB error, sends a 403/500
-// via callback. Pattern mirrors how filter chains hand off to the next
-// step — each handler wraps its real logic in onAllowed.
-void requireVisibilityGroupManager(
-    const drogon::HttpRequestPtr& req,
-    int tenantId,
-    int userId,
-    const std::function<void(const drogon::HttpResponsePtr&)>& callback,
-    std::function<void()> onAllowed) {
-
-    if (isTenantAdmin(req)) {
-        onAllowed();
-        return;
-    }
-
-    auto db = drogon::app().getDbClient();
-    db->execSqlAsync(
-        "SELECT 1 FROM visibility_group_members vgm "
-        "JOIN visibility_groups vg ON vg.id = vgm.visibility_group_id "
-        "WHERE vgm.user_id = ? AND vg.tenant_id = ? "
-        "  AND vg.manages_visibility = TRUE LIMIT 1",
-        [callback, onAllowed = std::move(onAllowed)](const drogon::orm::Result& r) {
-            if (r.empty()) {
-                callback(errorResponse(drogon::k403Forbidden,
-                    "forbidden",
-                    "Only tenant admins or visibility-group managers "
-                    "can manage visibility groups"));
-                return;
-            }
-            onAllowed();
-        },
-        [callback](const drogon::orm::DrogonDbException&) {
-            callback(errorResponse(drogon::k500InternalServerError,
-                "db_error", "Failed to check authorization"));
-        },
-        userId, tenantId);
-}
 
 Json::Value rowToGroup(const drogon::orm::Row& row) {
     Json::Value g;

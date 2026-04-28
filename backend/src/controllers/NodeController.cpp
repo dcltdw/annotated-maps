@@ -1,7 +1,9 @@
 #include "NodeController.h"
 #include "AuditLog.h"
 #include "ErrorResponse.h"
+#include "VisibilityAuth.h"
 #include <drogon/drogon.h>
+#include <set>
 #include <sstream>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
@@ -506,4 +508,243 @@ void NodeController::deleteNode(
                 "db_error", "Failed to delete node"));
         },
         userId, id, mapId, tenantId, userId);
+}
+
+// ─── GET /api/v1/tenants/{tid}/maps/{mid}/nodes/{nid}/visibility ─────────────
+//
+// Returns raw stored state (no inheritance computation): the node's own
+// visibility_override flag and its tagged visibility_group ids.
+// Effective visibility (recursive walk up parent chain) is computed by
+// the read filter that lands in #99.
+
+void NodeController::getVisibility(
+    const drogon::HttpRequestPtr& /*req*/,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    auto db = drogon::app().getDbClient();
+
+    // Existence + tenant scoping check first. We use a single query that
+    // returns the override flag and (zero or more) tagged group ids in
+    // one shot. If the node isn't on this map+tenant, the result is
+    // empty and we 404. (We don't gate on the caller's map permission
+    // here — read filtering for the node itself happens via the regular
+    // GET /nodes/:id route. This endpoint exposes only the visibility
+    // metadata, which is the same metadata a manager needs to inspect
+    // before editing.)
+    db->execSqlAsync(
+        "SELECT n.visibility_override, nv.visibility_group_id "
+        "FROM nodes n "
+        "JOIN maps m ON m.id = n.map_id "
+        "LEFT JOIN node_visibility nv ON nv.node_id = n.id "
+        "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ?",
+        [callback, id](const drogon::orm::Result& r) {
+            if (r.empty()) {
+                callback(errorResponse(drogon::k404NotFound,
+                    "not_found", "Node not found"));
+                return;
+            }
+            Json::Value out;
+            out["nodeId"]   = id;
+            out["override"] = r[0]["visibility_override"].as<bool>();
+            Json::Value ids(Json::arrayValue);
+            for (const auto& row : r) {
+                if (!row["visibility_group_id"].isNull()) {
+                    ids.append(row["visibility_group_id"].as<int>());
+                }
+            }
+            out["groupIds"] = ids;
+            callback(drogon::HttpResponse::newHttpJsonResponse(out));
+        },
+        [callback](const drogon::orm::DrogonDbException&) {
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to fetch node visibility"));
+        },
+        id, mapId, tenantId);
+}
+
+// ─── POST /api/v1/tenants/{tid}/maps/{mid}/nodes/{nid}/visibility ────────────
+//
+// Body: { override?: bool, groupIds?: number[] }
+//   - override and groupIds are independently authoritative.
+//   - groupIds OMITTED  → tag set untouched (toggle-override-only call).
+//   - groupIds PRESENT (even []) → replace the entire tag set.
+//   - All groupIds must belong to this tenant.
+//   - Tags survive override flips (override=false just means "inherit",
+//     not "drop tags") — see header comment.
+//
+// Auth: requireVisibilityGroupManager (admin OR manages_visibility group
+// member). Combined with the existence-check below, a manager can set
+// visibility on any node in their tenant.
+
+void NodeController::setVisibility(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    int userId = callerUserId(req);
+
+    auto body = req->getJsonObject();
+    if (!body) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "JSON body required"));
+        return;
+    }
+
+    bool hasOverride = body->isMember("override") && (*body)["override"].isBool();
+    bool overrideVal = hasOverride ? (*body)["override"].asBool() : false;
+
+    bool hasGroupIds = body->isMember("groupIds");
+    std::set<int> groupIds;
+    if (hasGroupIds) {
+        const Json::Value& g = (*body)["groupIds"];
+        if (!g.isArray()) {
+            callback(errorResponse(drogon::k400BadRequest,
+                "bad_request", "groupIds must be an array of integers"));
+            return;
+        }
+        for (const auto& v : g) {
+            if (!v.isInt()) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "groupIds must contain only integers"));
+                return;
+            }
+            groupIds.insert(v.asInt());
+        }
+    }
+
+    if (!hasOverride && !hasGroupIds) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "Body must include override or groupIds"));
+        return;
+    }
+
+    // Helper: comma-join an int set (e.g. {1,3,7} → "1,3,7"). Safe to
+    // splice into SQL because the values came from `Json::Value::asInt()`
+    // — bounded, sign-checked integers, no string content.
+    auto joinIds = [](const std::set<int>& s) {
+        std::string out;
+        bool first = true;
+        for (int v : s) {
+            if (!first) out += ",";
+            out += std::to_string(v);
+            first = false;
+        }
+        return out;
+    };
+
+    requireVisibilityGroupManager(req, tenantId, userId, callback,
+        [callback, req, tenantId, mapId, id, userId,
+         hasOverride, overrideVal, hasGroupIds, groupIds, joinIds]() {
+
+        auto finish = [callback, req, tenantId, mapId, id, userId]() {
+            Json::Value detail;
+            detail["mapId"]  = mapId;
+            detail["nodeId"] = id;
+            AuditLog::record("node_visibility_set", req,
+                userId, 0, tenantId, detail);
+            auto resp = drogon::HttpResponse::newHttpResponse();
+            resp->setStatusCode(drogon::k204NoContent);
+            callback(resp);
+        };
+
+        // Step 4: replace tags. DELETE then (optionally) multi-row INSERT.
+        auto applyTags = [callback, id, hasGroupIds, groupIds, joinIds, finish]() {
+            if (!hasGroupIds) { finish(); return; }
+
+            auto dbT = drogon::app().getDbClient();
+            dbT->execSqlAsync(
+                "DELETE FROM node_visibility WHERE node_id = ?",
+                [callback, id, groupIds, joinIds, finish]
+                (const drogon::orm::Result&) {
+                    if (groupIds.empty()) { finish(); return; }
+
+                    // Multi-row INSERT, ids inlined (see joinIds note above).
+                    std::string vals;
+                    bool first = true;
+                    for (int g : groupIds) {
+                        if (!first) vals += ",";
+                        vals += "(" + std::to_string(id) + "," + std::to_string(g) + ")";
+                        first = false;
+                    }
+                    auto dbI = drogon::app().getDbClient();
+                    dbI->execSqlAsync(
+                        "INSERT INTO node_visibility "
+                        "  (node_id, visibility_group_id) VALUES " + vals,
+                        [finish](const drogon::orm::Result&) { finish(); },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to insert tags"));
+                        });
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to clear existing tags"));
+                },
+                id);
+        };
+
+        // Step 3: optionally update override flag, then call applyTags.
+        auto applyOverrideThenTags =
+            [callback, id, hasOverride, overrideVal, applyTags]() {
+            if (!hasOverride) { applyTags(); return; }
+            auto dbO = drogon::app().getDbClient();
+            dbO->execSqlAsync(
+                "UPDATE nodes SET visibility_override = ? WHERE id = ?",
+                [applyTags](const drogon::orm::Result&) { applyTags(); },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to set override"));
+                },
+                overrideVal, id);
+        };
+
+        // Step 2: verify the node exists on this map+tenant.
+        auto dbN = drogon::app().getDbClient();
+        dbN->execSqlAsync(
+            "SELECT n.id FROM nodes n "
+            "JOIN maps m ON m.id = n.map_id "
+            "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ?",
+            [callback, tenantId, hasGroupIds, groupIds, joinIds,
+             applyOverrideThenTags]
+            (const drogon::orm::Result& r1) {
+                if (r1.empty()) {
+                    callback(errorResponse(drogon::k404NotFound,
+                        "not_found", "Node not found"));
+                    return;
+                }
+                if (!hasGroupIds || groupIds.empty()) {
+                    applyOverrideThenTags();
+                    return;
+                }
+
+                // Step 2.5: validate all groupIds belong to this tenant.
+                std::string sql =
+                    "SELECT COUNT(*) AS c FROM visibility_groups "
+                    "WHERE tenant_id = ? AND id IN (" + joinIds(groupIds) + ")";
+                auto dbV = drogon::app().getDbClient();
+                dbV->execSqlAsync(sql,
+                    [callback, groupIds, applyOverrideThenTags]
+                    (const drogon::orm::Result& r2) {
+                        int count = r2[0]["c"].as<int>();
+                        if (count != static_cast<int>(groupIds.size())) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "bad_request",
+                                "One or more groupIds are invalid for this tenant"));
+                            return;
+                        }
+                        applyOverrideThenTags();
+                    },
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Failed to validate group ids"));
+                    },
+                    tenantId);
+            },
+            [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Failed to verify node"));
+            },
+            id, mapId, tenantId);
+    });
 }
