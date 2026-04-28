@@ -36,16 +36,18 @@ FAST_TESTS = [
     "test_01_auth.py",
     "test_02_filters.py",
     "test_03_maps.py",
-    "test_04_annotations.py",
     "test_05_tenants.py",
     "test_06_rate_limit_fast.py",
     "test_08_audit.py",
     "test_09_security.py",
-    "test_11_notes.py",
-    "test_12_annotation_edit_delete_move.py",
-    "test_13_note_groups.py",
     "test_15_cors.py",
 ]
+
+# Tests that returned in #96 (NodeController) and #83 (Note CRUD restructure):
+#   test_NN_nodes.py — node CRUD + tree filtering + max-depth
+#   test_NN_notes.py — note CRUD against nodes
+# Annotation/note-group tests are gone permanently — those concepts were
+# consolidated into nodes and visibility groups during the rebuild.
 
 NIGHTLY_EXTRA = ["test_07_rate_limit_slow.py"]
 EXTENDED_EXTRA = ["test_10_soak.py"]
@@ -53,17 +55,14 @@ EXTENDED_EXTRA = ["test_10_soak.py"]
 TEST_DESCRIPTIONS = {
     1: "Auth (registration, login, refresh, deactivation)",
     2: "Filters (JwtFilter, TenantFilter)",
-    3: "Maps (CRUD, scoping, pagination, permissions)",
-    4: "Annotations (CRUD, GeoJSON validation, media URLs)",
+    3: "Maps (CRUD, coordinateSystem JSON, ownerXray, scoping, pagination, permissions)",
     5: "Tenants (members, branding)",
     6: "Rate limit — fast (enforcement, Retry-After header)",
     7: "Rate limit — slow (300s window expiry) [nightly+]",
     8: "Audit log (event recording, IP presence)",
     9: "Security (cross-org isolation, headers)",
     10: "Rate limit — soak (10min continuous) [extended]",
-    11: "Notes (CRUD, cross-org isolation)",
-    12: "Annotation edit, delete, and move",
-    13: "Note groups (CRUD, assignment, filtering, permissions)",
+    15: "CORS preflight",
 }
 
 

@@ -117,7 +117,8 @@ SELECT COUNT(*) INTO @after FROM tenant_members;
 CALL assert_true('tenant_members rejects duplicate (tenant_id, user_id)', @before = @after);
 
 -- map_permissions: duplicate (map_id, non-NULL user_id) is rejected
-INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (1, 1, 1, 'Test Map');
+INSERT INTO maps (id, owner_id, tenant_id, title, coordinate_system)
+    VALUES (1, 1, 1, 'Test Map', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 INSERT INTO map_permissions (map_id, user_id, level) VALUES (1, 1, 'view');
 
 DROP PROCEDURE IF EXISTS test_dup_map_perm_user;
@@ -151,6 +152,22 @@ SELECT COUNT(*) INTO @before FROM sso_providers;
 CALL test_dup_sso_org();
 SELECT COUNT(*) INTO @after FROM sso_providers;
 CALL assert_true('sso_providers rejects duplicate org_id', @before = @after);
+
+-- visibility_groups: duplicate (tenant_id, name)
+INSERT INTO visibility_groups (tenant_id, name, created_by) VALUES (1, 'Players', 1);
+DROP PROCEDURE IF EXISTS test_dup_vg;
+DELIMITER $$
+CREATE PROCEDURE test_dup_vg()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR 1062 BEGIN END;
+    INSERT INTO visibility_groups (tenant_id, name, created_by) VALUES (1, 'Players', 1);
+END$$
+DELIMITER ;
+SELECT COUNT(*) INTO @before FROM visibility_groups;
+CALL test_dup_vg();
+SELECT COUNT(*) INTO @after FROM visibility_groups;
+CALL assert_true('visibility_groups rejects duplicate (tenant_id, name)', @before = @after);
+DROP PROCEDURE IF EXISTS test_dup_vg;
 
 -- Cleanup procedures
 DROP PROCEDURE IF EXISTS test_dup_username;

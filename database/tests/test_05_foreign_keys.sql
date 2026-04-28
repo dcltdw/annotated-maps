@@ -17,9 +17,12 @@ DROP PROCEDURE IF EXISTS test_fk_map_bad_tenant;
 DROP PROCEDURE IF EXISTS test_fk_tm_bad_tenant;
 DROP PROCEDURE IF EXISTS test_fk_tm_bad_user;
 DROP PROCEDURE IF EXISTS test_fk_tenant_bad_org;
-DROP PROCEDURE IF EXISTS test_fk_ann_bad_map;
-DROP PROCEDURE IF EXISTS test_fk_ann_bad_creator;
-DROP PROCEDURE IF EXISTS test_fk_media_bad_ann;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_map;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_creator;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_parent;
+DROP PROCEDURE IF EXISTS test_fk_nodemedia_bad_node;
+DROP PROCEDURE IF EXISTS test_fk_note_bad_node;
+DROP PROCEDURE IF EXISTS test_fk_notemedia_bad_note;
 DROP PROCEDURE IF EXISTS test_fk_sso_bad_org;
 DROP PROCEDURE IF EXISTS test_fk_audit_bad_user;
 
@@ -28,13 +31,15 @@ DELIMITER $$
 CREATE PROCEDURE test_fk_map_bad_owner()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
-    INSERT INTO maps (owner_id, tenant_id, title) VALUES (99999, 30, 'BadOwner');
+    INSERT INTO maps (owner_id, tenant_id, title, coordinate_system)
+        VALUES (99999, 30, 'BadOwner', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 END$$
 
 CREATE PROCEDURE test_fk_map_bad_tenant()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
-    INSERT INTO maps (owner_id, tenant_id, title) VALUES (30, 99999, 'BadTenant');
+    INSERT INTO maps (owner_id, tenant_id, title, coordinate_system)
+        VALUES (30, 99999, 'BadTenant', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 END$$
 
 CREATE PROCEDURE test_fk_tm_bad_tenant()
@@ -55,24 +60,42 @@ BEGIN
     INSERT INTO tenants (org_id, name, slug) VALUES (99999, 'BadOrg', 'badorg');
 END$$
 
-CREATE PROCEDURE test_fk_ann_bad_map()
+CREATE PROCEDURE test_fk_node_bad_map()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
-    INSERT INTO annotations (map_id, created_by, type, title, geo_json)
-        VALUES (99999, 30, 'marker', 'Bad', '{"type":"Point","coordinates":[0,0]}');
+    INSERT INTO nodes (map_id, created_by, name) VALUES (99999, 30, 'Bad');
 END$$
 
-CREATE PROCEDURE test_fk_ann_bad_creator()
+CREATE PROCEDURE test_fk_node_bad_creator()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
-    INSERT INTO annotations (map_id, created_by, type, title, geo_json)
-        VALUES (30, 99999, 'marker', 'Bad', '{"type":"Point","coordinates":[0,0]}');
+    INSERT INTO nodes (map_id, created_by, name) VALUES (30, 99999, 'Bad');
 END$$
 
-CREATE PROCEDURE test_fk_media_bad_ann()
+CREATE PROCEDURE test_fk_node_bad_parent()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
-    INSERT INTO annotation_media (annotation_id, media_type, url)
+    INSERT INTO nodes (map_id, parent_id, created_by, name)
+        VALUES (30, 99999, 30, 'BadParent');
+END$$
+
+CREATE PROCEDURE test_fk_nodemedia_bad_node()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
+    INSERT INTO node_media (node_id, media_type, url)
+        VALUES (99999, 'image', 'https://example.com/bad.png');
+END$$
+
+CREATE PROCEDURE test_fk_note_bad_node()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
+    INSERT INTO notes (node_id, created_by, text) VALUES (99999, 30, 'orphan');
+END$$
+
+CREATE PROCEDURE test_fk_notemedia_bad_note()
+BEGIN
+    DECLARE CONTINUE HANDLER FOR 1452 BEGIN END;
+    INSERT INTO note_media (note_id, media_type, url)
         VALUES (99999, 'image', 'https://example.com/bad.png');
 END$$
 
@@ -118,21 +141,37 @@ CALL test_fk_tenant_bad_org();
 SELECT COUNT(*) INTO @after FROM tenants;
 CALL assert_true('tenants rejects invalid org_id', @before = @after);
 
-SELECT COUNT(*) INTO @before FROM annotations;
-CALL test_fk_ann_bad_map();
-SELECT COUNT(*) INTO @after FROM annotations;
-CALL assert_true('annotations rejects invalid map_id', @before = @after);
+SELECT COUNT(*) INTO @before FROM nodes;
+CALL test_fk_node_bad_map();
+SELECT COUNT(*) INTO @after FROM nodes;
+CALL assert_true('nodes rejects invalid map_id', @before = @after);
 
-INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (30, 30, 30, 'FKMap');
-SELECT COUNT(*) INTO @before FROM annotations;
-CALL test_fk_ann_bad_creator();
-SELECT COUNT(*) INTO @after FROM annotations;
-CALL assert_true('annotations rejects invalid created_by', @before = @after);
+INSERT INTO maps (id, owner_id, tenant_id, title, coordinate_system)
+    VALUES (30, 30, 30, 'FKMap', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
+SELECT COUNT(*) INTO @before FROM nodes;
+CALL test_fk_node_bad_creator();
+SELECT COUNT(*) INTO @after FROM nodes;
+CALL assert_true('nodes rejects invalid created_by', @before = @after);
 
-SELECT COUNT(*) INTO @before FROM annotation_media;
-CALL test_fk_media_bad_ann();
-SELECT COUNT(*) INTO @after FROM annotation_media;
-CALL assert_true('annotation_media rejects invalid annotation_id', @before = @after);
+SELECT COUNT(*) INTO @before FROM nodes;
+CALL test_fk_node_bad_parent();
+SELECT COUNT(*) INTO @after FROM nodes;
+CALL assert_true('nodes rejects invalid parent_id', @before = @after);
+
+SELECT COUNT(*) INTO @before FROM node_media;
+CALL test_fk_nodemedia_bad_node();
+SELECT COUNT(*) INTO @after FROM node_media;
+CALL assert_true('node_media rejects invalid node_id', @before = @after);
+
+SELECT COUNT(*) INTO @before FROM notes;
+CALL test_fk_note_bad_node();
+SELECT COUNT(*) INTO @after FROM notes;
+CALL assert_true('notes rejects invalid node_id', @before = @after);
+
+SELECT COUNT(*) INTO @before FROM note_media;
+CALL test_fk_notemedia_bad_note();
+SELECT COUNT(*) INTO @after FROM note_media;
+CALL assert_true('note_media rejects invalid note_id', @before = @after);
 
 SELECT COUNT(*) INTO @before FROM sso_providers;
 CALL test_fk_sso_bad_org();
@@ -156,8 +195,11 @@ DROP PROCEDURE IF EXISTS test_fk_map_bad_tenant;
 DROP PROCEDURE IF EXISTS test_fk_tm_bad_tenant;
 DROP PROCEDURE IF EXISTS test_fk_tm_bad_user;
 DROP PROCEDURE IF EXISTS test_fk_tenant_bad_org;
-DROP PROCEDURE IF EXISTS test_fk_ann_bad_map;
-DROP PROCEDURE IF EXISTS test_fk_ann_bad_creator;
-DROP PROCEDURE IF EXISTS test_fk_media_bad_ann;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_map;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_creator;
+DROP PROCEDURE IF EXISTS test_fk_node_bad_parent;
+DROP PROCEDURE IF EXISTS test_fk_nodemedia_bad_node;
+DROP PROCEDURE IF EXISTS test_fk_note_bad_node;
+DROP PROCEDURE IF EXISTS test_fk_notemedia_bad_note;
 DROP PROCEDURE IF EXISTS test_fk_sso_bad_org;
 DROP PROCEDURE IF EXISTS test_fk_audit_bad_user;
