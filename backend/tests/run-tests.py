@@ -43,10 +43,12 @@ FAST_TESTS = [
     "test_14_nodes.py",
     "test_15_cors.py",
     "test_16_notes.py",
+    "test_17_media.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
 # test_16_notes.py landed in #83 (Note CRUD restructured under nodes).
+# test_17_media.py landed in #84 (Media for nodes and notes).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -66,6 +68,7 @@ TEST_DESCRIPTIONS = {
     14: "Nodes (CRUD, tree filtering, max-depth, cross-tenant)",
     15: "CORS preflight",
     16: "Notes (CRUD attached to nodes, pinned-first sort, cross-tenant)",
+    17: "Media on nodes and notes (CRUD, scheme validation, CASCADE)",
 }
 
 
