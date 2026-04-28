@@ -2,6 +2,7 @@
 #include "AuditLog.h"
 #include "ErrorResponse.h"
 #include <drogon/drogon.h>
+#include <sstream>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("userId"); }
@@ -12,6 +13,74 @@ static int callerOrgId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("orgId"); }
     catch (...) { return 0; }
 }
+
+// ─── coordinate_system validation ────────────────────────────────────────────
+// Validates the JSON shape stored on `maps.coordinate_system`. Phase 2f
+// adds frontend rendering for `pixel` and `blank`; the schema accepts
+// all three types from day one. Returns empty string on success or an
+// error message describing the first problem found.
+
+namespace {
+
+std::string validateCoordinateSystem(const Json::Value& cs) {
+    if (!cs.isObject())                return "coordinateSystem must be an object";
+    if (!cs.isMember("type"))          return "coordinateSystem.type is required";
+    if (!cs["type"].isString())        return "coordinateSystem.type must be a string";
+
+    const std::string type = cs["type"].asString();
+    if (type == "wgs84") {
+        if (!cs.isMember("center") || !cs["center"].isObject())
+            return "coordinateSystem.center object required for type wgs84";
+        const auto& center = cs["center"];
+        if (!center.isMember("lat") || !center["lat"].isNumeric())
+            return "coordinateSystem.center.lat must be numeric";
+        if (!center.isMember("lng") || !center["lng"].isNumeric())
+            return "coordinateSystem.center.lng must be numeric";
+        if (!cs.isMember("zoom") || !cs["zoom"].isNumeric())
+            return "coordinateSystem.zoom must be numeric for type wgs84";
+        return "";
+    }
+    if (type == "pixel") {
+        if (!cs.isMember("image_url") || !cs["image_url"].isString())
+            return "coordinateSystem.image_url must be a string for type pixel";
+        const std::string url = cs["image_url"].asString();
+        if (url.rfind("http://", 0) != 0 && url.rfind("https://", 0) != 0)
+            return "coordinateSystem.image_url must use http or https";
+        if (!cs.isMember("width") || !cs["width"].isNumeric() || cs["width"].asInt() <= 0)
+            return "coordinateSystem.width must be a positive number for type pixel";
+        if (!cs.isMember("height") || !cs["height"].isNumeric() || cs["height"].asInt() <= 0)
+            return "coordinateSystem.height must be a positive number for type pixel";
+        return "";
+    }
+    if (type == "blank") {
+        if (!cs.isMember("extent") || !cs["extent"].isObject())
+            return "coordinateSystem.extent object required for type blank";
+        return "";
+    }
+    return "coordinateSystem.type must be one of: wgs84, pixel, blank";
+}
+
+// Compact-print a Json::Value for storage in a JSON column.
+std::string compactJson(const Json::Value& v) {
+    Json::StreamWriterBuilder b;
+    b["indentation"] = "";
+    return Json::writeString(b, v);
+}
+
+// Parse a stored JSON column string back to a Json::Value.
+// Returns nullValue on parse failure (shouldn't happen for rows we wrote).
+Json::Value parseJsonColumn(const std::string& s) {
+    Json::Value v;
+    Json::CharReaderBuilder b;
+    std::istringstream iss(s);
+    std::string err;
+    if (!Json::parseFromStream(b, iss, &v, &err)) {
+        return Json::Value(Json::nullValue);
+    }
+    return v;
+}
+
+} // anonymous namespace
 
 // ─── GET /api/v1/tenants/{tenantId}/maps ──────────────────────────────────────
 
@@ -33,7 +102,7 @@ void MapController::listMaps(
     const std::string sql = R"(
         SELECT DISTINCT m.id, m.owner_id, u.username AS owner_username,
                m.title, m.description,
-               m.center_lat, m.center_lng, m.zoom,
+               m.coordinate_system, m.owner_xray,
                m.created_at, m.updated_at,
                CASE
                    WHEN m.owner_id = ? THEN 'owner'
@@ -63,17 +132,16 @@ void MapController::listMaps(
             Json::Value data(Json::arrayValue);
             for (const auto& row : r) {
                 Json::Value m;
-                m["id"]            = row["id"].as<int>();
-                m["ownerId"]       = row["owner_id"].as<int>();
-                m["ownerUsername"] = row["owner_username"].as<std::string>();
-                m["title"]         = row["title"].as<std::string>();
-                m["description"]   = row["description"].isNull() ? "" : row["description"].as<std::string>();
-                m["centerLat"]     = row["center_lat"].as<double>();
-                m["centerLng"]     = row["center_lng"].as<double>();
-                m["zoom"]          = row["zoom"].as<int>();
-                m["createdAt"]     = row["created_at"].as<std::string>();
-                m["updatedAt"]     = row["updated_at"].as<std::string>();
-                m["permission"]    = row["permission"].as<std::string>();
+                m["id"]                = row["id"].as<int>();
+                m["ownerId"]           = row["owner_id"].as<int>();
+                m["ownerUsername"]     = row["owner_username"].as<std::string>();
+                m["title"]             = row["title"].as<std::string>();
+                m["description"]       = row["description"].isNull() ? "" : row["description"].as<std::string>();
+                m["coordinateSystem"]  = parseJsonColumn(row["coordinate_system"].as<std::string>());
+                m["ownerXray"]         = row["owner_xray"].as<bool>();
+                m["createdAt"]         = row["created_at"].as<std::string>();
+                m["updatedAt"]         = row["updated_at"].as<std::string>();
+                m["permission"]        = row["permission"].as<std::string>();
                 data.append(m);
             }
             Json::Value resp;
@@ -102,22 +170,38 @@ void MapController::createMap(
     int userId = callerUserId(req);
     auto body  = req->getJsonObject();
     if (!body || !(*body)["title"]) {
-        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-            errorJson("bad_request", "title is required"));
-        resp->setStatusCode(drogon::k400BadRequest);
-        callback(resp);
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "title is required"));
         return;
     }
 
     std::string title       = (*body)["title"].asString();
     std::string description = (*body).get("description", "").asString();
-    double      centerLat   = (*body).get("centerLat", 0.0).asDouble();
-    double      centerLng   = (*body).get("centerLng", 0.0).asDouble();
-    int         zoom        = (*body).get("zoom", 3).asInt();
 
     // M8: enforce input length limits before any DB work
     if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
     if (!checkMaxLen("description", description, MAX_DESCRIPTION_LEN, callback)) return;
+
+    // coordinate_system: required; default to a usable WGS84 view if absent
+    Json::Value coordSys;
+    if (body->isMember("coordinateSystem")) {
+        coordSys = (*body)["coordinateSystem"];
+    } else {
+        coordSys["type"]   = "wgs84";
+        coordSys["center"] = Json::Value(Json::objectValue);
+        coordSys["center"]["lat"] = 0.0;
+        coordSys["center"]["lng"] = 0.0;
+        coordSys["zoom"]   = 3;
+    }
+    {
+        std::string err = validateCoordinateSystem(coordSys);
+        if (!err.empty()) {
+            callback(errorResponse(drogon::k400BadRequest, "bad_request", err));
+            return;
+        }
+    }
+    bool ownerXray = (*body).get("ownerXray", false).asBool();
+    std::string coordSysJson = compactJson(coordSys);
 
     // M9 + L4: enforce per-tenant map limit atomically. The previous pattern
     // (SELECT COUNT then INSERT in separate queries) raced — two concurrent
@@ -127,10 +211,10 @@ void MapController::createMap(
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "INSERT INTO maps (owner_id, tenant_id, title, description, "
-        "                  center_lat, center_lng, zoom) "
-        "SELECT ?,?,?,?,?,?,? FROM dual "
+        "                  coordinate_system, owner_xray) "
+        "SELECT ?,?,?,?,CAST(? AS JSON),? FROM dual "
         "WHERE (SELECT COUNT(*) FROM maps WHERE tenant_id=?) < 1000",
-        [callback, userId, tenantId, title, description, centerLat, centerLng, zoom]
+        [callback, userId, tenantId, title, description, coordSys, ownerXray]
         (const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
                 callback(errorResponse(drogon::k400BadRequest,
@@ -139,15 +223,14 @@ void MapController::createMap(
             }
             int newId = static_cast<int>(r.insertId());
             Json::Value m;
-            m["id"]          = newId;
-            m["ownerId"]     = userId;
-            m["tenantId"]    = tenantId;
-            m["title"]       = title;
-            m["description"] = description;
-            m["centerLat"]   = centerLat;
-            m["centerLng"]   = centerLng;
-            m["zoom"]        = zoom;
-            m["permission"]  = "owner";
+            m["id"]                = newId;
+            m["ownerId"]           = userId;
+            m["tenantId"]          = tenantId;
+            m["title"]             = title;
+            m["description"]       = description;
+            m["coordinateSystem"]  = coordSys;
+            m["ownerXray"]         = ownerXray;
+            m["permission"]        = "owner";
             auto resp = drogon::HttpResponse::newHttpJsonResponse(m);
             resp->setStatusCode(drogon::k201Created);
             callback(resp);
@@ -156,7 +239,7 @@ void MapController::createMap(
             callback(errorResponse(drogon::k500InternalServerError,
                 "db_error", "Failed to create map"));
         },
-        userId, tenantId, title, description, centerLat, centerLng, zoom, tenantId);
+        userId, tenantId, title, description, coordSysJson, ownerXray, tenantId);
 }
 
 // ─── GET /api/v1/tenants/{tenantId}/maps/{id} ─────────────────────────────────
@@ -170,7 +253,7 @@ void MapController::getMap(
     const std::string sql = R"(
         SELECT m.id, m.owner_id, u.username AS owner_username,
                m.title, m.description,
-               m.center_lat, m.center_lng, m.zoom,
+               m.coordinate_system, m.owner_xray,
                m.created_at, m.updated_at,
                CASE
                    WHEN m.owner_id = ? THEN 'owner'
@@ -193,33 +276,28 @@ void MapController::getMap(
         sql,
         [callback](const drogon::orm::Result& r) {
             if (r.empty()) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("not_found", "Map not found"));
-                resp->setStatusCode(drogon::k404NotFound);
-                callback(resp);
+                callback(errorResponse(drogon::k404NotFound,
+                    "not_found", "Map not found"));
                 return;
             }
             const auto& row = r[0];
             std::string perm = row["permission"].as<std::string>();
             if (perm == "none") {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("forbidden", "You do not have permission to view this map"));
-                resp->setStatusCode(drogon::k403Forbidden);
-                callback(resp);
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "You do not have permission to view this map"));
                 return;
             }
             Json::Value m;
-            m["id"]            = row["id"].as<int>();
-            m["ownerId"]       = row["owner_id"].as<int>();
-            m["ownerUsername"] = row["owner_username"].as<std::string>();
-            m["title"]         = row["title"].as<std::string>();
-            m["description"]   = row["description"].isNull() ? "" : row["description"].as<std::string>();
-            m["centerLat"]     = row["center_lat"].as<double>();
-            m["centerLng"]     = row["center_lng"].as<double>();
-            m["zoom"]          = row["zoom"].as<int>();
-            m["createdAt"]     = row["created_at"].as<std::string>();
-            m["updatedAt"]     = row["updated_at"].as<std::string>();
-            m["permission"]    = perm;
+            m["id"]                = row["id"].as<int>();
+            m["ownerId"]           = row["owner_id"].as<int>();
+            m["ownerUsername"]     = row["owner_username"].as<std::string>();
+            m["title"]             = row["title"].as<std::string>();
+            m["description"]       = row["description"].isNull() ? "" : row["description"].as<std::string>();
+            m["coordinateSystem"]  = parseJsonColumn(row["coordinate_system"].as<std::string>());
+            m["ownerXray"]         = row["owner_xray"].as<bool>();
+            m["createdAt"]         = row["created_at"].as<std::string>();
+            m["updatedAt"]         = row["updated_at"].as<std::string>();
+            m["permission"]        = perm;
             callback(drogon::HttpResponse::newHttpJsonResponse(m));
         },
         [callback](const drogon::orm::DrogonDbException&) {
@@ -241,15 +319,13 @@ void MapController::updateMap(
     int userId = callerUserId(req);
     auto body  = req->getJsonObject();
     if (!body) {
-        auto resp = drogon::HttpResponse::newHttpJsonResponse(
-            errorJson("bad_request", "Request body required"));
-        resp->setStatusCode(drogon::k400BadRequest);
-        callback(resp);
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "Request body required"));
         return;
     }
 
-    // Extract optional fields — build SET clause dynamically to avoid
-    // passing pointers to temporaries (which don't compile).
+    // Extract optional fields — build SET clause dynamically with
+    // sentinel-based IF(...) so a missing field leaves the column unchanged.
     std::string title       = (*body).get("title", "").asString();
     std::string description = (*body).get("description", "").asString();
 
@@ -257,21 +333,28 @@ void MapController::updateMap(
     if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
     if (!checkMaxLen("description", description, MAX_DESCRIPTION_LEN, callback)) return;
 
-    bool hasLat  = body->isMember("centerLat");
-    bool hasLng  = body->isMember("centerLng");
-    bool hasZoom = body->isMember("zoom");
-    double centerLat = hasLat  ? (*body)["centerLat"].asDouble() : 0.0;
-    double centerLng = hasLng  ? (*body)["centerLng"].asDouble() : 0.0;
-    int    zoom      = hasZoom ? (*body)["zoom"].asInt()          : 0;
+    // coordinate_system: optional on update; if present, validate before write.
+    bool hasCoord = body->isMember("coordinateSystem");
+    std::string coordSysJson;
+    if (hasCoord) {
+        std::string err = validateCoordinateSystem((*body)["coordinateSystem"]);
+        if (!err.empty()) {
+            callback(errorResponse(drogon::k400BadRequest, "bad_request", err));
+            return;
+        }
+        coordSysJson = compactJson((*body)["coordinateSystem"]);
+    }
+
+    bool hasOwnerXray = body->isMember("ownerXray");
+    bool ownerXray = hasOwnerXray ? (*body)["ownerXray"].asBool() : false;
 
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "UPDATE maps SET "
-        "title       = IF(?='', title, ?), "
-        "description = IF(?='', description, ?), "
-        "center_lat  = IF(?, ?, center_lat), "
-        "center_lng  = IF(?, ?, center_lng), "
-        "zoom        = IF(?, ?, zoom) "
+        "title             = IF(?='', title, ?), "
+        "description       = IF(?='', description, ?), "
+        "coordinate_system = IF(?, CAST(? AS JSON), coordinate_system), "
+        "owner_xray        = IF(?, ?, owner_xray) "
         "WHERE id=? AND tenant_id=? AND owner_id=?",
         [callback, req, userId, tenantId, id](const drogon::orm::Result& r) {
             if (r.affectedRows() == 0) {
@@ -294,9 +377,8 @@ void MapController::updateMap(
         },
         title, title,
         description, description,
-        hasLat, centerLat,
-        hasLng, centerLng,
-        hasZoom, zoom,
+        hasCoord, coordSysJson,
+        hasOwnerXray, ownerXray,
         id, tenantId, userId);
 }
 
