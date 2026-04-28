@@ -10,14 +10,30 @@
  * PUT    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}
  * DELETE /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}
  *
+ * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility
+ * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility
+ *
  * Node = the central new abstraction in the nodes-rebuild model
  * (tree-structured place markers, replacing annotations + adding
  * hierarchy via parent_id). See #96 and the nodes-rebuild branch
  * for the full design.
  *
- * Visibility filtering is NOT applied at this phase (Phase 2a.i.b);
- * standard map permission gating is sufficient. Per-node visibility
- * filtering arrives in Phase 2b.ii (#86 + #99).
+ * Per-node visibility tagging (set/get) lands in Phase 2b.ii.a (#86):
+ * stored state only; effective inheritance + filtering lands in #99.
+ * Authorization for the visibility endpoints uses VisibilityAuth.h's
+ * requireVisibilityGroupManager (tenant admin OR manages_visibility
+ * group member).
+ *
+ * POST /visibility body shape:
+ *   { override?: bool, groupIds?: number[] }
+ *   - override and groupIds are independently authoritative.
+ *   - groupIds OMITTED → leave existing tags untouched.
+ *   - groupIds PRESENT (even if []) → replace the entire tag set.
+ *   - All groupIds must belong to {tenantId}.
+ *   - Tags are kept regardless of override flag — flipping override
+ *     to FALSE doesn't drop the rows. (Inheritance treats override
+ *     = FALSE as "ignore my own tags, walk up parent_id"; the rows
+ *     remain ready to re-activate.)
  */
 class NodeController : public drogon::HttpController<NodeController> {
 public:
@@ -37,6 +53,12 @@ public:
         ADD_METHOD_TO(NodeController::deleteNode,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}",
                       drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(NodeController::getVisibility,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility",
+                      drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(NodeController::setVisibility,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility",
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listNodes(const drogon::HttpRequestPtr&,
@@ -54,6 +76,12 @@ public:
     void deleteNode(const drogon::HttpRequestPtr&,
                     std::function<void(const drogon::HttpResponsePtr&)>&&,
                     int tenantId, int mapId, int id);
+    void getVisibility(const drogon::HttpRequestPtr&,
+                       std::function<void(const drogon::HttpResponsePtr&)>&&,
+                       int tenantId, int mapId, int id);
+    void setVisibility(const drogon::HttpRequestPtr&,
+                       std::function<void(const drogon::HttpResponsePtr&)>&&,
+                       int tenantId, int mapId, int id);
 };
 
 // Maximum tree depth for node parent_id chains. Bounded so the
