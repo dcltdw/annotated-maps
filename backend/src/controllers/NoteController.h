@@ -15,9 +15,27 @@
  * PUT    /api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}
  * DELETE /api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}
  *
- * Visibility filtering arrives in Phase 2b.iii (#87). For now, standard
- * map view-access gates list/get; map edit-access (or note creator)
- * gates update/delete.
+ * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}/visibility
+ * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}/visibility
+ *
+ * Phase 2b.iii (#87) wires up visibility tagging + read-time filtering
+ * for notes. Effective visibility for a note:
+ *   1. If note.visibility_override = TRUE → use note_visibility rows.
+ *   2. Else walk to the attached node and recurse up the node parent
+ *      chain (same as #99) to its first override = TRUE ancestor; use
+ *      that node's node_visibility rows.
+ *   3. If no override anywhere up the chain → admin-only (empty set).
+ *
+ * Tenant admins bypass the filter; map owners with owner_xray = TRUE
+ * see every note. Hidden notes return 404 (don't leak existence).
+ *
+ * POST /visibility body shape (same as nodes in #86):
+ *   { override?: bool, groupIds?: number[] }
+ *   - groupIds OMITTED → leave existing tags untouched.
+ *   - groupIds PRESENT (even []) → replace the entire tag set.
+ *   - All groupIds must belong to {tenantId}.
+ *   - Tags are kept regardless of override flag (lean: keep them so
+ *     they can re-activate when override is flipped back on).
  */
 class NoteController : public drogon::HttpController<NoteController> {
 public:
@@ -37,6 +55,12 @@ public:
         ADD_METHOD_TO(NoteController::deleteNote,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}",
                       drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(NoteController::getVisibility,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}/visibility",
+                      drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(NoteController::setVisibility,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{id}/visibility",
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listNotes(const drogon::HttpRequestPtr&,
@@ -54,4 +78,10 @@ public:
     void deleteNote(const drogon::HttpRequestPtr&,
                     std::function<void(const drogon::HttpResponsePtr&)>&&,
                     int tenantId, int mapId, int id);
+    void getVisibility(const drogon::HttpRequestPtr&,
+                       std::function<void(const drogon::HttpResponsePtr&)>&&,
+                       int tenantId, int mapId, int id);
+    void setVisibility(const drogon::HttpRequestPtr&,
+                       std::function<void(const drogon::HttpResponsePtr&)>&&,
+                       int tenantId, int mapId, int id);
 };
