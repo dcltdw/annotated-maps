@@ -42,10 +42,11 @@ FAST_TESTS = [
     "test_09_security.py",
     "test_14_nodes.py",
     "test_15_cors.py",
+    "test_16_notes.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
-# test_NN_notes.py returns in #83 (Note CRUD restructure).
+# test_16_notes.py landed in #83 (Note CRUD restructured under nodes).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -64,6 +65,7 @@ TEST_DESCRIPTIONS = {
     10: "Rate limit — soak (10min continuous) [extended]",
     14: "Nodes (CRUD, tree filtering, max-depth, cross-tenant)",
     15: "CORS preflight",
+    16: "Notes (CRUD attached to nodes, pinned-first sort, cross-tenant)",
 }
 
 
