@@ -2,7 +2,16 @@ name: PR Tests
 
 on:
   pull_request:
-    branches: [main]
+    # `nodes-rebuild` is a long-running rebuild branch; PRs into it run
+    # the full suite for visibility, though main is the enforced gate
+    # (no ruleset on nodes-rebuild — see PR description). E2E will fail
+    # on nodes-rebuild PRs until the frontend phases (#92+) catch up;
+    # that's expected mid-rebuild.
+    branches: [main, nodes-rebuild]
+  push:
+    # Verify the integrated state after each merge into nodes-rebuild,
+    # not just per-PR. Belt-and-suspenders for cumulative regressions.
+    branches: [nodes-rebuild]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
