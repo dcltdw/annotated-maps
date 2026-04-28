@@ -48,6 +48,7 @@ FAST_TESTS = [
     "test_19_node_visibility.py",
     "test_20_node_visibility_filter.py",
     "test_21_note_visibility.py",
+    "test_22_plots.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
@@ -59,6 +60,8 @@ FAST_TESTS = [
 #   + read-time filtering + owner_xray bypass on GET nodes / GET nodes/{id}).
 # test_21_note_visibility.py landed in #87 (note tagging + filtering;
 #   note → node → parent-chain inheritance).
+# test_22_plots.py landed in #88 (PlotController CRUD + membership +
+#   visibility filter on listMembers).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -83,6 +86,7 @@ TEST_DESCRIPTIONS = {
     19: "Node visibility tagging (set/get override + groupIds on nodes)",
     20: "Node visibility read filter (admin bypass, inheritance, owner_xray)",
     21: "Note visibility (tagging + filter; note → node → parent-chain)",
+    22: "Plots (CRUD, membership, visibility filter on listMembers)",
 }
 
 
