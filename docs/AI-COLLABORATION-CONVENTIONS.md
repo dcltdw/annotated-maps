@@ -37,6 +37,8 @@ agent instructions:
    branch is action #1**, before any feature ticket starts.
 9. **Stamp commits with the current AI model name** (not a previously-used
    string) in the `Co-Authored-By:` trailer.
+10. **When a rule here is added, modified, or removed, update this document
+    and agent memory in the same change** so the two stay in sync.
 
 ---
 
@@ -373,20 +375,64 @@ Sequence for any future long-running branch:
 
 ---
 
+## Meta — keeping these conventions current
+
+### 10. Update this document and agent memory together
+
+> **Rule:** When a rule in this document is added, modified, or removed,
+> apply the same change to the agent's memory store in the same PR (or
+> conversation turn) so the two representations stay in sync.
+
+**Why:** These conventions live in two places — this document (committed,
+shareable, the canonical reference) and the agent's per-project memory (where
+they shape behavior turn-by-turn). Drift between them has a predictable
+failure mode: the doc says one thing, the agent does another, and a human
+collaborator can't tell which is authoritative. Updating both at once keeps
+the document trustworthy as a porting source AND keeps the agent's behavior
+matching what the doc claims.
+
+**How to apply:**
+
+When the user asks to add, change, or drop a rule:
+
+1. **Edit this document** — both the **Quick reference** one-liner *and* the
+   per-rule expanded section (Rule / Why / How to apply). Renumber later
+   rules if inserting; remove the entry if deleting.
+2. **Edit agent memory** — the corresponding `feedback_*.md` file (write a
+   new one for additions, edit for modifications, delete for removals).
+   Update `MEMORY.md` to add/remove the pointer.
+3. **Commit both together** in the same PR so the diff makes the linkage
+   visible.
+
+For a rule discovered organically mid-conversation (e.g., the user
+corrects something), do the same — capture it in memory immediately, then
+fold it into this document on the next reasonable PR boundary (don't let
+the doc lag behind memory by more than one ticket).
+
+**Inverse direction:** if the doc is edited directly (e.g., the user
+fixes wording or clarifies an example), reflect the same change in the
+relevant `feedback_*.md` memory file. The two are mirrors of each other,
+not master/replica.
+
+---
+
 ## Adapting these conventions to other projects
 
 When porting to another project:
 
-- **Rules 1–6 and 9** are largely tooling-agnostic — the rule statements
+- **Rules 1, 4, 5, 6, 10** are fully tooling-agnostic — the rule statements
   transfer directly.
-- **Rule 2 (status lifecycle)** carries a project-board GraphQL ID block
-  in **How to apply** that needs replacement with the new project's IDs.
+- **Rule 2 (status lifecycle)** carries a project-board GraphQL ID block in
+  **How to apply** that needs replacement with the new project's IDs.
 - **Rule 3 (default project)** has the project number / owner hardcoded —
   swap for your project's equivalents.
-- **Rule 7 (Co-Authored-By trailer)** assumes Claude; for other agents
+- **Rule 7 (public-repo scan)** only applies if the repo is public. Skip it
+  for private repos, but consider keeping the secrets-scan portion anyway —
+  leaked credentials in private-repo history are still a risk if the repo's
+  visibility ever changes.
+- **Rule 8 (long-running branch CI)** assumes GitHub Actions; adapt the
+  "extend the workflow" mechanics for other CI systems (GitLab CI, Buildkite,
+  etc.).
+- **Rule 9 (Co-Authored-By trailer)** assumes Claude; for other agents
   (Cursor, Aider, etc.) adjust the trailer format to match what the agent
   actually identifies as.
-- **Rule 8 (public-repo scan)** only applies if the repo is public.
-  Skip it for private repos, but consider keeping the secrets-scan portion
-  anyway — leaked credentials in private-repo history are still a risk if
-  the repo's visibility ever changes.
