@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""test_18_visibility_groups.py — Visibility groups CRUD (Phase 2b.i.a).
+"""test_18_visibility_groups.py — Visibility groups CRUD + members + bootstrap.
 
-This phase is admin-only. Member management + the manages_visibility
-escape hatch + tenant-creation bootstrap arrive in Phase 2b.i.b (#98);
-proper non-admin authorization tests live there too. Personal-tenant
-users (the only thing test infrastructure can produce today) are always
-admins of their own tenant, so non-admin coverage is deferred.
+Phase 2b.i.a wired up admin-only CRUD; Phase 2b.i.b (#98) layers in:
+  * Member-management endpoints (list / add / remove)
+  * The manager-flag-based authorization helper (allows non-admin
+    members of any manages_visibility group to manage groups too)
+  * Tenant-creation bootstrap of a default "Visibility Managers"
+    group with the registering user as the sole member
+  * Escalation guards: only tenant admins can set/change the
+    managesVisibility flag
+
+Tests for non-admin managers actually exercising the manager-flag
+auth helper require a same-org non-admin user, which the personal-
+tenant test infrastructure can't produce. Documented inline; covered
+by code review for now.
 """
 
 import os
@@ -31,7 +39,33 @@ TENANT_A = json_field(body_a, ["tenantId"])
 
 TOKEN_B = register_user(f"t18_b_{RUN_ID}", f"t18_b_{RUN_ID}@test.com", "testpass123")
 
+USER_A_ID = json_field(body_a, ["user", "id"])
+
 BASE = f"/tenants/{TENANT_A}/visibility-groups"
+
+# ─── Tenant bootstrap ────────────────────────────────────────────────────────
+# Registration should auto-create a default "Visibility Managers" group
+# with manages_visibility=TRUE and the registering user as a member.
+
+print("  --- Bootstrap ---")
+
+status, body = http_get(BASE, TOKEN_A)
+assert_status("bootstrap: list returns 200", 200, status)
+managers = [g for g in body if g["name"] == "Visibility Managers"]
+assert_true("bootstrap: default Visibility Managers group exists",
+            len(managers) == 1)
+G_BOOTSTRAP = managers[0]["id"]
+assert_json_field("bootstrap: managesVisibility=true",
+                  managers[0], ["managesVisibility"], True)
+
+# Member of the bootstrap group should be the registering user.
+status, body = http_get(f"{BASE}/{G_BOOTSTRAP}/members", TOKEN_A)
+assert_status("bootstrap: list members returns 200", 200, status)
+member_ids = [m["userId"] for m in body]
+assert_true("bootstrap: caller is a member of Visibility Managers",
+            USER_A_ID in member_ids)
+
+print("  All bootstrap tests passed.")
 
 # ─── Create ──────────────────────────────────────────────────────────────────
 
@@ -167,5 +201,94 @@ status, _ = http_get(f"{BASE}/{G_PLAYERS}", TOKEN_A)
 assert_status("delete: group is gone", 404, status)
 
 print("  All delete tests passed.")
+
+# ─── Member management ──────────────────────────────────────────────────────
+
+print("  --- Members ---")
+
+# We deleted G_PLAYERS above; recreate one for member tests.
+_, body = http_post(BASE, {"name": "TestGroup"}, TOKEN_A)
+G_TEST = json_field(body, ["id"])
+
+# List is initially empty
+status, body = http_get(f"{BASE}/{G_TEST}/members", TOKEN_A)
+assert_status("members: list empty group returns 200", 200, status)
+assert_true("members: empty initially", isinstance(body, list) and len(body) == 0)
+
+# Add the caller (admin) as a member
+status, body = http_post(f"{BASE}/{G_TEST}/members", {"userId": USER_A_ID}, TOKEN_A)
+assert_status("members: add returns 201", 201, status)
+assert_json_field("members: visibilityGroupId in response",
+                  body, ["visibilityGroupId"], str(G_TEST))
+
+# Listing now returns 1
+status, body = http_get(f"{BASE}/{G_TEST}/members", TOKEN_A)
+assert_true("members: now contains 1", len(body) == 1)
+assert_json_field("members: userId correct", body[0], ["userId"], str(USER_A_ID))
+assert_json_exists("members: username present", body[0], ["username"])
+assert_json_exists("members: email present",    body[0], ["email"])
+
+# Idempotent (INSERT IGNORE): adding again still succeeds, list still shows 1
+status, _ = http_post(f"{BASE}/{G_TEST}/members", {"userId": USER_A_ID}, TOKEN_A)
+assert_status("members: dup add returns 201 (idempotent)", 201, status)
+status, body = http_get(f"{BASE}/{G_TEST}/members", TOKEN_A)
+assert_true("members: dup add stayed at 1", len(body) == 1)
+
+# Cross-org member rejected — login B again to extract user.id
+# (register_user helper only returns the token).
+_, body_b_login = http_post("/auth/login",
+    {"email": f"t18_b_{RUN_ID}@test.com", "password": "testpass123"})
+USER_B_ID = json_field(body_b_login, ["user", "id"])
+
+status, _ = http_post(f"{BASE}/{G_TEST}/members", {"userId": USER_B_ID}, TOKEN_A)
+assert_status("members: cross-org add rejected", 400, status)
+
+# Missing userId
+status, _ = http_post(f"{BASE}/{G_TEST}/members", {}, TOKEN_A)
+assert_status("members: missing userId returns 400", 400, status)
+
+# Cross-tenant blocked at TenantFilter
+status, _ = http_post(f"{BASE}/{G_TEST}/members", {"userId": USER_A_ID}, TOKEN_B)
+assert_status("members: cross-tenant add blocked", 403, status)
+
+# Remove the member
+status, _ = http_delete(f"{BASE}/{G_TEST}/members/{USER_A_ID}", TOKEN_A)
+assert_status("members: remove returns 204", 204, status)
+status, body = http_get(f"{BASE}/{G_TEST}/members", TOKEN_A)
+assert_true("members: list empty after remove", len(body) == 0)
+
+# Removing again returns 404
+status, _ = http_delete(f"{BASE}/{G_TEST}/members/{USER_A_ID}", TOKEN_A)
+assert_status("members: remove non-member returns 404", 404, status)
+
+# Cross-tenant remove blocked
+status, _ = http_delete(f"{BASE}/{G_TEST}/members/{USER_A_ID}", TOKEN_B)
+assert_status("members: cross-tenant remove blocked", 403, status)
+
+print("  All members tests passed.")
+
+# ─── managesVisibility escalation guard ─────────────────────────────────────
+# Setting managesVisibility=true is admin-only on both create and update.
+# The admin (TOKEN_A) can still do it freely; we cover the non-admin path
+# by code review since we can't produce a same-org non-admin user from
+# personal tenants alone.
+
+print("  --- managesVisibility escalation guard (admin happy paths) ---")
+
+# Admin creates a managesVisibility=true group OK
+status, body = http_post(BASE, {
+    "name": "AnotherManagerGroup", "managesVisibility": True,
+}, TOKEN_A)
+assert_status("escalation: admin creates managesVisibility group", 201, status)
+GMV = json_field(body, ["id"])
+
+# Admin can flip it back to false
+status, _ = http_put(f"{BASE}/{GMV}", {"managesVisibility": False}, TOKEN_A)
+assert_status("escalation: admin demotes the flag", 200, status)
+status, body = http_get(f"{BASE}/{GMV}", TOKEN_A)
+assert_json_field("escalation: managesVisibility=false persisted",
+                  body, ["managesVisibility"], False)
+
+print("  All escalation-guard happy paths passed.")
 
 sys.exit(0 if report() else 1)

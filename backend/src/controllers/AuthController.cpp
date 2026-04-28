@@ -143,6 +143,25 @@ void AuthController::registerUser(
                                         "VALUES (?,?,?)",
                                         [callback, req, newId, username, email, orgId, tenantId, this]
                                         (const drogon::orm::Result&) {
+                                    // Step 6: Bootstrap a default "Visibility Managers"
+                                    // group for the new tenant, with manages_visibility=TRUE
+                                    // and the registering user as the sole member. Lets
+                                    // the user delegate visibility-group management without
+                                    // promoting someone to full tenant admin (Phase 2b.i.b).
+                                    auto db6 = drogon::app().getDbClient();
+                                    db6->execSqlAsync(
+                                        "INSERT INTO visibility_groups "
+                                        "  (tenant_id, name, manages_visibility, created_by) "
+                                        "VALUES (?, 'Visibility Managers', TRUE, ?)",
+                                        [callback, req, newId, username, email, orgId, tenantId, this]
+                                        (const drogon::orm::Result& rvg) {
+                                    int vgId = static_cast<int>(rvg.insertId());
+                                    auto db7 = drogon::app().getDbClient();
+                                    db7->execSqlAsync(
+                                        "INSERT INTO visibility_group_members "
+                                        "  (visibility_group_id, user_id) VALUES (?, ?)",
+                                        [callback, req, newId, username, email, orgId, tenantId, this]
+                                        (const drogon::orm::Result&) {
                                     AuditLog::record("register", req, newId);
                                     std::string token = issueToken(newId, username, orgId);
 
@@ -168,6 +187,22 @@ void AuthController::registerUser(
                                         drogon::HttpResponse::newHttpJsonResponse(resp);
                                     httpResp->setStatusCode(drogon::k201Created);
                                     callback(httpResp);
+                                        },
+                                        [callback](const drogon::orm::DrogonDbException&) {
+                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                                                errorJson("db_error", "Failed to add to default visibility group"));
+                                            resp->setStatusCode(drogon::k500InternalServerError);
+                                            callback(resp);
+                                        },
+                                        vgId, newId);
+                                        },
+                                        [callback](const drogon::orm::DrogonDbException&) {
+                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                                                errorJson("db_error", "Failed to bootstrap default visibility group"));
+                                            resp->setStatusCode(drogon::k500InternalServerError);
+                                            callback(resp);
+                                        },
+                                        tenantId, newId);
                                         },
                                         [callback](const drogon::orm::DrogonDbException&) {
                                             auto resp = drogon::HttpResponse::newHttpJsonResponse(
