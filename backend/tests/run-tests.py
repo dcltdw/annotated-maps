@@ -40,12 +40,12 @@ FAST_TESTS = [
     "test_06_rate_limit_fast.py",
     "test_08_audit.py",
     "test_09_security.py",
+    "test_14_nodes.py",
     "test_15_cors.py",
 ]
 
-# Tests that returned in #96 (NodeController) and #83 (Note CRUD restructure):
-#   test_NN_nodes.py — node CRUD + tree filtering + max-depth
-#   test_NN_notes.py — note CRUD against nodes
+# test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
+# test_NN_notes.py returns in #83 (Note CRUD restructure).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -62,6 +62,7 @@ TEST_DESCRIPTIONS = {
     8: "Audit log (event recording, IP presence)",
     9: "Security (cross-org isolation, headers)",
     10: "Rate limit — soak (10min continuous) [extended]",
+    14: "Nodes (CRUD, tree filtering, max-depth, cross-tenant)",
     15: "CORS preflight",
 }
 
