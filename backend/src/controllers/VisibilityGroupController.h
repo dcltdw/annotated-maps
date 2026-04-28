@@ -2,7 +2,7 @@
 #include <drogon/HttpController.h>
 
 /**
- * VisibilityGroupController — tenant-scoped, admin-only CRUD.
+ * VisibilityGroupController — tenant-scoped CRUD + member management.
  *
  * GET    /api/v1/tenants/{tenantId}/visibility-groups
  * POST   /api/v1/tenants/{tenantId}/visibility-groups
@@ -10,19 +10,25 @@
  * PUT    /api/v1/tenants/{tenantId}/visibility-groups/{id}
  * DELETE /api/v1/tenants/{tenantId}/visibility-groups/{id}
  *
- * Visibility groups are tenant-scoped, generic audiences. No GM/Player
- * baked in — each tenant defines its own. The `manages_visibility`
- * flag designates a group whose members can manage visibility groups
- * (used by Phase 2b.i.b's auth helper); for THIS phase, only tenant
- * admins can CRUD groups, regardless of the flag.
+ * GET    /api/v1/tenants/{tenantId}/visibility-groups/{id}/members
+ * POST   /api/v1/tenants/{tenantId}/visibility-groups/{id}/members
+ * DELETE /api/v1/tenants/{tenantId}/visibility-groups/{id}/members/{userId}
  *
- * Member management endpoints + the manages_visibility-based auth
- * helper + tenant-creation bootstrap arrive in Phase 2b.i.b (#98).
+ * Authorization: tenant admins always; plus any user who is a member of
+ * a visibility group with manages_visibility = TRUE in the same tenant.
  *
- * Body shape:
- *   { "name": "...", "description": "...", "managesVisibility": false }
+ * One escalation guard: setting managesVisibility = true on a group
+ * via PUT is admin-only — managers cannot bootstrap themselves into
+ * more power.
  *
- * `name` is unique per tenant (enforced via UNIQUE KEY (tenant_id, name)).
+ * Body shapes:
+ *   POST /visibility-groups       — { name, description?, managesVisibility? }
+ *   PUT  /visibility-groups/{id}  — same, all optional
+ *   POST /members                  — { userId }
+ *
+ * On registration of a new user (AuthController), a default
+ * "Visibility Managers" group is auto-created with manages_visibility
+ * = TRUE and the registering user as the sole member.
  */
 class VisibilityGroupController : public drogon::HttpController<VisibilityGroupController> {
 public:
@@ -42,6 +48,15 @@ public:
         ADD_METHOD_TO(VisibilityGroupController::deleteGroup,
                       "/api/v1/tenants/{tenantId}/visibility-groups/{id}",
                       drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(VisibilityGroupController::listMembers,
+                      "/api/v1/tenants/{tenantId}/visibility-groups/{id}/members",
+                      drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(VisibilityGroupController::addMember,
+                      "/api/v1/tenants/{tenantId}/visibility-groups/{id}/members",
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(VisibilityGroupController::removeMember,
+                      "/api/v1/tenants/{tenantId}/visibility-groups/{id}/members/{userId}",
+                      drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listGroups(const drogon::HttpRequestPtr&,
@@ -59,4 +74,13 @@ public:
     void deleteGroup(const drogon::HttpRequestPtr&,
                      std::function<void(const drogon::HttpResponsePtr&)>&&,
                      int tenantId, int id);
+    void listMembers(const drogon::HttpRequestPtr&,
+                     std::function<void(const drogon::HttpResponsePtr&)>&&,
+                     int tenantId, int id);
+    void addMember(const drogon::HttpRequestPtr&,
+                   std::function<void(const drogon::HttpResponsePtr&)>&&,
+                   int tenantId, int id);
+    void removeMember(const drogon::HttpRequestPtr&,
+                      std::function<void(const drogon::HttpResponsePtr&)>&&,
+                      int tenantId, int id, int userId);
 };
