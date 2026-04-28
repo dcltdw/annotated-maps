@@ -78,6 +78,53 @@ const std::string MAP_EDIT_PREDICATE =
     " AND (m.owner_id = ? "
     "      OR mp.level IN ('edit','moderate','admin'))";
 
+// ─── Effective-visibility CTE (#99) ──────────────────────────────────────────
+// Recursive walk up the parent chain to find each node's "resolver" —
+// the nearest ancestor (or self) with visibility_override = TRUE. The
+// visibility groups tagged on the resolver are the node's effective set.
+//
+// `resolve` rows: (start_id, cur_id, parent_id, visibility_override, depth)
+//   Anchor: every node on the map at depth 0 (cur_id = start_id).
+//   Step:   if cur didn't have override, walk to its parent. Recursion
+//           halts once we hit override = TRUE (no further row produced
+//           from that branch) or hit the depth ceiling.
+//
+// `visible_starts`: for each start_id whose resolver tags include any
+// visibility group the caller is a member of, that start_id is visible.
+//
+// Bound MAX_NODE_DEPTH so a malicious deep chain can't stall us.
+//
+// The CTE prefix binds 2 parameters: (mapId, userId).
+
+const std::string VISIBILITY_RESOLVE_CTE =
+    "WITH RECURSIVE resolve AS ("
+    "  SELECT n.id AS start_id, n.id AS cur_id, n.parent_id, "
+    "         n.visibility_override, 0 AS depth "
+    "  FROM nodes n WHERE n.map_id = ? "
+    "  UNION ALL "
+    "  SELECT r.start_id, p.id, p.parent_id, p.visibility_override, r.depth + 1 "
+    "  FROM resolve r JOIN nodes p ON p.id = r.parent_id "
+    "  WHERE r.visibility_override = FALSE AND r.depth < " +
+        std::to_string(MAX_NODE_DEPTH) +
+    "), visible_starts AS ( "
+    "  SELECT DISTINCT r.start_id FROM resolve r "
+    "  JOIN node_visibility nv "
+    "       ON nv.node_id = r.cur_id AND r.visibility_override = TRUE "
+    "  JOIN visibility_group_members vgm "
+    "       ON vgm.visibility_group_id = nv.visibility_group_id "
+    "  WHERE vgm.user_id = ? "
+    ") ";
+
+// Predicate to AND into WHERE for non-admin callers. Binds 1 param: (userId).
+// Owner X-ray bypass is included so map owners with owner_xray = TRUE see
+// every node regardless of visibility tagging. Note: non-xray owners are
+// still bound by visibility — this matches the design intent (a GM who
+// owns the map only sees nodes tagged for them, unless they explicitly
+// opt into xray).
+const std::string VISIBILITY_PREDICATE =
+    " AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+    "      OR n.id IN (SELECT start_id FROM visible_starts)) ";
+
 // Build a JSON response for a single node row.
 Json::Value rowToNode(const drogon::orm::Row& row) {
     Json::Value n;
@@ -114,6 +161,7 @@ void NodeController::listNodes(
     int tenantId, int mapId) {
 
     int userId = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
 
     // Parent-id filter: present-and-empty means "top-level only";
     // present-and-numeric means "children of N"; absent means "all".
@@ -130,22 +178,27 @@ void NodeController::listNodes(
         }
     }
 
-    std::string sql = R"(
-        SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, n.description,
-               n.color, n.visibility_override, n.created_by,
-               u.username AS creator_username,
-               n.created_at, n.updated_at
-        FROM nodes n
-        JOIN maps m  ON m.id = n.map_id
-        JOIN users u ON u.id = n.created_by
-        LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ?
-        LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL
-                                        AND mp_pub.level IN ('view','comment','edit','moderate','admin')
-        WHERE n.map_id = ? AND m.tenant_id = ?
-          AND (m.owner_id = ?
-               OR mp.level IN ('view','comment','edit','moderate','admin')
-               OR mp_pub.level IN ('view','comment','edit','moderate','admin'))
-    )";
+    // Tenant admins bypass the visibility filter and see every node
+    // (per the #99 design). For non-admins, prepend the resolve CTE
+    // and AND in the visibility predicate.
+    std::string sql;
+    if (!isAdmin) sql = VISIBILITY_RESOLVE_CTE;
+    sql +=
+        "SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, n.description, "
+        "       n.color, n.visibility_override, n.created_by, "
+        "       u.username AS creator_username, "
+        "       n.created_at, n.updated_at "
+        "FROM nodes n "
+        "JOIN maps m  ON m.id = n.map_id "
+        "JOIN users u ON u.id = n.created_by "
+        "LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+        "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+        "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+        "WHERE n.map_id = ? AND m.tenant_id = ? "
+        "  AND (m.owner_id = ? "
+        "       OR mp.level IN ('view','comment','edit','moderate','admin') "
+        "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))";
+    if (!isAdmin) sql += VISIBILITY_PREDICATE;
     if (topLevelOnly) {
         sql += " AND n.parent_id IS NULL";
     } else if (hasParentFilter) {
@@ -153,9 +206,27 @@ void NodeController::listNodes(
     }
     sql += " ORDER BY n.created_at ASC";
 
+    // After fetching, null out parent_id on rows whose parent isn't
+    // also visible. Otherwise a child leaks the existence of a hidden
+    // ancestor via its parentId field. (Only matters when a non-admin
+    // can see a child but not its parent — possible if the parent is
+    // tagged with a different group than the child or has different
+    // override status.)
     auto resultCb = [callback](const drogon::orm::Result& r) {
+        std::set<int> visibleIds;
+        for (const auto& row : r) visibleIds.insert(row["id"].as<int>());
+
         Json::Value arr(Json::arrayValue);
-        for (const auto& row : r) arr.append(rowToNode(row));
+        for (const auto& row : r) {
+            Json::Value n = rowToNode(row);
+            if (!n["parentId"].isNull()) {
+                int p = n["parentId"].asInt();
+                if (visibleIds.find(p) == visibleIds.end()) {
+                    n["parentId"] = Json::Value();
+                }
+            }
+            arr.append(n);
+        }
         callback(drogon::HttpResponse::newHttpJsonResponse(arr));
     };
     auto errCb = [callback](const drogon::orm::DrogonDbException&) {
@@ -163,13 +234,38 @@ void NodeController::listNodes(
             "db_error", "Failed to fetch nodes"));
     };
 
+    // Param order:
+    //   non-admin: mapId, userId   (CTE)
+    //              userId           (mp.user_id JOIN)
+    //              mapId, tenantId  (WHERE)
+    //              userId           (owner_id check)
+    //              userId           (visibility predicate xray check)
+    //              [parentFilter]   (only when child filter active)
+    //   admin:     userId, mapId, tenantId, userId[, parentFilter]
     auto db = drogon::app().getDbClient();
-    if (hasParentFilter && !topLevelOnly) {
-        db->execSqlAsync(sql, resultCb, errCb,
-            userId, mapId, tenantId, userId, parentFilter);
+    if (isAdmin) {
+        if (hasParentFilter && !topLevelOnly) {
+            db->execSqlAsync(sql, resultCb, errCb,
+                userId, mapId, tenantId, userId, parentFilter);
+        } else {
+            db->execSqlAsync(sql, resultCb, errCb,
+                userId, mapId, tenantId, userId);
+        }
     } else {
-        db->execSqlAsync(sql, resultCb, errCb,
-            userId, mapId, tenantId, userId);
+        if (hasParentFilter && !topLevelOnly) {
+            db->execSqlAsync(sql, resultCb, errCb,
+                mapId, userId,                 // CTE
+                userId,                        // mp join
+                mapId, tenantId, userId,       // WHERE map gating
+                userId,                        // visibility xray
+                parentFilter);
+        } else {
+            db->execSqlAsync(sql, resultCb, errCb,
+                mapId, userId,
+                userId,
+                mapId, tenantId, userId,
+                userId);
+        }
     }
 }
 
@@ -359,8 +455,11 @@ void NodeController::getNode(
     int tenantId, int mapId, int id) {
 
     int userId = callerUserId(req);
-    auto db    = drogon::app().getDbClient();
-    db->execSqlAsync(
+    bool isAdmin = isTenantAdmin(req);
+
+    std::string sql;
+    if (!isAdmin) sql = VISIBILITY_RESOLVE_CTE;
+    sql +=
         "SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, n.description, "
         "       n.color, n.visibility_override, n.created_by, "
         "       u.username AS creator_username, "
@@ -372,20 +471,74 @@ void NodeController::getNode(
         "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
         "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
         "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
-        "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback](const drogon::orm::Result& r) {
-            if (r.empty()) {
-                callback(errorResponse(drogon::k404NotFound,
-                    "not_found", "Node not found or no permission"));
-                return;
-            }
-            callback(drogon::HttpResponse::newHttpJsonResponse(rowToNode(r[0])));
-        },
-        [callback](const drogon::orm::DrogonDbException&) {
-            callback(errorResponse(drogon::k500InternalServerError,
-                "db_error", "Database error"));
-        },
-        userId, id, mapId, tenantId, userId);
+        "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))";
+    if (!isAdmin) sql += VISIBILITY_PREDICATE;
+
+    auto onResult = [callback, req, tenantId, mapId, userId, isAdmin]
+        (const drogon::orm::Result& r) {
+        if (r.empty()) {
+            callback(errorResponse(drogon::k404NotFound,
+                "not_found", "Node not found or no permission"));
+            return;
+        }
+        Json::Value n = rowToNode(r[0]);
+
+        // Same hidden-parent rule as listNodes: if the parent isn't
+        // visible to the caller, null out parentId. Admins skip this
+        // check (they see everything).
+        if (isAdmin || n["parentId"].isNull()) {
+            callback(drogon::HttpResponse::newHttpJsonResponse(n));
+            return;
+        }
+        int parentId = n["parentId"].asInt();
+
+        // One-shot existence-via-visibility check on the parent.
+        std::string vSql = VISIBILITY_RESOLVE_CTE +
+            "SELECT 1 FROM nodes n "
+            "JOIN maps m ON m.id = n.map_id "
+            "LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+            "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+            "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+            "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
+            "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') OR mp_pub.level IN ('view','comment','edit','moderate','admin'))" +
+            VISIBILITY_PREDICATE;
+        auto db = drogon::app().getDbClient();
+        db->execSqlAsync(vSql,
+            [callback, n](const drogon::orm::Result& rp) mutable {
+                if (rp.empty()) n["parentId"] = Json::Value();
+                callback(drogon::HttpResponse::newHttpJsonResponse(n));
+            },
+            [callback, n](const drogon::orm::DrogonDbException&) mutable {
+                // On DB error checking parent visibility, fail closed:
+                // hide the parent rather than risk leaking it.
+                n["parentId"] = Json::Value();
+                callback(drogon::HttpResponse::newHttpJsonResponse(n));
+            },
+            mapId, userId,            // CTE
+            userId,                   // mp join
+            parentId, mapId, tenantId, userId,  // WHERE
+            userId);                  // xray check
+    };
+
+    auto db = drogon::app().getDbClient();
+    if (isAdmin) {
+        db->execSqlAsync(sql, onResult,
+            [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Database error"));
+            },
+            userId, id, mapId, tenantId, userId);
+    } else {
+        db->execSqlAsync(sql, onResult,
+            [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Database error"));
+            },
+            mapId, userId,            // CTE
+            userId,                   // mp join
+            id, mapId, tenantId, userId,  // WHERE
+            userId);                  // xray check
+    }
 }
 
 // ─── PUT /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id} ──────────────────
