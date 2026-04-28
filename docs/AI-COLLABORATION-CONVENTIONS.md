@@ -37,8 +37,9 @@ agent instructions:
    branch is action #1**, before any feature ticket starts.
 9. **Stamp commits with the current AI model name** (not a previously-used
    string) in the `Co-Authored-By:` trailer.
-10. **When a rule here is added, modified, or removed, update this document
-    and agent memory in the same change** so the two stay in sync.
+10. **This document is the master record; agent-memory entries are thin
+    replicas pointing back here.** When a rule changes, edit the doc; the
+    memory pointer's frontmatter is updated to match.
 
 ---
 
@@ -377,42 +378,74 @@ Sequence for any future long-running branch:
 
 ## Meta — keeping these conventions current
 
-### 10. Update this document and agent memory together
+### 10. Doc is the master record; memory entries are thin replicas
 
-> **Rule:** When a rule in this document is added, modified, or removed,
-> apply the same change to the agent's memory store in the same PR (or
-> conversation turn) so the two representations stay in sync.
+> **Rule:** This document is the authoritative source for the working
+> agreements. The agent's per-project memory entries (e.g.,
+> `feedback_*.md` files under `~/.claude/projects/<project>/memory/` for
+> Claude Code) are thin replicas — they exist so the agent's relevance
+> matcher fires on the right rule, and their bodies just point back to
+> the relevant section here.
 
-**Why:** These conventions live in two places — this document (committed,
-shareable, the canonical reference) and the agent's per-project memory (where
-they shape behavior turn-by-turn). Drift between them has a predictable
-failure mode: the doc says one thing, the agent does another, and a human
-collaborator can't tell which is authoritative. Updating both at once keeps
-the document trustworthy as a porting source AND keeps the agent's behavior
-matching what the doc claims.
+**Why:** Two parallel sources of truth drift; one of them needs to win.
+The doc is the better master because: (a) it's reviewable in PR diffs,
+(b) it has structure (categories, cross-references, examples, the
+porting guide) that loose memory files don't, and (c) it's what a new
+collaborator or another project would actually consume. Memory's job is
+narrower — it just needs the frontmatter + filename + description so the
+relevance matcher can surface the right rule, then the agent reads this
+doc for the actual content. Treating doc as master eliminates the
+"did I update both?" discipline cost and removes the "which is right?"
+ambiguity when a drift is discovered.
 
 **How to apply:**
 
-When the user asks to add, change, or drop a rule:
+When adding / modifying / removing a rule:
 
-1. **Edit this document** — both the **Quick reference** one-liner *and* the
-   per-rule expanded section (Rule / Why / How to apply). Renumber later
-   rules if inserting; remove the entry if deleting.
-2. **Edit agent memory** — the corresponding `feedback_*.md` file (write a
-   new one for additions, edit for modifications, delete for removals).
-   Update `MEMORY.md` to add/remove the pointer.
-3. **Commit both together** in the same PR so the diff makes the linkage
-   visible.
+1. **Edit this document** — both the **Quick reference** one-liner *and*
+   the per-rule expanded section (Rule / Why / How to apply). Renumber
+   later rules if inserting; remove the entry if deleting; update the
+   "Adapting" section if portability semantics changed.
+2. **Update the memory pointer** — write/edit/delete the corresponding
+   `feedback_*.md` so its frontmatter (`name`, `description`) matches
+   the doc, and the body points to the new doc section. For new rules,
+   also add the pointer line to `MEMORY.md`.
+3. **Commit the doc change.** The memory update happens locally — memory
+   lives outside the repo and isn't part of any PR.
 
-For a rule discovered organically mid-conversation (e.g., the user
-corrects something), do the same — capture it in memory immediately, then
-fold it into this document on the next reasonable PR boundary (don't let
-the doc lag behind memory by more than one ticket).
+**Memory body shape (thin replica):**
 
-**Inverse direction:** if the doc is edited directly (e.g., the user
-fixes wording or clarifies an example), reflect the same change in the
-relevant `feedback_*.md` memory file. The two are mirrors of each other,
-not master/replica.
+```markdown
+---
+name: <human-readable rule name>
+description: <one-line description used by relevance matcher>
+type: feedback
+---
+See [docs/AI-COLLABORATION-CONVENTIONS.md](docs/AI-COLLABORATION-CONVENTIONS.md) §N for the full rule, why, and how to apply.
+```
+
+When the relevance matcher surfaces this entry, the agent reads the doc
+section to get the actual rule content — one extra Read, negligible cost.
+
+**Operational-cache exception:** A few rules carry project-specific
+operational data that benefits from being in memory directly (no extra
+read needed mid-task) — e.g., cached GraphQL IDs for the project board.
+Those stay in the memory body alongside the pointer:
+
+```markdown
+---
+name: ...
+---
+See [docs/AI-COLLABORATION-CONVENTIONS.md](docs/AI-COLLABORATION-CONVENTIONS.md) §N for the full rule.
+
+**Project-specific operational cache** (kept here for fast reuse):
+- Project ID: PVT_xxx
+- Status field ID: PVTSSF_xxx
+- Option IDs: Todo=..., In Progress=..., Done=...
+```
+
+The split rule: **rule content → doc; project-specific operational
+caches → memory body.**
 
 ---
 
@@ -420,8 +453,12 @@ not master/replica.
 
 When porting to another project:
 
-- **Rules 1, 4, 5, 6, 10** are fully tooling-agnostic — the rule statements
+- **Rules 1, 4, 5, 6** are fully tooling-agnostic — the rule statements
   transfer directly.
+- **Rule 10 (doc as master)** transfers as a concept, but the specific
+  memory-file format (`feedback_*.md` with frontmatter) is Claude Code-
+  specific. For other agents, adapt the "thin replica" pointer shape to
+  whatever per-rule storage that agent uses.
 - **Rule 2 (status lifecycle)** carries a project-board GraphQL ID block in
   **How to apply** that needs replacement with the new project's IDs.
 - **Rule 3 (default project)** has the project number / owner hardcoded —
