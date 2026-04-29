@@ -160,6 +160,44 @@ message or trivially confirmable). In that case the only manual step
 is the board flip — fine to do as a single direct tool call without
 the list overhead.
 
+**Always verify after a board edit.** `gh project item-edit` can
+silently no-op: exit code 0, no output, no actual change. Encountered
+during the #106 cleanup — the first flip command returned cleanly but
+the status stayed at In Progress; only spotted when the user noticed
+the board was wrong on the next turn. The fix is cheap: every board
+edit should be paired with an immediate read-back. Either chain them
+in one shell command (`gh project item-edit ... ; gh project item-list
+... --jq '.items[] | select(.content.number == NNN) | .status'`) or
+run a follow-up read tool call. The board's eventual-consistency
+window is short — a synchronous check in the same turn is sufficient.
+Don't mark the corresponding TodoWrite item completed until the
+read-back returns the expected status.
+
+**Delete the local feature branch after the PR merges.** When this
+collaborator merges PRs they configure GitHub to delete the remote
+branch automatically; the local branch persists with a `: gone`
+upstream marker (visible in `git branch -vv`). These accumulate fast
+on a long-running project and clutter both `git branch` output and
+the agent's mental model of "what's still in flight." Add to the
+post-merge TodoWrite list:
+
+- "Delete local branch \`feature/NNN-...\` (remote was auto-deleted on merge)"
+
+Run `git branch -D <name>` (force, since git can't always confirm the
+merge happened — the remote is already gone, and the commits are in
+\`main\`/\`nodes-rebuild\` already if the PR merged). Skip if the
+branch is the current checkout — switch to \`main\` first. Skip the
+shared long-running branches (\`main\`, \`nodes-rebuild\`).
+
+To bulk-prune at any point, the safe one-liner is:
+
+```bash
+git fetch --all --prune                         # update : gone markers
+git branch -vv \
+  | awk '/: gone\]/ { print $1 }' \
+  | xargs -r -n1 git branch -D
+```
+
 **Project-specific binding (annotated-maps `Focus on next` board):**
 
 ```bash
