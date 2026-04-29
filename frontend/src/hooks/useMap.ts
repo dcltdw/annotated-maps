@@ -1,24 +1,14 @@
 import { useCallback } from 'react';
 import { useMapStore } from '@/store/mapStore';
-import { mapsService, annotationsService } from '@/services/maps';
-import type { CreateMapRequest, UpdateMapRequest, CreateAnnotationRequest } from '@/types';
+import { mapsService } from '@/services/maps';
+import type { CreateMapRequest, UpdateMapRequest } from '@/types';
+
+// Pared down for #92. Annotation-related callbacks are gone with the
+// rebuild. Node + note loading will be added back when the map view
+// rebuilds in #101.
 
 export function useMap() {
-  const {
-    maps,
-    setMaps,
-    activeMap,
-    setActiveMap,
-    annotations,
-    setAnnotations,
-    addAnnotation,
-    updateAnnotation,
-    removeAnnotation,
-    selectedAnnotationId,
-    setSelectedAnnotationId,
-    isDrawing,
-    setIsDrawing,
-  } = useMapStore();
+  const { maps, setMaps, activeMap, setActiveMap } = useMapStore();
 
   const loadMaps = useCallback(async () => {
     const response = await mapsService.listMaps();
@@ -27,14 +17,10 @@ export function useMap() {
 
   const loadMap = useCallback(
     async (mapId: number) => {
-      const [map, anns] = await Promise.all([
-        mapsService.getMap(mapId),
-        annotationsService.listAnnotations(mapId),
-      ]);
+      const map = await mapsService.getMap(mapId);
       setActiveMap(map);
-      setAnnotations(anns);
     },
-    [setActiveMap, setAnnotations]
+    [setActiveMap]
   );
 
   const createMap = useCallback(
@@ -48,10 +34,8 @@ export function useMap() {
 
   const updateMap = useCallback(
     async (mapId: number, data: UpdateMapRequest) => {
-      await mapsService.updateMap(mapId, data);
-      // PUT returns {id, updated:true} only — re-fetch the row so we
-      // pick up the server's authoritative title/description/updatedAt.
-      const fresh = await mapsService.getMap(mapId);
+      // mapsService.updateMap returns the freshly-parsed MapRecord.
+      const fresh = await mapsService.updateMap(mapId, data);
       setActiveMap(fresh);
       setMaps(maps.map((m) => (m.id === mapId ? fresh : m)));
       return fresh;
@@ -68,38 +52,13 @@ export function useMap() {
     [maps, setMaps, setActiveMap]
   );
 
-  const createAnnotation = useCallback(
-    async (data: CreateAnnotationRequest) => {
-      const annotation = await annotationsService.createAnnotation(data);
-      addAnnotation(annotation);
-      return annotation;
-    },
-    [addAnnotation]
-  );
-
-  const deleteAnnotation = useCallback(
-    async (mapId: number, annotationId: number) => {
-      await annotationsService.deleteAnnotation(mapId, annotationId);
-      removeAnnotation(annotationId);
-    },
-    [removeAnnotation]
-  );
-
   return {
     maps,
     activeMap,
-    annotations,
-    selectedAnnotationId,
-    isDrawing,
-    setIsDrawing,
-    setSelectedAnnotationId,
     loadMaps,
     loadMap,
     createMap,
     updateMap,
     deleteMap,
-    createAnnotation,
-    deleteAnnotation,
-    updateAnnotation,
   };
 }

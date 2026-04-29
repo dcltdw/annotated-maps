@@ -1,28 +1,36 @@
 import { apiClient } from './api';
 import { useAuthStore } from '@/store/authStore';
+import {
+  MapRecordSchema,
+  MapListSchema,
+  NodeRecordSchema,
+  NodeListSchema,
+  NodeSubtreeResponseSchema,
+  NoteRecordSchema,
+  NoteListSchema,
+  type MapRecord,
+  type MapList,
+  type NodeRecord,
+  type NodeList,
+  type NodeSubtreeResponse,
+  type NoteRecord,
+  type NoteList,
+  type CreateMapRequest,
+  type UpdateMapRequest,
+  type CreateNodeRequest,
+  type UpdateNodeRequest,
+  type CreateNoteRequest,
+  type UpdateNoteRequest,
+} from '@/api/schemas';
 import type {
-  MapRecord,
-  CreateMapRequest,
-  UpdateMapRequest,
-  Annotation,
-  CreateAnnotationRequest,
-  UpdateAnnotationRequest,
-  AnnotationMedia,
+  Tenant,
+  TenantBranding,
+  TenantMember,
   MapPermission,
   SetPermissionRequest,
-  TenantBranding,
-  PaginatedResponse,
-  Tenant,
-  TenantMember,
-  Note,
-  CreateNoteRequest,
-  UpdateNoteRequest,
-  NoteGroup,
-  CreateNoteGroupRequest,
-  UpdateNoteGroupRequest,
 } from '@/types';
 
-// Helper: resolve tenantId from store if not explicitly provided
+// Helper: resolve tenantId from store if not explicitly provided.
 function tenantBase(tenantId?: number): string {
   const id = tenantId ?? useAuthStore.getState().tenantId;
   if (!id) throw new Error('No active tenant');
@@ -30,6 +38,8 @@ function tenantBase(tenantId?: number): string {
 }
 
 // ─── Tenants ──────────────────────────────────────────────────────────────────
+// Tenant shapes were already typed by hand and kept as-is for #92. A future
+// ticket can extend api/schemas.ts to cover them.
 
 export const tenantsService = {
   async listTenants(): Promise<Tenant[]> {
@@ -67,29 +77,32 @@ export const tenantsService = {
 };
 
 // ─── Maps ─────────────────────────────────────────────────────────────────────
+// Each call parses through the Zod schema — the caller gets inferred-typed
+// data, and a malformed response throws an actionable ZodError before the
+// component sees it.
 
 export const mapsService = {
-  async listMaps(page = 1, pageSize = 20, tenantId?: number): Promise<PaginatedResponse<MapRecord>> {
-    const res = await apiClient.get<PaginatedResponse<MapRecord>>(
+  async listMaps(page = 1, pageSize = 20, tenantId?: number): Promise<MapList> {
+    const res = await apiClient.get(
       `${tenantBase(tenantId)}/maps`,
       { params: { page, pageSize } }
     );
-    return res.data;
+    return MapListSchema.parse(res.data);
   },
 
   async getMap(mapId: number, tenantId?: number): Promise<MapRecord> {
-    const res = await apiClient.get<MapRecord>(`${tenantBase(tenantId)}/maps/${mapId}`);
-    return res.data;
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}`);
+    return MapRecordSchema.parse(res.data);
   },
 
   async createMap(data: CreateMapRequest, tenantId?: number): Promise<MapRecord> {
-    const res = await apiClient.post<MapRecord>(`${tenantBase(tenantId)}/maps`, data);
-    return res.data;
+    const res = await apiClient.post(`${tenantBase(tenantId)}/maps`, data);
+    return MapRecordSchema.parse(res.data);
   },
 
   async updateMap(mapId: number, data: UpdateMapRequest, tenantId?: number): Promise<MapRecord> {
-    const res = await apiClient.put<MapRecord>(`${tenantBase(tenantId)}/maps/${mapId}`, data);
-    return res.data;
+    const res = await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}`, data);
+    return MapRecordSchema.parse(res.data);
   },
 
   async deleteMap(mapId: number, tenantId?: number): Promise<void> {
@@ -97,63 +110,63 @@ export const mapsService = {
   },
 };
 
-// ─── Annotations ─────────────────────────────────────────────────────────────
+// ─── Nodes (replaces the old annotations service) ────────────────────────────
 
-export const annotationsService = {
-  async listAnnotations(mapId: number, tenantId?: number): Promise<Annotation[]> {
-    const res = await apiClient.get<Annotation[]>(`${tenantBase(tenantId)}/maps/${mapId}/annotations`);
-    return res.data;
+export const nodesService = {
+  async listNodes(mapId: number, parentId?: number | null, tenantId?: number): Promise<NodeList> {
+    // parentId === null → top-level only (server reads empty parentId param)
+    // parentId === undefined → all nodes
+    const params: Record<string, string> = {};
+    if (parentId === null) params.parentId = '';
+    else if (parentId !== undefined) params.parentId = String(parentId);
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}/nodes`, { params });
+    return NodeListSchema.parse(res.data);
   },
 
-  async getAnnotation(mapId: number, annotationId: number, tenantId?: number): Promise<Annotation> {
-    const res = await apiClient.get<Annotation>(
-      `${tenantBase(tenantId)}/maps/${mapId}/annotations/${annotationId}`
-    );
-    return res.data;
+  async getNode(mapId: number, nodeId: number, tenantId?: number): Promise<NodeRecord> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}`);
+    return NodeRecordSchema.parse(res.data);
   },
 
-  async createAnnotation(data: CreateAnnotationRequest, tenantId?: number): Promise<Annotation> {
-    const res = await apiClient.post<Annotation>(
-      `${tenantBase(tenantId)}/maps/${data.mapId}/annotations`,
-      data
-    );
-    return res.data;
+  async createNode(mapId: number, data: CreateNodeRequest, tenantId?: number): Promise<NodeRecord> {
+    const res = await apiClient.post(`${tenantBase(tenantId)}/maps/${mapId}/nodes`, data);
+    return NodeRecordSchema.parse(res.data);
   },
 
-  async updateAnnotation(
+  async updateNode(
     mapId: number,
-    annotationId: number,
-    data: UpdateAnnotationRequest,
+    nodeId: number,
+    data: UpdateNodeRequest,
     tenantId?: number
-  ): Promise<Annotation> {
-    const res = await apiClient.put<Annotation>(
-      `${tenantBase(tenantId)}/maps/${mapId}/annotations/${annotationId}`,
-      data
+  ): Promise<void> {
+    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}`, data);
+  },
+
+  async deleteNode(mapId: number, nodeId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}`);
+  },
+
+  async listChildren(mapId: number, nodeId: number, tenantId?: number): Promise<NodeList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/children`
     );
-    return res.data;
+    return NodeListSchema.parse(res.data);
   },
 
-  async deleteAnnotation(mapId: number, annotationId: number, tenantId?: number): Promise<void> {
-    await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/annotations/${annotationId}`);
-  },
-
-  async addMedia(
+  async getSubtree(
     mapId: number,
-    annotationId: number,
-    data: { mediaType: string; url: string; caption?: string },
+    nodeId: number,
+    opts?: { limit?: number; cursor?: number },
     tenantId?: number
-  ): Promise<AnnotationMedia> {
-    const res = await apiClient.post<AnnotationMedia>(
-      `${tenantBase(tenantId)}/maps/${mapId}/annotations/${annotationId}/media`,
-      data
+  ): Promise<NodeSubtreeResponse> {
+    const params: Record<string, string> = {};
+    if (opts?.limit !== undefined) params.limit = String(opts.limit);
+    if (opts?.cursor !== undefined) params.cursor = String(opts.cursor);
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/subtree`,
+      { params }
     );
-    return res.data;
-  },
-
-  async deleteMedia(mapId: number, annotationId: number, mediaId: number, tenantId?: number): Promise<void> {
-    await apiClient.delete(
-      `${tenantBase(tenantId)}/maps/${mapId}/annotations/${annotationId}/media/${mediaId}`
-    );
+    return NodeSubtreeResponseSchema.parse(res.data);
   },
 };
 
@@ -179,68 +192,48 @@ export const permissionsService = {
   },
 };
 
-// ─── Notes ────────────────────────────────────────────────────────────────────
+// ─── Notes (now node-attached, no own coordinates) ───────────────────────────
 
 export const notesService = {
-  async listNotes(mapId: number, groupId?: number, tenantId?: number): Promise<Note[]> {
-    const params = groupId ? { groupId } : {};
-    const res = await apiClient.get<Note[]>(
-      `${tenantBase(tenantId)}/maps/${mapId}/notes`, { params }
+  async listNotesForNode(
+    mapId: number,
+    nodeId: number,
+    tenantId?: number
+  ): Promise<NoteList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/notes`
     );
-    return res.data;
+    return NoteListSchema.parse(res.data);
   },
 
-  async createNote(mapId: number, data: CreateNoteRequest, tenantId?: number): Promise<Note> {
-    const res = await apiClient.post<Note>(
-      `${tenantBase(tenantId)}/maps/${mapId}/notes`, data
-    );
-    return res.data;
+  async getNote(mapId: number, noteId: number, tenantId?: number): Promise<NoteRecord> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`);
+    return NoteRecordSchema.parse(res.data);
   },
 
-  async getNote(mapId: number, noteId: number, tenantId?: number): Promise<Note> {
-    const res = await apiClient.get<Note>(
-      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`
+  async createNote(
+    mapId: number,
+    nodeId: number,
+    data: CreateNoteRequest,
+    tenantId?: number
+  ): Promise<NoteRecord> {
+    const res = await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/notes`,
+      data
     );
-    return res.data;
+    return NoteRecordSchema.parse(res.data);
   },
 
   async updateNote(
-    mapId: number, noteId: number,
-    data: UpdateNoteRequest, tenantId?: number
+    mapId: number,
+    noteId: number,
+    data: UpdateNoteRequest,
+    tenantId?: number
   ): Promise<void> {
     await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`, data);
   },
 
   async deleteNote(mapId: number, noteId: number, tenantId?: number): Promise<void> {
     await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`);
-  },
-};
-
-// ─── Note Groups ──────────────────────────────────────────────────────────────
-
-export const noteGroupsService = {
-  async listGroups(mapId: number, tenantId?: number): Promise<NoteGroup[]> {
-    const res = await apiClient.get<NoteGroup[]>(
-      `${tenantBase(tenantId)}/maps/${mapId}/note-groups`
-    );
-    return res.data;
-  },
-
-  async createGroup(mapId: number, data: CreateNoteGroupRequest, tenantId?: number): Promise<NoteGroup> {
-    const res = await apiClient.post<NoteGroup>(
-      `${tenantBase(tenantId)}/maps/${mapId}/note-groups`, data
-    );
-    return res.data;
-  },
-
-  async updateGroup(
-    mapId: number, groupId: number,
-    data: UpdateNoteGroupRequest, tenantId?: number
-  ): Promise<void> {
-    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}/note-groups/${groupId}`, data);
-  },
-
-  async deleteGroup(mapId: number, groupId: number, tenantId?: number): Promise<void> {
-    await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/note-groups/${groupId}`);
   },
 };
