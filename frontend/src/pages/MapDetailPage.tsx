@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
 import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
+import { NodeDetailPanel } from '@/components/Detail/NodeDetailPanel';
 import { useMap } from '@/hooks/useMap';
 
-// Map detail page. NodeTreePanel + MapView are both wired up to a shared
-// selectedNodeId state — clicking a node in either surface highlights
-// it everywhere. The detail view that listens to selection lands in
-// #103; for now selection just shows a transient banner so the wiring
-// is observable.
+// Map detail page. NodeTreePanel + MapView + NodeDetailPanel are all wired
+// up to a shared selectedNodeId state — clicking a node in any surface
+// highlights it everywhere; the detail panel re-renders to show its
+// metadata, parent breadcrumb, media, and inline notes CRUD.
 
 export function MapDetailPage() {
   const { mapId, tenantId } = useParams<{ mapId: string; tenantId: string }>();
@@ -40,11 +40,6 @@ export function MapDetailPage() {
         </Link>
       </div>
       {activeMap.description && <p>{activeMap.description}</p>}
-      {selectedNodeId !== null && (
-        <div className="alert alert-info">
-          Selected node #{selectedNodeId}. Detail panel lands in #103.
-        </div>
-      )}
       <div className="map-detail-layout">
         <NodeTreePanel
           mapId={activeMap.id}
@@ -58,6 +53,11 @@ export function MapDetailPage() {
           panTarget={panTarget}
         />
       </div>
+      <NodeDetailPanel
+        mapId={activeMap.id}
+        selectedNodeId={selectedNodeId}
+        onSelectNode={setSelectedNodeId}
+      />
       <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
         Back to maps
       </button>
