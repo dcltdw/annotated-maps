@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { nodesService, notesService, nodeMediaService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
 import { VisibilityEditor } from '@/components/Visibility/VisibilityEditor';
+import { PlotsSection } from '@/components/Detail/PlotsSection';
 import type {
   NodeRecord,
   NodeMediaRecord,
@@ -185,6 +186,10 @@ export function NodeDetailPanel({
         <VisibilityEditor kind="node" entityId={node.id} mapId={mapId} />
       </section>
 
+      <section className="node-detail-plots">
+        <PlotsSection mapId={mapId} kind="node" entityId={node.id} />
+      </section>
+
       <NotesList
         mapId={mapId}
         nodeId={node.id}
@@ -339,6 +344,7 @@ interface NoteCardProps {
 function NoteCard({ mapId, note, onChange }: NoteCardProps) {
   const [editing, setEditing] = useState(false);
   const [showVisibility, setShowVisibility] = useState(false);
+  const [showPlots, setShowPlots] = useState(false);
 
   const handleDelete = async () => {
     if (!window.confirm('Delete this note?')) return;
@@ -393,6 +399,13 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
+              onClick={() => setShowPlots((v) => !v)}
+            >
+              {showPlots ? 'Hide plots' : 'Plots'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
               onClick={handleDelete}
             >
               Delete
@@ -407,6 +420,11 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
       {showVisibility && (
         <div className="note-card-visibility">
           <VisibilityEditor kind="note" entityId={note.id} mapId={mapId} />
+        </div>
+      )}
+      {showPlots && (
+        <div className="note-card-plots">
+          <PlotsSection mapId={mapId} kind="note" entityId={note.id} />
         </div>
       )}
     </article>

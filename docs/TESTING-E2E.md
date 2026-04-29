@@ -56,6 +56,7 @@ frontend/
 │       ├── cross-tenant.spec.ts # tenant isolation across two users (#38)
 │       ├── visibility.spec.ts # override icon, owner_xray, cross-user filter (#106)
 │       ├── plots.spec.ts      # plot CRUD, cross-map nav, visibility filtering (#95)
+│       ├── plots-in-detail-panel.spec.ts  # node/note "Plots" section attach round-trip (#139)
 │       └── *.spec.ts           # one file per feature area
 └── ...
 ```

@@ -136,6 +136,60 @@ const std::string PLOT_NOTE_VISIBILITY_CTE =
     "         AND n.node_id IN (SELECT start_id FROM node_visible_starts)) "
     ") ";
 
+// Map-scoped visibility CTEs for the reverse-membership endpoints (#139).
+// These mirror NodeController's VISIBILITY_RESOLVE_CTE and NoteController's
+// NOTE_VISIBILITY_CTE — same shape, same MAX_NODE_DEPTH bound — but kept
+// local so PlotController doesn't depend on those private constants. Used
+// by GET /maps/{mid}/nodes/{nid}/plots and the analogous note endpoint.
+
+const std::string MAP_NODE_VISIBILITY_CTE =
+    "WITH RECURSIVE resolve AS ("
+    "  SELECT n.id AS start_id, n.id AS cur_id, n.parent_id, "
+    "         n.visibility_override, 0 AS depth "
+    "  FROM nodes n WHERE n.map_id = ? "
+    "  UNION ALL "
+    "  SELECT r.start_id, p.id, p.parent_id, p.visibility_override, r.depth + 1 "
+    "  FROM resolve r JOIN nodes p ON p.id = r.parent_id "
+    "  WHERE r.visibility_override = FALSE AND r.depth < " +
+        std::to_string(MAX_NODE_DEPTH) +
+    "), visible_starts AS ( "
+    "  SELECT DISTINCT r.start_id FROM resolve r "
+    "  JOIN node_visibility nv "
+    "       ON nv.node_id = r.cur_id AND r.visibility_override = TRUE "
+    "  JOIN visibility_group_members vgm "
+    "       ON vgm.visibility_group_id = nv.visibility_group_id "
+    "  WHERE vgm.user_id = ? "
+    ") ";
+
+const std::string MAP_NOTE_VISIBILITY_CTE =
+    "WITH RECURSIVE node_resolve AS ("
+    "  SELECT nd.id AS start_id, nd.id AS cur_id, nd.parent_id, "
+    "         nd.visibility_override, 0 AS depth "
+    "  FROM nodes nd WHERE nd.map_id = ? "
+    "  UNION ALL "
+    "  SELECT r.start_id, p.id, p.parent_id, p.visibility_override, r.depth + 1 "
+    "  FROM node_resolve r JOIN nodes p ON p.id = r.parent_id "
+    "  WHERE r.visibility_override = FALSE AND r.depth < " +
+        std::to_string(MAX_NODE_DEPTH) +
+    "), node_visible_starts AS ( "
+    "  SELECT DISTINCT r.start_id FROM node_resolve r "
+    "  JOIN node_visibility nv "
+    "       ON nv.node_id = r.cur_id AND r.visibility_override = TRUE "
+    "  JOIN visibility_group_members vgm "
+    "       ON vgm.visibility_group_id = nv.visibility_group_id "
+    "  WHERE vgm.user_id = ? "
+    "), note_visible AS ( "
+    "  SELECT n.id AS visible_note_id FROM notes n "
+    "  JOIN nodes nd ON nd.id = n.node_id AND nd.map_id = ? "
+    "  WHERE (n.visibility_override = TRUE "
+    "         AND EXISTS (SELECT 1 FROM note_visibility nv2 "
+    "                     JOIN visibility_group_members vgm2 "
+    "                          ON vgm2.visibility_group_id = nv2.visibility_group_id "
+    "                     WHERE nv2.note_id = n.id AND vgm2.user_id = ?)) "
+    "     OR (n.visibility_override = FALSE "
+    "         AND n.node_id IN (SELECT start_id FROM node_visible_starts)) "
+    ") ";
+
 }  // anonymous namespace
 
 // ─── GET /api/v1/tenants/{tid}/plots ─────────────────────────────────────────
@@ -713,4 +767,159 @@ void PlotController::removeNote(
                 "db_error", "Failed to detach note"));
         },
         id, noteId, tenantId);
+}
+
+// ─── GET /api/v1/tenants/{tid}/maps/{mid}/nodes/{nid}/plots (#139) ──────────
+//
+// Reverse-membership: list plots that contain the given node. The caller
+// must be able to see the node — a hidden node returns 404, never an empty
+// array, so existence isn't leaked. Admins and map-owners-with-xray bypass
+// the visibility check; everyone else is gated by the same effective-
+// visibility CTE used elsewhere.
+
+void PlotController::listPlotsForNode(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int nodeId) {
+
+    int userId = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
+    auto db = drogon::app().getDbClient();
+
+    // Step 1: existence + visibility check, collapsed into one SELECT 1.
+    // Returns 1 row iff the node exists in this tenant+map AND the caller
+    // can see it. 0 rows → 404 in all three failure shapes (doesn't exist,
+    // wrong map/tenant, or not visible) so existence isn't leaked.
+    std::string verifySql;
+    if (!isAdmin) verifySql = MAP_NODE_VISIBILITY_CTE;
+    verifySql +=
+        "SELECT 1 FROM nodes n "
+        "JOIN maps m ON m.id = n.map_id AND m.tenant_id = ? "
+        "WHERE n.id = ? AND n.map_id = ? ";
+    if (!isAdmin) {
+        verifySql +=
+            "AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+            "     OR n.id IN (SELECT start_id FROM visible_starts)) ";
+    }
+
+    auto onVerify = [callback, tenantId, nodeId]
+        (const drogon::orm::Result& rV) {
+        if (rV.empty()) {
+            callback(errorResponse(drogon::k404NotFound,
+                "not_found", "Node not found"));
+            return;
+        }
+        // Step 2: list plots — no visibility filter on the plots themselves
+        // (plots aren't visibility-tagged). Tenant-scoped to keep cross-
+        // tenant rows out even though the node id alone would already
+        // reach the right plots via plot_nodes.
+        auto db2 = drogon::app().getDbClient();
+        db2->execSqlAsync(
+            "SELECT p.id, p.tenant_id, p.name, p.description, "
+            "       p.created_by, p.created_at, p.updated_at "
+            "FROM plots p "
+            "JOIN plot_nodes pn ON pn.plot_id = p.id AND pn.node_id = ? "
+            "WHERE p.tenant_id = ? "
+            "ORDER BY p.name ASC",
+            [callback](const drogon::orm::Result& rP) {
+                Json::Value arr(Json::arrayValue);
+                for (const auto& row : rP) arr.append(rowToPlot(row));
+                callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+            },
+            [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Failed to fetch plots for node"));
+            },
+            nodeId, tenantId);
+    };
+
+    auto onErr = [callback](const drogon::orm::DrogonDbException&) {
+        callback(errorResponse(drogon::k500InternalServerError,
+            "db_error", "Failed to verify node visibility"));
+    };
+
+    if (isAdmin) {
+        // verifySql binds: (tenantId, nodeId, mapId)
+        db->execSqlAsync(verifySql, onVerify, onErr,
+            tenantId, nodeId, mapId);
+    } else {
+        // CTE binds (mapId, userId), then verifySql binds
+        // (tenantId, nodeId, mapId) for the SELECT and (userId) for xray.
+        db->execSqlAsync(verifySql, onVerify, onErr,
+            mapId, userId,
+            tenantId, nodeId, mapId, userId);
+    }
+}
+
+// ─── GET /api/v1/tenants/{tid}/maps/{mid}/notes/{nid}/plots (#139) ──────────
+//
+// Reverse-membership for notes. Same shape as listPlotsForNode but with
+// note-visibility semantics (override-on-note OR inherited-from-attached-
+// node visibility). 404 when not visible — see the node version's comment.
+
+void PlotController::listPlotsForNote(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int noteId) {
+
+    int userId = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
+    auto db = drogon::app().getDbClient();
+
+    std::string verifySql;
+    if (!isAdmin) verifySql = MAP_NOTE_VISIBILITY_CTE;
+    verifySql +=
+        "SELECT 1 FROM notes n "
+        "JOIN nodes nd ON nd.id = n.node_id "
+        "JOIN maps m ON m.id = nd.map_id AND m.tenant_id = ? "
+        "WHERE n.id = ? AND nd.map_id = ? ";
+    if (!isAdmin) {
+        verifySql +=
+            "AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+            "     OR n.id IN (SELECT visible_note_id FROM note_visible)) ";
+    }
+
+    auto onVerify = [callback, tenantId, noteId]
+        (const drogon::orm::Result& rV) {
+        if (rV.empty()) {
+            callback(errorResponse(drogon::k404NotFound,
+                "not_found", "Note not found"));
+            return;
+        }
+        auto db2 = drogon::app().getDbClient();
+        db2->execSqlAsync(
+            "SELECT p.id, p.tenant_id, p.name, p.description, "
+            "       p.created_by, p.created_at, p.updated_at "
+            "FROM plots p "
+            "JOIN plot_notes pnn ON pnn.plot_id = p.id AND pnn.note_id = ? "
+            "WHERE p.tenant_id = ? "
+            "ORDER BY p.name ASC",
+            [callback](const drogon::orm::Result& rP) {
+                Json::Value arr(Json::arrayValue);
+                for (const auto& row : rP) arr.append(rowToPlot(row));
+                callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+            },
+            [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Failed to fetch plots for note"));
+            },
+            noteId, tenantId);
+    };
+
+    auto onErr = [callback](const drogon::orm::DrogonDbException&) {
+        callback(errorResponse(drogon::k500InternalServerError,
+            "db_error", "Failed to verify note visibility"));
+    };
+
+    if (isAdmin) {
+        // verifySql binds: (tenantId, noteId, mapId)
+        db->execSqlAsync(verifySql, onVerify, onErr,
+            tenantId, noteId, mapId);
+    } else {
+        // CTE binds (mapId, userId, mapId, userId), then SELECT binds
+        // (tenantId, noteId, mapId) and xray binds (userId).
+        db->execSqlAsync(verifySql, onVerify, onErr,
+            mapId, userId, mapId, userId,
+            tenantId, noteId, mapId, userId);
+    }
 }

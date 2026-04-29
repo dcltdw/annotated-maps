@@ -324,6 +324,118 @@ mysql_query(f"UPDATE maps SET owner_id={USER_A_ID} WHERE id={MAP_ID};")
 
 print("  All visibility-filter tests passed.")
 
+# ─── Reverse membership: GET /maps/{mid}/nodes/{nid}/plots (#139) ────────────
+#
+# State entering this section: PLOT_1 contains {PLAYERS_NODE, GM_NODE} as
+# nodes and {NOTE_PLAYERS, NOTE_GM} as notes. PLOT_2 exists but currently
+# has no node/note attached to PLAYERS_NODE / GM_NODE. We attach
+# PLAYERS_NODE to PLOT_2 to exercise the multi-plot case.
+
+print("  --- Reverse membership: plots-for-node ---")
+
+http_post(f"{PLOTS_BASE}/{PLOT_2}/nodes", {"nodeId": PLAYERS_NODE}, TOKEN_A)
+
+# Admin: PLAYERS_NODE is in both PLOT_1 and PLOT_2
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{PLAYERS_NODE}/plots", TOKEN_A)
+assert_status("plots-for-node admin: 200", 200, status)
+plot_ids = {p["id"] for p in body}
+assert_true("plots-for-node admin: both plots returned",
+            plot_ids == {PLOT_1, PLOT_2})
+
+# Admin: GM_NODE is only in PLOT_1
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{GM_NODE}/plots", TOKEN_A)
+plot_ids = {p["id"] for p in body}
+assert_true("plots-for-node admin: GM_NODE only in PLOT_1",
+            plot_ids == {PLOT_1})
+
+# Admin: ROOT was detached from PLOT_1 and was never on PLOT_2 → empty list
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{ROOT}/plots", TOKEN_A)
+assert_status("plots-for-node admin: empty returns 200", 200, status)
+assert_true("plots-for-node admin: ROOT empty", body == [])
+
+# Non-admin (B): PLAYERS_NODE is visible to B (in Players group), so B sees both plots
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{PLAYERS_NODE}/plots", TOKEN_B)
+assert_status("plots-for-node B: 200 (visible)", 200, status)
+plot_ids = {p["id"] for p in body}
+assert_true("plots-for-node B: PLAYERS_NODE in both plots",
+            plot_ids == {PLOT_1, PLOT_2})
+
+# Non-admin (B): GM_NODE is hidden from B → 404
+status, _ = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{GM_NODE}/plots", TOKEN_B)
+assert_status("plots-for-node B: hidden returns 404", 404, status)
+
+# Unknown node id → 404
+status, _ = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/9999999/plots", TOKEN_A)
+assert_status("plots-for-node: unknown node 404", 404, status)
+
+# Wrong map id → 404 (the node exists, but not on this map)
+OTHER_MAP_BODY = http_post(f"/tenants/{TENANT_A}/maps", {
+    "title": "Other Map",
+    "coordinateSystem": {"type": "wgs84", "center": {"lat": 0, "lng": 0}, "zoom": 3},
+}, TOKEN_A)[1]
+OTHER_MAP_ID = json_field(OTHER_MAP_BODY, ["id"])
+status, _ = http_get(
+    f"/tenants/{TENANT_A}/maps/{OTHER_MAP_ID}/nodes/{PLAYERS_NODE}/plots", TOKEN_A)
+assert_status("plots-for-node: wrong map 404", 404, status)
+
+# Owner-xray bypass: B as map owner with xray sees plots even for hidden node
+mysql_query(f"UPDATE maps SET owner_id={USER_B_ID}, owner_xray=TRUE WHERE id={MAP_ID};")
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/nodes/{GM_NODE}/plots", TOKEN_B)
+assert_status("plots-for-node xray: 200 even for hidden node", 200, status)
+assert_true("plots-for-node xray: GM_NODE returned PLOT_1",
+            {p["id"] for p in body} == {PLOT_1})
+mysql_query(f"UPDATE maps SET owner_id={USER_A_ID}, owner_xray=FALSE WHERE id={MAP_ID};")
+
+print("  All plots-for-node tests passed.")
+
+print("  --- Reverse membership: plots-for-note ---")
+
+# Admin: NOTE_PLAYERS is in PLOT_1
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/{NOTE_PLAYERS}/plots", TOKEN_A)
+assert_status("plots-for-note admin: 200", 200, status)
+assert_true("plots-for-note admin: NOTE_PLAYERS in PLOT_1",
+            {p["id"] for p in body} == {PLOT_1})
+
+# Admin: NOTE_GM is in PLOT_1 too
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/{NOTE_GM}/plots", TOKEN_A)
+assert_true("plots-for-note admin: NOTE_GM in PLOT_1",
+            {p["id"] for p in body} == {PLOT_1})
+
+# Non-admin (B): NOTE_PLAYERS visible (inherits Players via parent), sees PLOT_1
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/{NOTE_PLAYERS}/plots", TOKEN_B)
+assert_status("plots-for-note B: 200 (visible)", 200, status)
+assert_true("plots-for-note B: NOTE_PLAYERS in PLOT_1",
+            {p["id"] for p in body} == {PLOT_1})
+
+# Non-admin (B): NOTE_GM hidden → 404
+status, _ = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/{NOTE_GM}/plots", TOKEN_B)
+assert_status("plots-for-note B: hidden returns 404", 404, status)
+
+# Unknown note id → 404
+status, _ = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/9999999/plots", TOKEN_A)
+assert_status("plots-for-note: unknown note 404", 404, status)
+
+# Owner-xray bypass for notes
+mysql_query(f"UPDATE maps SET owner_id={USER_B_ID}, owner_xray=TRUE WHERE id={MAP_ID};")
+status, body = http_get(
+    f"/tenants/{TENANT_A}/maps/{MAP_ID}/notes/{NOTE_GM}/plots", TOKEN_B)
+assert_status("plots-for-note xray: 200 even for hidden note", 200, status)
+mysql_query(f"UPDATE maps SET owner_id={USER_A_ID}, owner_xray=FALSE WHERE id={MAP_ID};")
+
+print("  All plots-for-note tests passed.")
+
 # ─── Cleanup CASCADE ─────────────────────────────────────────────────────────
 # Deleting the plot should cascade away both junction tables.
 
