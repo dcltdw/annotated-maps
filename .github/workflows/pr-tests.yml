@@ -262,7 +262,12 @@ jobs:
           retention-days: 7
 
       - name: Post test summary to PR
-        if: always() && steps.db_tests.outcome != 'skipped'
+        # Only fires for pull_request events. The workflow also runs on
+        # push to nodes-rebuild (post-merge verification), which has no
+        # PR number to comment on — without this gate the step constructs
+        # `…/issues//comments` and the API call 404s, marking the run red
+        # for what's actually just incidental noise.
+        if: always() && steps.db_tests.outcome != 'skipped' && github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
