@@ -241,6 +241,53 @@ export type NodeMediaRecord = z.infer<typeof NodeMediaRecordSchema>;
 export const NodeMediaListSchema = z.array(NodeMediaRecordSchema);
 export type NodeMediaList = z.infer<typeof NodeMediaListSchema>;
 
+// ─── Plots (#88 / #95) ───────────────────────────────────────────────────────
+// Tenant-scoped narrative groupings. Plots are many-to-many to both nodes
+// and notes via parallel junction tables; the read endpoint returns the two
+// member lists side by side. Member entries are deliberately a thin slice —
+// just enough to render a clickable row that knows which map to navigate to.
+
+export const PlotRecordSchema = z.object({
+  id: z.number().int(),
+  tenantId: z.number().int(),
+  name: z.string(),
+  description: z.string(),
+  createdBy: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type PlotRecord = z.infer<typeof PlotRecordSchema>;
+
+export const PlotListSchema = z.array(PlotRecordSchema);
+export type PlotList = z.infer<typeof PlotListSchema>;
+
+export const PlotNodeMemberSchema = z.object({
+  id: z.number().int(),
+  mapId: z.number().int(),
+  parentId: z.number().int().nullable(),
+  name: z.string(),
+  color: z.string().nullable(),
+  visibilityOverride: z.boolean(),
+});
+export type PlotNodeMember = z.infer<typeof PlotNodeMemberSchema>;
+
+export const PlotNoteMemberSchema = z.object({
+  id: z.number().int(),
+  nodeId: z.number().int(),
+  mapId: z.number().int(),
+  title: z.string(),
+  pinned: z.boolean(),
+  color: z.string().nullable(),
+  visibilityOverride: z.boolean(),
+});
+export type PlotNoteMember = z.infer<typeof PlotNoteMemberSchema>;
+
+export const PlotMembersSchema = z.object({
+  nodes: z.array(PlotNodeMemberSchema),
+  notes: z.array(PlotNoteMemberSchema),
+});
+export type PlotMembers = z.infer<typeof PlotMembersSchema>;
+
 // ─── Request shapes (used by service callers) ────────────────────────────────
 // These don't need runtime parsing on the way out — they're typed for the
 // caller's convenience. Re-exported from this module so all schema-derived
@@ -274,3 +321,10 @@ export type CreateNoteRequest = {
 };
 
 export type UpdateNoteRequest = Partial<CreateNoteRequest>;
+
+export type CreatePlotRequest = {
+  name: string;
+  description?: string;
+};
+
+export type UpdatePlotRequest = Partial<CreatePlotRequest>;

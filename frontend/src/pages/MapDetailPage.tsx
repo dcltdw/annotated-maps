@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
 import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
 import { NodeDetailPanel } from '@/components/Detail/NodeDetailPanel';
@@ -20,6 +20,11 @@ import { extractApiError } from '@/utils/errors';
 export function MapDetailPage() {
   const { mapId, tenantId } = useParams<{ mapId: string; tenantId: string }>();
   const navigate = useNavigate();
+  // `?node=X` query param lets cross-page links (e.g. plot member rows
+  // on /tenants/:tid/plots) deep-link into a specific node. We honor it
+  // exactly once per map load — see the effect below — so subsequent
+  // user-driven node selections aren't fought by stale URL state.
+  const [searchParams] = useSearchParams();
   const { activeMap, loadMap, updateMap } = useMap();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +41,20 @@ export function MapDetailPage() {
       .catch(() => setError('Map not found or you do not have permission to view it.'))
       .finally(() => setLoading(false));
   }, [mapId, loadMap]);
+
+  // Honor ?node=N once per map load. Re-running this on every searchParams
+  // change would clobber the user's clicks if they navigated within the
+  // same map — keying on mapId means it only fires when the page (re)mounts
+  // for a different map.
+  useEffect(() => {
+    if (!mapId) return;
+    const nodeParam = searchParams.get('node');
+    if (nodeParam) {
+      const n = Number(nodeParam);
+      if (Number.isFinite(n)) setSelectedNodeId(n);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapId]);
 
   if (loading) return <div className="page-loading">Loading map…</div>;
   if (error) return <div className="page-error">{error}</div>;
