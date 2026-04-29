@@ -17,6 +17,7 @@
  * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree
  *
  * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/move
+ * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/copy
  *
  * Node = the central new abstraction in the nodes-rebuild model
  * (tree-structured place markers, replacing annotations + adding
@@ -39,6 +40,25 @@
  *     to FALSE doesn't drop the rows. (Inheritance treats override
  *     = FALSE as "ignore my own tags, walk up parent_id"; the rows
  *     remain ready to re-activate.)
+ *
+ * Copy (Phase 2e.b, #100):
+ *   - POST /copy — recursively duplicate a node + its subtree with new
+ *     ids. Body: { newParentId: null | int, newMapId: null | int }.
+ *     - Each duplicated node has created_by = caller and a fresh
+ *       created_at; map_id = destination map; parent_id is rewired to
+ *       point at the copy of its (already-copied) parent so the in-copy
+ *       parent-child relationships mirror the source's.
+ *     - node_visibility rows are NOT copied; visibility_override resets
+ *       to FALSE on every copy. The user re-tags the copy explicitly.
+ *     - plot_nodes memberships are NOT copied; the user re-attaches if
+ *       desired.
+ *     - Notes attached to copied nodes are duplicated too — new ids,
+ *       reset created_by/created_at, no note_visibility carry-over.
+ *     - Cross-tenant copy requires admin in BOTH source and destination
+ *       tenants (same rule as move).
+ *     - No cycle check needed (the copies have new ids; placing the
+ *       copy under the source or its descendants is valid).
+ *     - Audit event: node_copy with descendantCount.
  *
  * Move (Phase 2e.a, #90):
  *   - POST /move — re-parent and/or relocate a node and its full subtree.
@@ -104,6 +124,9 @@ public:
         ADD_METHOD_TO(NodeController::moveNode,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/move",
                       drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(NodeController::copyNode,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/copy",
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listNodes(const drogon::HttpRequestPtr&,
@@ -134,6 +157,9 @@ public:
                     std::function<void(const drogon::HttpResponsePtr&)>&&,
                     int tenantId, int mapId, int id);
     void moveNode(const drogon::HttpRequestPtr&,
+                  std::function<void(const drogon::HttpResponsePtr&)>&&,
+                  int tenantId, int mapId, int id);
+    void copyNode(const drogon::HttpRequestPtr&,
                   std::function<void(const drogon::HttpResponsePtr&)>&&,
                   int tenantId, int mapId, int id);
 };

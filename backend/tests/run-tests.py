@@ -51,6 +51,7 @@ FAST_TESTS = [
     "test_22_plots.py",
     "test_23_tree_navigation.py",
     "test_24_node_move.py",
+    "test_25_node_copy.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
@@ -68,6 +69,9 @@ FAST_TESTS = [
 #   recursive CTE descent, pagination, hidden-root 404, owner_xray).
 # test_24_node_move.py landed in #90 (move endpoint: same-map re-parent,
 #   cross-map, cross-tenant, cycle prevention, cascade cleanups, audit).
+# test_25_node_copy.py landed in #100 (copy endpoint: recursive subtree
+#   duplication; new ids; tags + plot memberships dropped; notes follow
+#   with reset created_by/created_at; cross-map / cross-tenant rules).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -95,6 +99,7 @@ TEST_DESCRIPTIONS = {
     22: "Plots (CRUD, membership, visibility filter on listMembers)",
     23: "Tree navigation (children + subtree CTE descent, pagination)",
     24: "Node move (re-parent, cross-map, cross-tenant, cycle, cascade)",
+    25: "Node copy (recursive subtree duplication, notes follow, tag drop)",
 }
 
 
