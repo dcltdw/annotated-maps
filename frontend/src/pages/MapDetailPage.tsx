@@ -1,13 +1,14 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
+import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
 import { useMap } from '@/hooks/useMap';
 
-// Map detail page. The map view itself rebuilt in #101; the tree panel,
-// node detail view, and edit/delete affordances follow in #93 / #103.
-// For now: load the map record + render the MapView. Node click events
-// surface as a transient banner so the wiring is observable until #93's
-// detail panel listens for them properly.
+// Map detail page. NodeTreePanel + MapView are both wired up to a shared
+// selectedNodeId state — clicking a node in either surface highlights
+// it everywhere. The detail view that listens to selection lands in
+// #103; for now selection just shows a transient banner so the wiring
+// is observable.
 
 export function MapDetailPage() {
   const { mapId, tenantId } = useParams<{ mapId: string; tenantId: string }>();
@@ -16,6 +17,7 @@ export function MapDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [panTarget, setPanTarget] = useState<[number, number] | null>(null);
 
   useEffect(() => {
     if (!mapId) return;
@@ -40,10 +42,22 @@ export function MapDetailPage() {
       {activeMap.description && <p>{activeMap.description}</p>}
       {selectedNodeId !== null && (
         <div className="alert alert-info">
-          Selected node #{selectedNodeId}. Detail panel lands in #93.
+          Selected node #{selectedNodeId}. Detail panel lands in #103.
         </div>
       )}
-      <MapView map={activeMap} onNodeClick={setSelectedNodeId} />
+      <div className="map-detail-layout">
+        <NodeTreePanel
+          mapId={activeMap.id}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={setSelectedNodeId}
+          onPanToNode={(coords) => setPanTarget(coords)}
+        />
+        <MapView
+          map={activeMap}
+          onNodeClick={setSelectedNodeId}
+          panTarget={panTarget}
+        />
+      </div>
       <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
         Back to maps
       </button>

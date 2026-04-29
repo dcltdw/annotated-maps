@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, useMap as useLeafletMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
@@ -150,11 +150,29 @@ function NodeLayer({ node, media, onClick }: NodeLayerProps) {
 
 interface MapViewProps {
   map: MapRecord;
-  /** Fired when a node is clicked. The detail panel that listens lands in #93. */
+  /** Fired when a node layer is clicked on the map. */
   onNodeClick?: (nodeId: number) => void;
+  /**
+   * When set, fly the map to these coordinates. Setting it again with the
+   * same values (new tuple identity) re-pans — clicking the same node
+   * twice in the tree should re-center the map both times.
+   */
+  panTarget?: [number, number] | null;
 }
 
-export function MapView({ map, onNodeClick }: MapViewProps) {
+// Mounted inside MapContainer so it has access to the leaflet map instance.
+// Reacts to panTarget changes by flying the view to the requested coords.
+function PanController({ target }: { target: [number, number] | null | undefined }) {
+  const leafletMap = useLeafletMap();
+  useEffect(() => {
+    if (target) {
+      leafletMap.flyTo(target, leafletMap.getZoom(), { duration: 0.4 });
+    }
+  }, [target, leafletMap]);
+  return null;
+}
+
+export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -234,6 +252,7 @@ export function MapView({ map, onNodeClick }: MapViewProps) {
         >
           <ImageOverlay url={cs.image_url} bounds={bounds} />
           {renderNodeLayers()}
+          <PanController target={panTarget} />
         </MapContainer>
       </div>
     );
@@ -259,6 +278,7 @@ export function MapView({ map, onNodeClick }: MapViewProps) {
           className="map-view-leaflet map-view-blank"
         >
           {renderNodeLayers()}
+          <PanController target={panTarget} />
         </MapContainer>
       </div>
     );
@@ -275,6 +295,7 @@ export function MapView({ map, onNodeClick }: MapViewProps) {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
         {renderNodeLayers()}
+        <PanController target={panTarget} />
       </MapContainer>
     </div>
   );
