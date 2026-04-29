@@ -3,8 +3,11 @@
 #include "ErrorResponse.h"
 #include "VisibilityAuth.h"
 #include <drogon/drogon.h>
+#include <memory>
 #include <set>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("userId"); }
@@ -1533,6 +1536,525 @@ void NodeController::moveNode(
                                 callback(errorResponse(drogon::k403Forbidden,
                                     "forbidden",
                                     "Cross-tenant move requires admin in destination tenant"));
+                                return;
+                            }
+                            afterDestVerified(destTenantId, true);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to verify destination tenant role"));
+                        },
+                        destTenantId, userId);
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to verify destination map"));
+                },
+                userId, destMapId, userId);
+        },
+        [callback](const drogon::orm::DrogonDbException&) {
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to verify source node"));
+        },
+        userId, id, mapId, tenantId, userId);
+}
+
+// ─── POST /api/v1/tenants/{tid}/maps/{mid}/nodes/{id}/copy ───────────────────
+//
+// Recursively duplicate a node + its subtree with new ids. Body:
+//   { newParentId: null | int, newMapId: null | int }
+//
+// Permissions and cross-tenant rules mirror /move (#90):
+//   - Source map: edit-or-above access.
+//   - Destination map (if cross-map): edit-or-above access there too.
+//   - Cross-tenant: tenant admin in BOTH source and destination.
+//
+// Differences from /move:
+//   - No cycle check needed (copies have new ids; placing the copy under
+//     the source or its descendants is fine).
+//   - node_visibility rows NOT carried over; visibility_override resets
+//     to FALSE on every copy. The user re-tags explicitly.
+//   - plot_nodes memberships NOT carried over.
+//   - Notes attached to copied nodes are duplicated too — new ids,
+//     created_by = caller, created_at = NOW(), no note_visibility.
+//   - On every copy: created_by = caller, created_at default (NOW).
+//
+// Implementation: fetch the descendant set ordered by depth (parents
+// first), then INSERT each copy serially while building an old_id →
+// new_id map. The map is used to translate parent_id references and
+// note.node_id references. The structurally parallel verification
+// pipeline with /move is intentionally duplicated for now — extracting a
+// shared helper is a future refactor (the async-callback shape would
+// make the helper signature unwieldy without more invasive changes).
+
+void NodeController::copyNode(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    int userId = callerUserId(req);
+    bool srcIsAdmin = isTenantAdmin(req);
+
+    auto body = req->getJsonObject();
+    if (!body) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "JSON body required"));
+        return;
+    }
+
+    bool hasNewParent     = body->isMember("newParentId");
+    bool newParentIsNull  = hasNewParent && (*body)["newParentId"].isNull();
+    int  newParentId      = 0;
+    if (hasNewParent && !newParentIsNull) {
+        if (!(*body)["newParentId"].isInt()) {
+            callback(errorResponse(drogon::k400BadRequest,
+                "bad_request", "newParentId must be an integer or null"));
+            return;
+        }
+        newParentId = (*body)["newParentId"].asInt();
+    }
+
+    bool hasNewMap    = body->isMember("newMapId");
+    bool newMapIsNull = hasNewMap && (*body)["newMapId"].isNull();
+    int  destMapId    = mapId;
+    if (hasNewMap && !newMapIsNull) {
+        if (!(*body)["newMapId"].isInt()) {
+            callback(errorResponse(drogon::k400BadRequest,
+                "bad_request", "newMapId must be an integer or null"));
+            return;
+        }
+        destMapId = (*body)["newMapId"].asInt();
+    }
+    bool isCrossMap = (destMapId != mapId);
+
+    if (!hasNewParent && !hasNewMap) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "Body must include newParentId or newMapId"));
+        return;
+    }
+
+    // Step 1: source verification (same shape as moveNode).
+    auto db = drogon::app().getDbClient();
+    db->execSqlAsync(
+        "SELECT n.id FROM nodes n "
+        "JOIN maps m ON m.id = n.map_id "
+        "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
+        "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
+        "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin'))",
+        [callback, req, tenantId, mapId, id, userId, srcIsAdmin,
+         hasNewParent, newParentIsNull, newParentId,
+         destMapId, isCrossMap]
+        (const drogon::orm::Result& r1) {
+            if (r1.empty()) {
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Source node not found or insufficient permissions"));
+                return;
+            }
+
+            // afterDestVerified runs the actual copy after destination
+            // map + cross-tenant + new parent checks succeed.
+            auto afterDestVerified = [callback, req, tenantId, mapId, id,
+                                       userId, hasNewParent, newParentIsNull,
+                                       newParentId, destMapId, isCrossMap]
+                (int /*destTenantId*/, bool /*isCrossTenant*/) {
+
+                auto afterParentValidated = [callback, req, tenantId, mapId,
+                                              id, userId, hasNewParent,
+                                              newParentIsNull, newParentId,
+                                              destMapId, isCrossMap]() {
+
+                    // Step 4: fetch descendant set with the fields we need
+                    // to re-insert. ORDER BY depth ASC, id ASC ensures we
+                    // can iterate in a way that every node's parent (in the
+                    // copy) is already inserted before the node itself.
+                    std::string descSql =
+                        "WITH RECURSIVE descendants AS ( "
+                        "  SELECT id, parent_id, name, geo_json, description, "
+                        "         color, 0 AS depth "
+                        "  FROM nodes WHERE id = ? "
+                        "  UNION ALL "
+                        "  SELECT c.id, c.parent_id, c.name, c.geo_json, "
+                        "         c.description, c.color, d.depth + 1 "
+                        "  FROM descendants d JOIN nodes c ON c.parent_id = d.id "
+                        "  WHERE c.map_id = (SELECT map_id FROM nodes WHERE id = ?) "
+                        ") SELECT id, parent_id, name, geo_json, description, "
+                        "         color, depth "
+                        "  FROM descendants ORDER BY depth ASC, id ASC";
+
+                    auto dbD = drogon::app().getDbClient();
+                    dbD->execSqlAsync(descSql,
+                        [callback, req, tenantId, id, userId, hasNewParent,
+                         newParentIsNull, newParentId, destMapId]
+                        (const drogon::orm::Result& rD) {
+
+                            struct SrcNode {
+                                int id;
+                                int parentId;       // 0 if NULL
+                                bool parentIsNull;
+                                std::string name;
+                                std::string geoJson;
+                                bool geoIsNull;
+                                std::string description;
+                                bool descIsNull;
+                                std::string color;
+                                bool colorIsNull;
+                            };
+
+                            auto sources = std::make_shared<std::vector<SrcNode>>();
+                            sources->reserve(rD.size());
+                            for (const auto& row : rD) {
+                                SrcNode s;
+                                s.id = row["id"].as<int>();
+                                s.parentIsNull = row["parent_id"].isNull();
+                                s.parentId = s.parentIsNull ? 0 : row["parent_id"].as<int>();
+                                s.name = row["name"].as<std::string>();
+                                s.geoIsNull = row["geo_json"].isNull();
+                                s.geoJson = s.geoIsNull ? "" : row["geo_json"].as<std::string>();
+                                s.descIsNull = row["description"].isNull();
+                                s.description = s.descIsNull ? "" : row["description"].as<std::string>();
+                                s.colorIsNull = row["color"].isNull();
+                                s.color = s.colorIsNull ? "" : row["color"].as<std::string>();
+                                sources->push_back(std::move(s));
+                            }
+
+                            auto idMap   = std::make_shared<std::unordered_map<int,int>>();
+                            auto rootCopyId = std::make_shared<int>(0);
+
+                            // After all node copies are inserted, walk the
+                            // notes attached to the source set + duplicate
+                            // them with translated node_id.
+                            auto copyNotes = std::make_shared<std::function<void()>>();
+                            *copyNotes = [callback, req, tenantId, id, userId,
+                                          destMapId, hasNewParent, newParentIsNull,
+                                          newParentId, idMap, rootCopyId, sources,
+                                          copyNotes]() {
+                                if (sources->empty()) {
+                                    // shouldn't happen since source is in
+                                    // the set, but be defensive.
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "internal_error", "Empty source set on copy"));
+                                    return;
+                                }
+
+                                // Build the source-id list for the notes
+                                // fetch (literal-spliced ints).
+                                std::string idList;
+                                for (size_t i = 0; i < sources->size(); ++i) {
+                                    if (i > 0) idList += ",";
+                                    idList += std::to_string((*sources)[i].id);
+                                }
+
+                                std::string notesSql =
+                                    "SELECT id, node_id, title, text, pinned, color "
+                                    "FROM notes WHERE node_id IN (" + idList + ") "
+                                    "ORDER BY id ASC";
+
+                                auto dbN = drogon::app().getDbClient();
+                                dbN->execSqlAsync(notesSql,
+                                    [callback, req, tenantId, id, userId,
+                                     destMapId, hasNewParent, newParentIsNull,
+                                     newParentId, rootCopyId, sources, idMap]
+                                    (const drogon::orm::Result& rN) {
+
+                                        struct SrcNote {
+                                            int oldId;
+                                            int oldNodeId;
+                                            std::string title;
+                                            bool titleIsNull;
+                                            std::string text;
+                                            bool pinned;
+                                            std::string color;
+                                            bool colorIsNull;
+                                        };
+                                        auto notes = std::make_shared<std::vector<SrcNote>>();
+                                        notes->reserve(rN.size());
+                                        for (const auto& row : rN) {
+                                            SrcNote n;
+                                            n.oldId = row["id"].as<int>();
+                                            n.oldNodeId = row["node_id"].as<int>();
+                                            n.titleIsNull = row["title"].isNull();
+                                            n.title = n.titleIsNull ? "" : row["title"].as<std::string>();
+                                            n.text = row["text"].as<std::string>();
+                                            n.pinned = row["pinned"].as<bool>();
+                                            n.colorIsNull = row["color"].isNull();
+                                            n.color = n.colorIsNull ? "" : row["color"].as<std::string>();
+                                            notes->push_back(std::move(n));
+                                        }
+
+                                        auto finishAll = [callback, req, tenantId,
+                                                           id, userId, destMapId,
+                                                           hasNewParent, newParentIsNull,
+                                                           newParentId, rootCopyId,
+                                                           sources]() {
+                                            Json::Value detail;
+                                            detail["sourceId"]        = id;
+                                            detail["destParentId"]    = (hasNewParent && !newParentIsNull)
+                                                                          ? Json::Value(newParentId)
+                                                                          : Json::Value();
+                                            detail["destMapId"]       = destMapId;
+                                            detail["descendantCount"] = static_cast<int>(sources->size());
+                                            detail["newRootId"]       = *rootCopyId;
+                                            AuditLog::record("node_copy", req,
+                                                userId, 0, tenantId, detail);
+
+                                            Json::Value v;
+                                            v["id"]              = *rootCopyId;
+                                            v["mapId"]           = destMapId;
+                                            v["parentId"]        = (hasNewParent && !newParentIsNull)
+                                                                     ? Json::Value(newParentId)
+                                                                     : Json::Value();
+                                            v["descendantCount"] = static_cast<int>(sources->size());
+                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(v);
+                                            resp->setStatusCode(drogon::k201Created);
+                                            callback(resp);
+                                        };
+
+                                        // Recursive lambda over notes,
+                                        // serial INSERTs.
+                                        auto noteIdx = std::make_shared<size_t>(0);
+                                        auto step = std::make_shared<std::function<void()>>();
+                                        *step = [callback, userId, idMap, notes,
+                                                 noteIdx, step, finishAll]() {
+                                            if (*noteIdx >= notes->size()) {
+                                                finishAll();
+                                                return;
+                                            }
+                                            const auto& src = (*notes)[*noteIdx];
+                                            int newNodeId = idMap->at(src.oldNodeId);
+                                            (*noteIdx)++;
+
+                                            auto dbI = drogon::app().getDbClient();
+                                            dbI->execSqlAsync(
+                                                "INSERT INTO notes "
+                                                "  (node_id, created_by, title, text, pinned, color) "
+                                                "VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''))",
+                                                [step](const drogon::orm::Result&) { (*step)(); },
+                                                [callback](const drogon::orm::DrogonDbException&) {
+                                                    callback(errorResponse(drogon::k500InternalServerError,
+                                                        "db_error", "Failed to copy note"));
+                                                },
+                                                newNodeId, userId,
+                                                src.title, src.text,
+                                                src.pinned, src.color);
+                                        };
+                                        (*step)();
+                                    },
+                                    [callback](const drogon::orm::DrogonDbException&) {
+                                        callback(errorResponse(drogon::k500InternalServerError,
+                                            "db_error", "Failed to fetch source notes"));
+                                    });
+                            };
+
+                            // Recursive lambda over node sources, serial
+                            // INSERTs. Each insertId becomes the new id and
+                            // is recorded in idMap for parent translation.
+                            auto idx = std::make_shared<size_t>(0);
+                            auto step = std::make_shared<std::function<void()>>();
+                            *step = [callback, sources, idMap, rootCopyId, idx,
+                                     destMapId, userId, id, hasNewParent,
+                                     newParentIsNull, newParentId, step,
+                                     copyNotes]() {
+                                if (*idx >= sources->size()) {
+                                    (*copyNotes)();
+                                    return;
+                                }
+                                const auto& src = (*sources)[*idx];
+                                (*idx)++;
+
+                                // Resolve the new parent_id for this copy:
+                                //   - If src is the root of the source
+                                //     subtree, parent_id = body's
+                                //     newParentId (or NULL).
+                                //   - Else, parent_id = idMap[src.parentId]
+                                //     (the new id of its already-copied
+                                //     parent).
+                                bool parentIsNull = false;
+                                int  newParent    = 0;
+                                if (src.id == id) {
+                                    if (!hasNewParent || newParentIsNull) {
+                                        parentIsNull = true;
+                                    } else {
+                                        newParent = newParentId;
+                                    }
+                                } else {
+                                    // Should be in the map (parents inserted
+                                    // before children due to ORDER BY depth).
+                                    auto it = idMap->find(src.parentId);
+                                    if (it == idMap->end()) {
+                                        callback(errorResponse(drogon::k500InternalServerError,
+                                            "internal_error",
+                                            "Copy traversal lost a parent reference"));
+                                        return;
+                                    }
+                                    newParent = it->second;
+                                }
+
+                                // Build the INSERT with NULLs inlined for
+                                // optional columns. Same approach as
+                                // createNode (#96).
+                                std::string sqlIns =
+                                    "INSERT INTO nodes "
+                                    "  (map_id, parent_id, created_by, name, "
+                                    "   geo_json, description, color) "
+                                    "VALUES (?, ";
+                                sqlIns += parentIsNull ? "NULL, " : "?, ";
+                                sqlIns += "?, ?, ";
+                                sqlIns += src.geoIsNull ? "NULL, " : "CAST(? AS JSON), ";
+                                sqlIns += src.descIsNull ? "NULL, " : "?, ";
+                                sqlIns += src.colorIsNull ? "NULL)"   : "?)";
+
+                                auto dbI = drogon::app().getDbClient();
+                                auto onIns = [src, idMap, rootCopyId, id, step]
+                                    (const drogon::orm::Result& rI) {
+                                    int newId = static_cast<int>(rI.insertId());
+                                    (*idMap)[src.id] = newId;
+                                    if (src.id == id) *rootCopyId = newId;
+                                    (*step)();
+                                };
+                                auto onErr = [callback]
+                                    (const drogon::orm::DrogonDbException&) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to copy node"));
+                                };
+
+                                // Param ordering follows the conditional
+                                // SQL pattern. There are 8 combinations of
+                                // (parentIsNull, geoIsNull, descIsNull,
+                                // colorIsNull) — 16 if you count the parent
+                                // dim — so we just inline by case.
+                                if (parentIsNull) {
+                                    if (src.geoIsNull && src.descIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name);
+                                    } else if (src.geoIsNull && src.descIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.color);
+                                    } else if (src.geoIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.description);
+                                    } else if (src.descIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.geoJson);
+                                    } else if (src.geoIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.description, src.color);
+                                    } else if (src.descIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.geoJson, src.color);
+                                    } else if (src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.geoJson, src.description);
+                                    } else {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, userId, src.name, src.geoJson, src.description, src.color);
+                                    }
+                                } else {
+                                    if (src.geoIsNull && src.descIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name);
+                                    } else if (src.geoIsNull && src.descIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.color);
+                                    } else if (src.geoIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.description);
+                                    } else if (src.descIsNull && src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.geoJson);
+                                    } else if (src.geoIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.description, src.color);
+                                    } else if (src.descIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.geoJson, src.color);
+                                    } else if (src.colorIsNull) {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.geoJson, src.description);
+                                    } else {
+                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                            destMapId, newParent, userId, src.name, src.geoJson, src.description, src.color);
+                                    }
+                                }
+                            };
+                            (*step)();
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to compute descendant set"));
+                        },
+                        id, id);
+                };
+
+                // Step 3: validate newParentId on destination map (if any).
+                if (!hasNewParent || newParentIsNull) {
+                    afterParentValidated();
+                    return;
+                }
+                auto dbP = drogon::app().getDbClient();
+                dbP->execSqlAsync(
+                    "SELECT id FROM nodes WHERE id = ? AND map_id = ?",
+                    [callback, afterParentValidated]
+                    (const drogon::orm::Result& rP) {
+                        if (rP.empty()) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "bad_request", "newParentId not found on destination map"));
+                            return;
+                        }
+                        afterParentValidated();
+                    },
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Failed to verify new parent"));
+                    },
+                    newParentId, destMapId);
+            };
+
+            // Step 2: cross-map / cross-tenant verification (mirrors
+            // moveNode's logic — see the structural-duplication note in
+            // the function-level comment above).
+            if (!isCrossMap) {
+                afterDestVerified(tenantId, false);
+                return;
+            }
+
+            auto dbDest = drogon::app().getDbClient();
+            dbDest->execSqlAsync(
+                "SELECT m.tenant_id FROM maps m "
+                "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
+                "WHERE m.id = ? "
+                "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin'))",
+                [callback, req, tenantId, mapId, id, userId, srcIsAdmin,
+                 destMapId, afterDestVerified]
+                (const drogon::orm::Result& rDest) {
+                    if (rDest.empty()) {
+                        callback(errorResponse(drogon::k400BadRequest,
+                            "bad_request",
+                            "newMapId not found or insufficient permissions"));
+                        return;
+                    }
+                    int destTenantId   = rDest[0]["tenant_id"].as<int>();
+                    bool isCrossTenant = (destTenantId != tenantId);
+
+                    if (!isCrossTenant) {
+                        afterDestVerified(destTenantId, false);
+                        return;
+                    }
+                    if (!srcIsAdmin) {
+                        callback(errorResponse(drogon::k403Forbidden,
+                            "forbidden", "Cross-tenant copy requires tenant admin role"));
+                        return;
+                    }
+                    auto dbT = drogon::app().getDbClient();
+                    dbT->execSqlAsync(
+                        "SELECT role FROM tenant_members "
+                        "WHERE tenant_id = ? AND user_id = ?",
+                        [callback, afterDestVerified, destTenantId]
+                        (const drogon::orm::Result& rT) {
+                            if (rT.empty() ||
+                                rT[0]["role"].as<std::string>() != "admin") {
+                                callback(errorResponse(drogon::k403Forbidden,
+                                    "forbidden",
+                                    "Cross-tenant copy requires admin in destination tenant"));
                                 return;
                             }
                             afterDestVerified(destTenantId, true);
