@@ -160,18 +160,30 @@ message or trivially confirmable). In that case the only manual step
 is the board flip — fine to do as a single direct tool call without
 the list overhead.
 
-**Always verify after a board edit.** `gh project item-edit` can
-silently no-op: exit code 0, no output, no actual change. Encountered
-during the #106 cleanup — the first flip command returned cleanly but
-the status stayed at In Progress; only spotted when the user noticed
-the board was wrong on the next turn. The fix is cheap: every board
-edit should be paired with an immediate read-back. Either chain them
-in one shell command (`gh project item-edit ... ; gh project item-list
-... --jq '.items[] | select(.content.number == NNN) | .status'`) or
-run a follow-up read tool call. The board's eventual-consistency
-window is short — a synchronous check in the same turn is sufficient.
-Don't mark the corresponding TodoWrite item completed until the
-read-back returns the expected status.
+**Always verify after any `gh` command that affects the project board.**
+Multiple `gh` invocations can silently no-op the board side-effect:
+exit code 0, no output, no actual change. Confirmed instances:
+
+- **`gh project item-edit ...`** — first board flip during the #106
+  cleanup returned cleanly but the status stayed at In Progress.
+  Spotted only when the user noticed the wrong state on the next turn.
+- **`gh issue create --project "Focus on next" ...`** — the project
+  assignment silently dropped during the #146 file (post-merge
+  cleanup ticket). Required a follow-up `gh project item-add` and a
+  verification read.
+
+The fix is cheap: every board-affecting `gh` invocation should be
+paired with an immediate read-back. Either chain them in one shell
+command (`gh project item-edit ... ; gh project item-list ... --jq
+'.items[] | select(.content.number == NNN) | .status'`) or run a
+follow-up read tool call. The board's eventual-consistency window is
+short — a synchronous check in the same turn is sufficient.
+
+Apply the same pattern to **any new board-affecting `gh` invocation**
+encountered going forward — silent no-ops appear to be a generic
+property of this CLI surface, not isolated to the two commands above.
+Don't mark the corresponding TodoWrite item completed until the read-
+back returns the expected state.
 
 **Delete the local feature branch after the PR merges.** When this
 collaborator merges PRs they configure GitHub to delete the remote
@@ -299,6 +311,30 @@ often warrant a conventions doc (so future devs don't drift back to the old
 shape). If truly nothing needs updating, **say so explicitly** in the PR
 description — e.g., "No docs/tests updated — refactor preserves behavior
 exactly and no convention docs exist yet."
+
+**Verify lint/typecheck per-file on the touched files**, not just by
+running the project-wide command. ESLint's daemon and watcher caches can
+hold a stale "clean" answer for a recently-touched file, so a project-
+wide `npm run lint` shortly after writing a file may report 0 errors
+even though a fresh CI run will fail on it. Hit twice in a row on
+PR #142 (verify-after-board-edit) and PR #144 (the unused-`node` var in
+`plots-in-detail-panel.spec.ts` — local lint reported clean, CI caught
+it on a cold cache).
+
+**The fix:** before opening the PR, also run the linter directly on the
+files in your diff:
+
+```bash
+git diff --name-only --diff-filter=AM <base-branch>...HEAD \
+  | grep -E '\.(ts|tsx|js|jsx)$' \
+  | xargs -r npx eslint --max-warnings 0
+```
+
+Or for the smaller per-PR case: `npx eslint <new-or-edited-file>` for
+each file you wrote. The cold per-file invocation bypasses the daemon
+cache and matches what CI will see. Apply the same belt-and-suspenders
+pattern to typecheck if your project has had analogous misses with
+`tsc --noEmit`.
 
 ### 6. PR Test Expectations section (only when failures are expected)
 
