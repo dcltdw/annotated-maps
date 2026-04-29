@@ -23,12 +23,17 @@ export function MapListPage() {
     setCreateError(null);
     setCreating(true);
     try {
+      // Default new maps to a generic WGS84 view; the user can swap to
+      // pixel or blank coordinate systems via update once that UI lands
+      // (#101 series).
       const data: CreateMapRequest = {
         title,
         description,
-        centerLat: 0,
-        centerLng: 0,
-        zoom: 3,
+        coordinateSystem: {
+          type: 'wgs84',
+          center: { lat: 0, lng: 0 },
+          zoom: 3,
+        },
       };
       const map = await createMap(data);
       setShowCreate(false);

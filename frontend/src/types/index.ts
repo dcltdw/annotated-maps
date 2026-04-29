@@ -1,3 +1,33 @@
+// Hand-written types for the parts of the API not yet covered by Zod
+// schemas (auth, tenants, permissions). The map / node / note / coordinate-
+// system shapes — the ones that changed during the rebuild — live in
+// `api/schemas.ts` and are derived from Zod via `z.infer<>`. New code
+// should prefer importing types from `@/api/schemas` over redefining here.
+
+// Re-export the Zod-derived types so consumers can keep importing from
+// `@/types` if they prefer a single import surface.
+export type {
+  MapRecord,
+  MapList,
+  MapPermissionLevel,
+  CoordinateSystem,
+  NodeRecord,
+  NodeList,
+  NodeSubtreeEntry,
+  NodeSubtreeResponse,
+  NoteRecord,
+  NoteList,
+  GeoJsonGeometry,
+  TenantRole,
+  PermissionLevel,
+  CreateMapRequest,
+  UpdateMapRequest,
+  CreateNodeRequest,
+  UpdateNodeRequest,
+  CreateNoteRequest,
+  UpdateNoteRequest,
+} from '@/api/schemas';
+
 // ─── Auth ────────────────────────────────────────────────────────────────────
 
 export interface User {
@@ -43,7 +73,7 @@ export interface Organization {
   slug: string;
 }
 
-export type TenantRole = 'admin' | 'editor' | 'viewer';
+import type { TenantRole } from '@/api/schemas';
 
 export interface TenantSummary {
   id: number;
@@ -78,89 +108,9 @@ export interface TenantMember {
   createdAt: string;
 }
 
-// ─── Maps ─────────────────────────────────────────────────────────────────────
+// ─── Map permissions ─────────────────────────────────────────────────────────
 
-export interface MapRecord {
-  id: number;
-  ownerId: number;
-  ownerUsername: string;
-  title: string;
-  description: string;
-  centerLat: number;
-  centerLng: number;
-  zoom: number;
-  createdAt: string;
-  updatedAt: string;
-  permission: MapPermissionLevel;
-}
-
-export type MapPermissionLevel = 'none' | 'view' | 'edit' | 'owner';
-
-export interface CreateMapRequest {
-  title: string;
-  description?: string;
-  centerLat: number;
-  centerLng: number;
-  zoom: number;
-}
-
-export interface UpdateMapRequest {
-  title?: string;
-  description?: string;
-  centerLat?: number;
-  centerLng?: number;
-  zoom?: number;
-}
-
-// ─── Annotations ─────────────────────────────────────────────────────────────
-
-export type AnnotationType = 'marker' | 'polyline' | 'polygon';
-
-export interface Annotation {
-  id: number;
-  mapId: number;
-  createdBy: number;
-  createdByUsername: string;
-  type: AnnotationType;
-  title: string;
-  description: string;
-  geoJson: GeoJsonGeometry;
-  media: AnnotationMedia[];
-  createdAt: string;
-  updatedAt: string;
-  canEdit: boolean;
-}
-
-export interface GeoJsonGeometry {
-  type: 'Point' | 'LineString' | 'Polygon';
-  coordinates: number[] | number[][] | number[][][];
-}
-
-export interface AnnotationMedia {
-  id: number;
-  annotationId: number;
-  mediaType: 'image' | 'link';
-  url: string;
-  caption: string;
-}
-
-export interface CreateAnnotationRequest {
-  mapId: number;
-  type: AnnotationType;
-  title: string;
-  description?: string;
-  geoJson: GeoJsonGeometry;
-}
-
-export interface UpdateAnnotationRequest {
-  title?: string;
-  description?: string;
-  geoJson?: GeoJsonGeometry;
-}
-
-// ─── Permissions ─────────────────────────────────────────────────────────────
-
-export type PermissionLevel = 'none' | 'view' | 'comment' | 'edit' | 'moderate' | 'admin';
+import type { PermissionLevel } from '@/api/schemas';
 
 export interface MapPermission {
   id: number;
@@ -178,72 +128,6 @@ export interface SetPermissionRequest {
 export type UserStatus = 'active' | 'suspended' | 'deactivated' | 'pending' | 'locked';
 export type PlatformRole = 'superuser' | 'support' | 'none';
 export type OrgRole = 'owner' | 'admin' | 'member';
-
-// ─── Notes ────────────────────────────────────────────────────────────────────
-
-export interface Note {
-  id: number;
-  mapId: number;
-  groupId: number | null;
-  createdBy: number;
-  createdByUsername: string;
-  lat: number;
-  lng: number;
-  title: string | null;
-  text: string;
-  pinned: boolean;
-  color: string | null;
-  canEdit: boolean;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateNoteRequest {
-  lat: number;
-  lng: number;
-  title?: string;
-  text: string;
-  color?: string;
-  groupId?: number;
-}
-
-export interface UpdateNoteRequest {
-  title?: string;
-  text?: string;
-  color?: string | null;
-  groupId?: number | null;
-  lat?: number;
-  lng?: number;
-}
-
-// ─── Note Groups ──────────────────────────────────────────────────────────────
-
-export interface NoteGroup {
-  id: number;
-  mapId: number;
-  name: string;
-  description: string;
-  color: string;
-  sortOrder: number;
-  createdBy: number;
-  createdByUsername: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface CreateNoteGroupRequest {
-  name: string;
-  description?: string;
-  color?: string;
-  sortOrder?: number;
-}
-
-export interface UpdateNoteGroupRequest {
-  name?: string;
-  description?: string;
-  color?: string;
-  sortOrder?: number;
-}
 
 // ─── API ─────────────────────────────────────────────────────────────────────
 
