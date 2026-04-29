@@ -1,16 +1,20 @@
-import { test, expect, Page, APIRequestContext } from '@playwright/test';
-import { makeUser } from './helpers';
+import { test, expect } from '@playwright/test';
+import {
+  registerViaApi,
+  createMapViaApi,
+  createNodeViaApi,
+  seedAuthInBrowser,
+} from './helpers';
 
 /**
  * E2E coverage for #128 (Phase 2f follow-up): pixel + blank map renderers.
  *
  * The new-map UI in MapListPage hardcodes `wgs84` defaults — there's no
  * UI yet for editing `coordinateSystem` to `pixel` or `blank`. To exercise
- * the renderers, this spec uses the backend API directly to register a
- * user, create a map with the desired coordinate system, attach a node,
- * then seeds `localStorage` so the browser session is authenticated and
- * navigates to the map detail page. The MapView renderer is what's
- * actually under test.
+ * the renderers, this spec uses the API helpers from `helpers.ts` to
+ * register a user, create a map with the desired coordinate system,
+ * attach a node, then seed `localStorage` so the browser session is
+ * authenticated and navigates to the map detail page.
  *
  * Verification per type:
  *  - `pixel` → `<img class="leaflet-image-layer">` with the right src,
@@ -18,81 +22,6 @@ import { makeUser } from './helpers';
  *  - `blank` → no image layer, MapContainer carries `map-view-blank`
  *    class, marker is rendered.
  */
-
-// The Playwright `request` fixture inherits the spec's baseURL (5173), but
-// the backend runs on a different port. Hit it directly so we don't bounce
-// through Vite's dev server.
-const API = process.env.PLAYWRIGHT_API_URL ?? 'http://localhost:8080/api/v1';
-
-interface ApiUser {
-  token: string;
-  tenantId: number;
-  user: { id: number; username: string; email: string };
-}
-
-async function registerViaApi(request: APIRequestContext, tag: string): Promise<ApiUser> {
-  const u = makeUser(tag);
-  const res = await request.post(`${API}/auth/register`, {
-    data: { username: u.username, email: u.email, password: u.password },
-  });
-  expect(res.ok()).toBeTruthy();
-  const body = await res.json();
-  return { token: body.token, tenantId: body.tenantId, user: body.user };
-}
-
-async function createMapViaApi(
-  request: APIRequestContext,
-  api: ApiUser,
-  title: string,
-  coordinateSystem: unknown,
-): Promise<{ id: number }> {
-  const res = await request.post(`${API}/tenants/${api.tenantId}/maps`, {
-    headers: { Authorization: `Bearer ${api.token}` },
-    data: { title, coordinateSystem },
-  });
-  if (!res.ok()) {
-    throw new Error(`createMap failed: ${res.status()} ${await res.text()}`);
-  }
-  return res.json();
-}
-
-async function createNodeViaApi(
-  request: APIRequestContext,
-  api: ApiUser,
-  mapId: number,
-  body: { name: string; geoJson: unknown },
-): Promise<{ id: number }> {
-  const res = await request.post(`${API}/tenants/${api.tenantId}/maps/${mapId}/nodes`, {
-    headers: { Authorization: `Bearer ${api.token}` },
-    data: body,
-  });
-  if (!res.ok()) {
-    throw new Error(`createNode failed: ${res.status()} ${await res.text()}`);
-  }
-  return res.json();
-}
-
-/** Seed the zustand-persisted auth storage so the SPA boots authenticated. */
-async function seedAuthInBrowser(page: Page, api: ApiUser): Promise<void> {
-  // First navigate so localStorage is scoped to the right origin.
-  await page.goto('/login');
-  await page.evaluate((api) => {
-    const persisted = {
-      state: {
-        token: api.token,
-        user: api.user,
-        orgId: null,
-        tenantId: api.tenantId,
-        tenants: [
-          { id: api.tenantId, name: '', slug: '', role: 'admin' as const },
-        ],
-        branding: {},
-      },
-      version: 0,
-    };
-    localStorage.setItem('auth-storage', JSON.stringify(persisted));
-  }, api);
-}
 
 test.describe('Pixel coordinate system', () => {
   test('renders an image overlay and a marker for a placed node', async ({ page, request }) => {

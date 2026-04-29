@@ -224,21 +224,44 @@ void NoteController::createNote(
                         return;
                     }
                     int newId = static_cast<int>(r2.insertId());
-                    Json::Value n;
-                    n["id"]                  = newId;
-                    n["nodeId"]              = nodeId;
-                    n["mapId"]               = mapId;
-                    n["createdBy"]           = userId;
-                    n["createdByUsername"]   = callerUsername;
-                    n["title"]               = title;
-                    n["text"]                = text;
-                    n["pinned"]              = false;
-                    n["color"]               = color.empty() ? Json::Value() : Json::Value(color);
-                    n["visibilityOverride"]  = false;
-                    n["canEdit"]             = true;
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
-                    resp->setStatusCode(drogon::k201Created);
-                    callback(resp);
+
+                    // Re-fetch just the timestamps so the response shape
+                    // matches the GET-style payload exactly (frontend Zod
+                    // schema requires createdAt + updatedAt). Same fix as
+                    // the MapController one in #127.
+                    auto db3 = drogon::app().getDbClient();
+                    db3->execSqlAsync(
+                        "SELECT created_at, updated_at FROM notes WHERE id = ?",
+                        [callback, newId, nodeId, mapId, userId, callerUsername,
+                         title, text, color]
+                        (const drogon::orm::Result& rTs) {
+                            Json::Value n;
+                            n["id"]                  = newId;
+                            n["nodeId"]              = nodeId;
+                            n["mapId"]               = mapId;
+                            n["createdBy"]           = userId;
+                            n["createdByUsername"]   = callerUsername;
+                            n["title"]               = title;
+                            n["text"]                = text;
+                            n["pinned"]              = false;
+                            n["color"]               = color.empty()
+                                                         ? Json::Value()
+                                                         : Json::Value(color);
+                            n["visibilityOverride"]  = false;
+                            n["canEdit"]             = true;
+                            if (!rTs.empty()) {
+                                n["createdAt"] = rTs[0]["created_at"].as<std::string>();
+                                n["updatedAt"] = rTs[0]["updated_at"].as<std::string>();
+                            }
+                            auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
+                            resp->setStatusCode(drogon::k201Created);
+                            callback(resp);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to fetch created note timestamps"));
+                        },
+                        newId);
                 },
                 [callback](const drogon::orm::DrogonDbException&) {
                     callback(errorResponse(drogon::k500InternalServerError,
