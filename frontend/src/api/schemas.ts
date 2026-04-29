@@ -252,7 +252,9 @@ export type CreateMapRequest = {
   coordinateSystem?: CoordinateSystem;
 };
 
-export type UpdateMapRequest = Partial<CreateMapRequest>;
+export type UpdateMapRequest = Partial<CreateMapRequest> & {
+  ownerXray?: boolean;
+};
 
 export type CreateNodeRequest = {
   name: string;

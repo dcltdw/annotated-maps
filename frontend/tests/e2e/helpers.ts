@@ -1,3 +1,5 @@
+import { execFileSync } from 'child_process';
+import path from 'path';
 import { randomUUID } from 'crypto';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -123,23 +125,66 @@ export async function createNodeViaApi(
  * Must be called *before* navigating to any route that requires auth, but
  * *after* an initial `page.goto('/login')` (or any path on the right
  * origin) so localStorage is writable.
+ *
+ * `activeTenant` overrides the in-store tenantId/tenants list — needed for
+ * cross-user visibility tests where user B browses user A's tenant. Without
+ * it, the store's tenantId stays as B's personal tenant and the services
+ * layer's `tenantBase` fallback hits the wrong tenant on API calls.
  */
-export async function seedAuthInBrowser(page: Page, api: ApiUser): Promise<void> {
+export async function seedAuthInBrowser(
+  page: Page,
+  api: ApiUser,
+  activeTenant?: { id: number; role: 'admin' | 'editor' | 'viewer' },
+): Promise<void> {
   await page.goto('/login');
-  await page.evaluate((api) => {
-    const persisted = {
-      state: {
-        token: api.token,
-        user: api.user,
-        orgId: null,
-        tenantId: api.tenantId,
-        tenants: [
-          { id: api.tenantId, name: '', slug: '', role: 'admin' as const },
-        ],
-        branding: {},
-      },
-      version: 0,
-    };
-    localStorage.setItem('auth-storage', JSON.stringify(persisted));
-  }, api);
+  await page.evaluate(
+    ({ api, activeTenant }) => {
+      const tenantId = activeTenant?.id ?? api.tenantId;
+      const role = activeTenant?.role ?? 'admin';
+      const persisted = {
+        state: {
+          token: api.token,
+          user: api.user,
+          orgId: null,
+          tenantId,
+          tenants: [{ id: tenantId, name: '', slug: '', role }],
+          branding: {},
+        },
+        version: 0,
+      };
+      localStorage.setItem('auth-storage', JSON.stringify(persisted));
+    },
+    { api, activeTenant },
+  );
+}
+
+// ─── Direct MySQL access (E2E setup only) ────────────────────────────────────
+// A few visibility-flow scenarios need fixture moves the personal-tenant API
+// can't naturally produce — e.g., putting two users in the same org so they
+// can be members of the same visibility group (the per-org check from #98
+// would otherwise reject cross-org members).
+//
+// Mirrors the `mysql_query` pattern from backend/tests/helpers.py: shell out
+// to `docker compose exec mysql mysql -e <query>`. Sync (execFileSync)
+// because Playwright tests don't need it to be async, and waiting in the
+// test body keeps the fixture flow readable. Path is resolved against the
+// repo root so the helper works regardless of cwd.
+
+// Playwright runs from `frontend/`; repo root is one up. Using process.cwd()
+// avoids the ESM-mode __dirname unavailability.
+const REPO_ROOT = path.resolve(process.cwd(), '..');
+
+export function mysqlQuery(query: string): string {
+  const password = process.env.MYSQL_ROOT_PASSWORD ?? 'rootpassword';
+  const out = execFileSync(
+    'docker',
+    [
+      'compose', '-f', `${REPO_ROOT}/docker-compose.yml`,
+      'exec', '-T', 'mysql',
+      'mysql', '-uroot', `-p${password}`, 'annotated_maps',
+      '-N', '-e', query,
+    ],
+    { encoding: 'utf8', timeout: 10_000 },
+  );
+  return out.trim();
 }
