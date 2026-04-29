@@ -3,10 +3,11 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
 import { useMap } from '@/hooks/useMap';
 
-// Stubbed for #92. The full edit / delete / notes-panel UI lands in #101
-// (map view rebuild) + #103 (node detail + inline notes CRUD). This page
-// currently just loads the map record (so the listing-page → detail-page
-// nav still works) and renders the MapView stub.
+// Map detail page. The map view itself rebuilt in #101; the tree panel,
+// node detail view, and edit/delete affordances follow in #93 / #103.
+// For now: load the map record + render the MapView. Node click events
+// surface as a transient banner so the wiring is observable until #93's
+// detail panel listens for them properly.
 
 export function MapDetailPage() {
   const { mapId, tenantId } = useParams<{ mapId: string; tenantId: string }>();
@@ -14,6 +15,7 @@ export function MapDetailPage() {
   const { activeMap, loadMap } = useMap();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!mapId) return;
@@ -36,7 +38,12 @@ export function MapDetailPage() {
         </Link>
       </div>
       {activeMap.description && <p>{activeMap.description}</p>}
-      <MapView map={activeMap} />
+      {selectedNodeId !== null && (
+        <div className="alert alert-info">
+          Selected node #{selectedNodeId}. Detail panel lands in #93.
+        </div>
+      )}
+      <MapView map={activeMap} onNodeClick={setSelectedNodeId} />
       <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
         Back to maps
       </button>

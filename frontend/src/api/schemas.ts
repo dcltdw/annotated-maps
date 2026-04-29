@@ -161,6 +161,25 @@ export type NoteRecord = z.infer<typeof NoteRecordSchema>;
 export const NoteListSchema = z.array(NoteRecordSchema);
 export type NoteList = z.infer<typeof NoteListSchema>;
 
+// ─── Node media ──────────────────────────────────────────────────────────────
+// Image / link attachments rendered alongside node popups in the map view.
+
+export const NodeMediaTypeSchema = z.enum(['image', 'link']);
+export type NodeMediaType = z.infer<typeof NodeMediaTypeSchema>;
+
+export const NodeMediaRecordSchema = z.object({
+  id: z.number().int(),
+  nodeId: z.number().int(),
+  mediaType: NodeMediaTypeSchema,
+  url: z.string().url(),
+  caption: z.string(),
+  createdAt: z.string(),
+});
+export type NodeMediaRecord = z.infer<typeof NodeMediaRecordSchema>;
+
+export const NodeMediaListSchema = z.array(NodeMediaRecordSchema);
+export type NodeMediaList = z.infer<typeof NodeMediaListSchema>;
+
 // ─── Request shapes (used by service callers) ────────────────────────────────
 // These don't need runtime parsing on the way out — they're typed for the
 // caller's convenience. Re-exported from this module so all schema-derived
