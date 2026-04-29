@@ -56,7 +56,7 @@ test.describe('Plots in detail panel — node', () => {
       center: { lat: 0, lng: 0 },
       zoom: 3,
     });
-    const node = await createNodeViaApi(request, api, map.id, { name: 'TownA' });
+    await createNodeViaApi(request, api, map.id, { name: 'TownA' });
     await createPlotViaApi(request, api, 'Detail Plot');
 
     await seedAuthInBrowser(page, api);
