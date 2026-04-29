@@ -300,6 +300,30 @@ shape). If truly nothing needs updating, **say so explicitly** in the PR
 description — e.g., "No docs/tests updated — refactor preserves behavior
 exactly and no convention docs exist yet."
 
+**Verify lint/typecheck per-file on the touched files**, not just by
+running the project-wide command. ESLint's daemon and watcher caches can
+hold a stale "clean" answer for a recently-touched file, so a project-
+wide `npm run lint` shortly after writing a file may report 0 errors
+even though a fresh CI run will fail on it. Hit twice in a row on
+PR #142 (verify-after-board-edit) and PR #144 (the unused-`node` var in
+`plots-in-detail-panel.spec.ts` — local lint reported clean, CI caught
+it on a cold cache).
+
+**The fix:** before opening the PR, also run the linter directly on the
+files in your diff:
+
+```bash
+git diff --name-only --diff-filter=AM <base-branch>...HEAD \
+  | grep -E '\.(ts|tsx|js|jsx)$' \
+  | xargs -r npx eslint --max-warnings 0
+```
+
+Or for the smaller per-PR case: `npx eslint <new-or-edited-file>` for
+each file you wrote. The cold per-file invocation bypasses the daemon
+cache and matches what CI will see. Apply the same belt-and-suspenders
+pattern to typecheck if your project has had analogous misses with
+`tsc --noEmit`.
+
 ### 6. PR Test Expectations section (only when failures are expected)
 
 > **Rule:** When some CI checks are expected to fail (e.g., mid-rebuild on a
