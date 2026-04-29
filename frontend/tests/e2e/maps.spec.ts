@@ -2,12 +2,20 @@ import { test, expect, Page } from '@playwright/test';
 import { makeUser } from './helpers';
 
 /**
- * E2E coverage for Map CRUD (#35).
+ * E2E coverage for Map CRUD (#35), updated for the post-rebuild UI (#102).
  *
- * Edit and delete cases are deferred via test.fixme until the UI for
- * those operations exists — see #70. The service-layer functions
- * (updateMap, deleteMap in src/services/maps.ts) are wired up but no
- * page calls them yet.
+ * Map create/list/view tests run against the rebuilt MapListPage +
+ * MapDetailPage from #92/#101. Edit and delete cases are `test.fixme`
+ * until the map-edit UI is restored (separate future ticket — the
+ * service-layer functions in src/services/maps.ts are still wired up,
+ * but MapDetailPage no longer surfaces edit/delete affordances after
+ * the #92 stub-out).
+ *
+ * The `ownerXray` toggle test from the original ticket is also fixme —
+ * no UI for it yet.
+ *
+ * New-feature E2E (tree panel, node detail, visibility tagging, plots)
+ * lives in #104 / #94.c / #95.
  */
 
 const MAPS_URL_RE   = /\/tenants\/\d+\/maps$/;
@@ -112,7 +120,10 @@ test.describe('Maps — view', () => {
 });
 
 test.describe('Maps — edit', () => {
-  test('editing the title persists on reload', async ({ page }) => {
+  // Edit UI was removed when the map detail page was stubbed in #92 and
+  // not restored in #101 (which focused on the renderer). Re-enable when
+  // the map-edit UI lands.
+  test.fixme('editing the title persists on reload', async ({ page }) => {
     await registerAndLand(page, 'maps_edit_title');
     const original = `Original ${Date.now().toString(36)}`;
     const updated  = `Updated ${Date.now().toString(36)}`;
@@ -134,7 +145,7 @@ test.describe('Maps — edit', () => {
     await expect(page.getByRole('heading', { name: updated })).toBeVisible();
   });
 
-  test('editing the description persists on reload', async ({ page }) => {
+  test.fixme('editing the description persists on reload', async ({ page }) => {
     await registerAndLand(page, 'maps_edit_desc');
     const title = `DescEdit ${Date.now().toString(36)}`;
     await createMap(page, title, 'Original description.');
@@ -154,8 +165,18 @@ test.describe('Maps — edit', () => {
   });
 });
 
+test.describe('Maps — owner_xray toggle', () => {
+  // Backend supports `ownerXray` on `MapRecord` (PUT /maps/:id accepts it),
+  // and the visibility filter respects it (#99). UI for toggling it has
+  // not been built yet — re-enable when it lands.
+  test.fixme('toggling owner_xray persists on reload', async ({ page }) => {
+    void page;
+  });
+});
+
 test.describe('Maps — delete', () => {
-  test('deleting a map removes it from the list and navigates back', async ({ page }) => {
+  // Delete UI was also stubbed out in #92. Re-enable when restored.
+  test.fixme('deleting a map removes it from the list and navigates back', async ({ page }) => {
     await registerAndLand(page, 'maps_delete');
     const title = `Doomed ${Date.now().toString(36)}`;
     await createMap(page, title);
@@ -178,7 +199,7 @@ test.describe('Maps — delete', () => {
     ).toBeVisible();
   });
 
-  test('cancelling the delete confirmation keeps the map', async ({ page }) => {
+  test.fixme('cancelling the delete confirmation keeps the map', async ({ page }) => {
     await registerAndLand(page, 'maps_delete_cancel');
     const title = `Survivor ${Date.now().toString(36)}`;
     await createMap(page, title);

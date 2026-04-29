@@ -240,18 +240,47 @@ void MapController::createMap(
                 return;
             }
             int newId = static_cast<int>(r.insertId());
-            Json::Value m;
-            m["id"]                = newId;
-            m["ownerId"]           = userId;
-            m["tenantId"]          = tenantId;
-            m["title"]             = title;
-            m["description"]       = description;
-            m["coordinateSystem"]  = coordSys;
-            m["ownerXray"]         = ownerXray;
-            m["permission"]        = "owner";
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(m);
-            resp->setStatusCode(drogon::k201Created);
-            callback(resp);
+
+            // Re-fetch the freshly-inserted row so the response matches
+            // the GET shape exactly (ownerUsername, createdAt, updatedAt
+            // populated server-side). Frontend Zod schema requires these
+            // — without the re-fetch, MapRecordSchema.parse() rejects
+            // the create response.
+            auto db2 = drogon::app().getDbClient();
+            db2->execSqlAsync(
+                "SELECT m.id, m.owner_id, u.username AS owner_username, "
+                "       m.title, m.description, m.coordinate_system, "
+                "       m.owner_xray, m.created_at, m.updated_at "
+                "FROM maps m JOIN users u ON u.id = m.owner_id "
+                "WHERE m.id = ?",
+                [callback](const drogon::orm::Result& rGet) {
+                    if (rGet.empty()) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "internal_error", "Map vanished after insert"));
+                        return;
+                    }
+                    const auto& row = rGet[0];
+                    Json::Value m;
+                    m["id"]                = row["id"].as<int>();
+                    m["ownerId"]           = row["owner_id"].as<int>();
+                    m["ownerUsername"]     = row["owner_username"].as<std::string>();
+                    m["title"]             = row["title"].as<std::string>();
+                    m["description"]       = row["description"].isNull()
+                                               ? "" : row["description"].as<std::string>();
+                    m["coordinateSystem"]  = parseJsonColumn(row["coordinate_system"].as<std::string>());
+                    m["ownerXray"]         = row["owner_xray"].as<bool>();
+                    m["createdAt"]         = row["created_at"].as<std::string>();
+                    m["updatedAt"]         = row["updated_at"].as<std::string>();
+                    m["permission"]        = "owner";
+                    auto resp = drogon::HttpResponse::newHttpJsonResponse(m);
+                    resp->setStatusCode(drogon::k201Created);
+                    callback(resp);
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to fetch created map"));
+                },
+                newId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
