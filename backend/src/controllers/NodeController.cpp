@@ -1175,3 +1175,383 @@ void NodeController::getSubtree(
             cursor, fetchLimit);
     }
 }
+
+// ─── POST /api/v1/tenants/{tid}/maps/{mid}/nodes/{id}/move ───────────────────
+//
+// Re-parent and/or relocate a node + its subtree.
+// Body: { newParentId: null | int, newMapId: null | int }
+//
+// Modes (driven by what's in the body):
+//   - newParentId only         → re-parent within current map
+//   - newMapId only            → relocate to a new map (new top-level)
+//   - both                     → relocate to a new parent on a new map
+//   - newMapId equals current  → same as omitting it (re-parent only)
+//
+// Permissions:
+//   - Source map: caller has edit-or-above access.
+//   - Destination map (if cross-map): edit-or-above access there too.
+//   - Cross-tenant move: caller must be tenant admin in BOTH source
+//     (already known from TenantFilter) and destination tenants.
+//
+// Side effects on cross-map move:
+//   - All descendants get the new map_id (single UPDATE WHERE id IN ...).
+//   - node_visibility rows on source + descendants are dropped (the
+//     inheritance chain semantics changed; user re-tags as needed).
+//   - On cross-tenant: plot_nodes memberships on source + descendants
+//     are also cleared (plots are tenant-scoped).
+//
+// Cycle prevention: newParentId must not be the source itself or any
+// of its descendants. Computed via a recursive CTE bounded by
+// MAX_NODE_DEPTH.
+
+void NodeController::moveNode(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    int userId = callerUserId(req);
+    bool srcIsAdmin = isTenantAdmin(req);
+
+    auto body = req->getJsonObject();
+    if (!body) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "JSON body required"));
+        return;
+    }
+
+    // Parse newParentId (nullable int).
+    bool hasNewParent     = body->isMember("newParentId");
+    bool newParentIsNull  = hasNewParent && (*body)["newParentId"].isNull();
+    int  newParentId      = 0;
+    if (hasNewParent && !newParentIsNull) {
+        if (!(*body)["newParentId"].isInt()) {
+            callback(errorResponse(drogon::k400BadRequest,
+                "bad_request", "newParentId must be an integer or null"));
+            return;
+        }
+        newParentId = (*body)["newParentId"].asInt();
+    }
+
+    // Parse newMapId (nullable int; null = "same map").
+    bool hasNewMap    = body->isMember("newMapId");
+    bool newMapIsNull = hasNewMap && (*body)["newMapId"].isNull();
+    int  destMapId    = mapId;  // default to current
+    if (hasNewMap && !newMapIsNull) {
+        if (!(*body)["newMapId"].isInt()) {
+            callback(errorResponse(drogon::k400BadRequest,
+                "bad_request", "newMapId must be an integer or null"));
+            return;
+        }
+        destMapId = (*body)["newMapId"].asInt();
+    }
+
+    if (!hasNewParent && !hasNewMap) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "Body must include newParentId or newMapId"));
+        return;
+    }
+
+    bool isCrossMap = (destMapId != mapId);
+
+    // Self-loop sanity check (cycle CTE catches deeper cycles).
+    if (hasNewParent && !newParentIsNull && newParentId == id) {
+        callback(errorResponse(drogon::k400BadRequest,
+            "bad_request", "Cannot move a node under itself"));
+        return;
+    }
+
+    // Step 1: verify source exists in this tenant + caller has edit access
+    // on the source map.
+    auto db = drogon::app().getDbClient();
+    db->execSqlAsync(
+        "SELECT n.id FROM nodes n "
+        "JOIN maps m ON m.id = n.map_id "
+        "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
+        "WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
+        "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin'))",
+        [callback, req, tenantId, mapId, id, userId, srcIsAdmin,
+         hasNewParent, newParentIsNull, newParentId,
+         hasNewMap, destMapId, isCrossMap]
+        (const drogon::orm::Result& r1) {
+            if (r1.empty()) {
+                callback(errorResponse(drogon::k403Forbidden,
+                    "forbidden", "Source node not found or insufficient permissions"));
+                return;
+            }
+
+            // Step 2 (only if cross-map): resolve destination map's tenant
+            // and verify caller has edit access there. Sets up cross-tenant
+            // role check.
+            auto afterDestVerified = [callback, req, tenantId, mapId, id,
+                                       userId, srcIsAdmin,
+                                       hasNewParent, newParentIsNull, newParentId,
+                                       destMapId, isCrossMap]
+                (int destTenantId, bool isCrossTenant) {
+
+                // Step 3: validate newParentId (if given) lives on the
+                // destination map. (Skipped if null = "make top-level".)
+                auto afterParentValidated = [callback, req, tenantId, mapId, id,
+                                              userId, hasNewParent, newParentIsNull,
+                                              newParentId, destMapId, isCrossMap,
+                                              destTenantId, isCrossTenant]() {
+
+                    // Step 4: compute descendant set (recursive CTE, bounded
+                    // by MAX_NODE_DEPTH). Used for cycle check + cascading
+                    // updates.
+                    std::string descSql =
+                        "WITH RECURSIVE descendants AS ( "
+                        "  SELECT id FROM nodes WHERE id = ? "
+                        "  UNION ALL "
+                        "  SELECT c.id FROM descendants d JOIN nodes c "
+                        "    ON c.parent_id = d.id "
+                        "  WHERE c.map_id = (SELECT map_id FROM nodes WHERE id = ?) "
+                        ") SELECT id FROM descendants";
+
+                    auto dbD = drogon::app().getDbClient();
+                    dbD->execSqlAsync(descSql,
+                        [callback, req, tenantId, mapId, id, userId,
+                         hasNewParent, newParentIsNull, newParentId,
+                         destMapId, isCrossMap, destTenantId, isCrossTenant]
+                        (const drogon::orm::Result& rD) {
+                            std::vector<int> descendants;
+                            descendants.reserve(rD.size());
+                            for (const auto& row : rD) {
+                                descendants.push_back(row["id"].as<int>());
+                            }
+
+                            // Cycle check: newParentId can't be the source
+                            // itself or any descendant. (Self-loop already
+                            // checked at the top; this catches deeper cases.)
+                            if (hasNewParent && !newParentIsNull) {
+                                for (int d : descendants) {
+                                    if (d == newParentId) {
+                                        callback(errorResponse(drogon::k400BadRequest,
+                                            "bad_request",
+                                            "Cannot move a node into its own subtree"));
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Step 5: apply changes.
+                            //
+                            // Inline the descendant-id set as literal SQL
+                            // ints (same trick used in #86). Safe because
+                            // values came from row["id"].as<int>().
+                            std::string idList;
+                            for (size_t i = 0; i < descendants.size(); ++i) {
+                                if (i > 0) idList += ",";
+                                idList += std::to_string(descendants[i]);
+                            }
+
+                            auto finish = [callback, req, tenantId, id, userId,
+                                           hasNewParent, newParentIsNull,
+                                           newParentId, destMapId, isCrossMap,
+                                           descendants]() {
+                                Json::Value detail;
+                                detail["sourceId"]        = id;
+                                detail["destParentId"]    = (hasNewParent && !newParentIsNull)
+                                                              ? Json::Value(newParentId)
+                                                              : Json::Value();
+                                detail["destMapId"]       = destMapId;
+                                detail["descendantCount"] = static_cast<int>(descendants.size());
+                                AuditLog::record("node_move", req,
+                                    userId, 0, tenantId, detail);
+
+                                Json::Value v;
+                                v["id"]           = id;
+                                v["mapId"]        = destMapId;
+                                v["parentId"]     = (hasNewParent && !newParentIsNull)
+                                                      ? Json::Value(newParentId)
+                                                      : Json::Value();
+                                v["descendantCount"] = static_cast<int>(descendants.size());
+                                callback(drogon::HttpResponse::newHttpJsonResponse(v));
+                            };
+
+                            // Update parent_id on the source. (Always.)
+                            auto updateSourceParent = [callback, id, hasNewParent,
+                                                        newParentIsNull, newParentId,
+                                                        finish]() {
+                                auto dbP = drogon::app().getDbClient();
+                                if (hasNewParent && newParentIsNull) {
+                                    dbP->execSqlAsync(
+                                        "UPDATE nodes SET parent_id = NULL WHERE id = ?",
+                                        [finish](const drogon::orm::Result&) { finish(); },
+                                        [callback](const drogon::orm::DrogonDbException&) {
+                                            callback(errorResponse(drogon::k500InternalServerError,
+                                                "db_error", "Failed to update parent"));
+                                        },
+                                        id);
+                                } else if (hasNewParent) {
+                                    dbP->execSqlAsync(
+                                        "UPDATE nodes SET parent_id = ? WHERE id = ?",
+                                        [finish](const drogon::orm::Result&) { finish(); },
+                                        [callback](const drogon::orm::DrogonDbException&) {
+                                            callback(errorResponse(drogon::k500InternalServerError,
+                                                "db_error", "Failed to update parent"));
+                                        },
+                                        newParentId, id);
+                                } else {
+                                    // Cross-map move with no parent change:
+                                    // skip the parent_id update entirely.
+                                    finish();
+                                }
+                            };
+
+                            if (!isCrossMap) {
+                                // Same-map re-parent: just update the parent.
+                                updateSourceParent();
+                                return;
+                            }
+
+                            // Cross-map: chained sequence.
+                            //   1. UPDATE map_id on all descendants
+                            //   2. DELETE node_visibility for descendants
+                            //   3. (cross-tenant only) DELETE plot_nodes
+                            //   4. updateSourceParent
+                            auto clearPlotIfCrossTenant = [callback, idList,
+                                                            isCrossTenant,
+                                                            updateSourceParent]() {
+                                if (!isCrossTenant) {
+                                    updateSourceParent();
+                                    return;
+                                }
+                                auto dbC = drogon::app().getDbClient();
+                                dbC->execSqlAsync(
+                                    "DELETE FROM plot_nodes WHERE node_id IN (" + idList + ")",
+                                    [updateSourceParent](const drogon::orm::Result&) {
+                                        updateSourceParent();
+                                    },
+                                    [callback](const drogon::orm::DrogonDbException&) {
+                                        callback(errorResponse(drogon::k500InternalServerError,
+                                            "db_error", "Failed to clear plot memberships"));
+                                    });
+                            };
+
+                            auto dropVisibility = [callback, idList,
+                                                    clearPlotIfCrossTenant]() {
+                                auto dbV = drogon::app().getDbClient();
+                                dbV->execSqlAsync(
+                                    "DELETE FROM node_visibility WHERE node_id IN (" + idList + ")",
+                                    [clearPlotIfCrossTenant](const drogon::orm::Result&) {
+                                        clearPlotIfCrossTenant();
+                                    },
+                                    [callback](const drogon::orm::DrogonDbException&) {
+                                        callback(errorResponse(drogon::k500InternalServerError,
+                                            "db_error", "Failed to clear visibility tags"));
+                                    });
+                            };
+
+                            auto dbU = drogon::app().getDbClient();
+                            dbU->execSqlAsync(
+                                "UPDATE nodes SET map_id = ? WHERE id IN (" + idList + ")",
+                                [dropVisibility](const drogon::orm::Result&) {
+                                    dropVisibility();
+                                },
+                                [callback](const drogon::orm::DrogonDbException&) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to update map_id on descendants"));
+                                },
+                                destMapId);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to compute descendant set"));
+                        },
+                        id, id);
+                };
+
+                if (!hasNewParent || newParentIsNull) {
+                    afterParentValidated();
+                    return;
+                }
+                // Verify newParentId exists on the destination map.
+                auto dbP = drogon::app().getDbClient();
+                dbP->execSqlAsync(
+                    "SELECT id FROM nodes WHERE id = ? AND map_id = ?",
+                    [callback, afterParentValidated, newParentId]
+                    (const drogon::orm::Result& rP) {
+                        if (rP.empty()) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "bad_request", "newParentId not found on destination map"));
+                            return;
+                        }
+                        afterParentValidated();
+                    },
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Failed to verify new parent"));
+                    },
+                    newParentId, destMapId);
+            };
+
+            if (!isCrossMap) {
+                // Same map — destination tenant is source tenant, not cross.
+                afterDestVerified(tenantId, false);
+                return;
+            }
+
+            // Cross-map: resolve destination map's tenant, verify caller's
+            // edit access, and check cross-tenant admin rule if applicable.
+            auto dbDest = drogon::app().getDbClient();
+            dbDest->execSqlAsync(
+                "SELECT m.tenant_id FROM maps m "
+                "LEFT JOIN map_permissions mp ON mp.map_id = m.id AND mp.user_id = ? "
+                "WHERE m.id = ? "
+                "  AND (m.owner_id = ? OR mp.level IN ('edit','moderate','admin'))",
+                [callback, req, tenantId, mapId, id, userId, srcIsAdmin,
+                 destMapId, afterDestVerified]
+                (const drogon::orm::Result& rDest) {
+                    if (rDest.empty()) {
+                        callback(errorResponse(drogon::k400BadRequest,
+                            "bad_request",
+                            "newMapId not found or insufficient permissions"));
+                        return;
+                    }
+                    int destTenantId   = rDest[0]["tenant_id"].as<int>();
+                    bool isCrossTenant = (destTenantId != tenantId);
+
+                    if (!isCrossTenant) {
+                        afterDestVerified(destTenantId, false);
+                        return;
+                    }
+                    if (!srcIsAdmin) {
+                        callback(errorResponse(drogon::k403Forbidden,
+                            "forbidden", "Cross-tenant move requires tenant admin role"));
+                        return;
+                    }
+
+                    // Check destination tenant role.
+                    auto dbT = drogon::app().getDbClient();
+                    dbT->execSqlAsync(
+                        "SELECT role FROM tenant_members "
+                        "WHERE tenant_id = ? AND user_id = ?",
+                        [callback, afterDestVerified, destTenantId]
+                        (const drogon::orm::Result& rT) {
+                            if (rT.empty() ||
+                                rT[0]["role"].as<std::string>() != "admin") {
+                                callback(errorResponse(drogon::k403Forbidden,
+                                    "forbidden",
+                                    "Cross-tenant move requires admin in destination tenant"));
+                                return;
+                            }
+                            afterDestVerified(destTenantId, true);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to verify destination tenant role"));
+                        },
+                        destTenantId, userId);
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to verify destination map"));
+                },
+                userId, destMapId, userId);
+        },
+        [callback](const drogon::orm::DrogonDbException&) {
+            callback(errorResponse(drogon::k500InternalServerError,
+                "db_error", "Failed to verify source node"));
+        },
+        userId, id, mapId, tenantId, userId);
+}
