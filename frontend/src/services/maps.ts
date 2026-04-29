@@ -8,6 +8,7 @@ import {
   NodeSubtreeResponseSchema,
   NoteRecordSchema,
   NoteListSchema,
+  NodeMediaListSchema,
   type MapRecord,
   type MapList,
   type NodeRecord,
@@ -15,6 +16,7 @@ import {
   type NodeSubtreeResponse,
   type NoteRecord,
   type NoteList,
+  type NodeMediaList,
   type CreateMapRequest,
   type UpdateMapRequest,
   type CreateNodeRequest,
@@ -189,6 +191,17 @@ export const permissionsService = {
   async removePermission(mapId: number, userId: number | null, tenantId?: number): Promise<void> {
     const target = userId === null ? 'public' : String(userId);
     await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/permissions/${target}`);
+  },
+};
+
+// ─── Node media ──────────────────────────────────────────────────────────────
+
+export const nodeMediaService = {
+  async listMedia(mapId: number, nodeId: number, tenantId?: number): Promise<NodeMediaList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/media`
+    );
+    return NodeMediaListSchema.parse(res.data);
   },
 };
 

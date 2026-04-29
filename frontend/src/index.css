@@ -68,6 +68,7 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 /* ─── Alerts ────────────────────────────────────────────────────────────────── */
 .alert { padding: .75rem 1rem; border-radius: var(--radius); font-size: .875rem; }
 .alert-error { background: #fef2f2; color: var(--color-danger); border: 1px solid #fecaca; }
+.alert-info  { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
 
 /* ─── Pages ─────────────────────────────────────────────────────────────────── */
 .page-container { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1rem; }
@@ -313,3 +314,33 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   .map-page-content { flex-direction: column; }
   .notes-panel { width: 100%; max-height: 300px; border-left: none; border-top: 1px solid var(--color-border); }
 }
+
+/* ─── Map view (#101) ───────────────────────────────────────────────────────── */
+.map-view {
+  width: 100%;
+  margin: 1rem 0;
+}
+.map-view-leaflet {
+  height: 600px;
+  width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid var(--color-border);
+}
+.map-view-stub {
+  padding: 2rem;
+  background: #fafafa;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius);
+  text-align: center;
+  color: var(--color-text-muted, #555);
+}
+.node-popup h3 { margin: 0 0 .5rem 0; font-size: 1rem; }
+.node-popup p  { margin: .25rem 0; }
+.node-popup-media { margin-top: .5rem; }
+.node-popup-thumb {
+  max-width: 200px;
+  max-height: 150px;
+  margin: .25rem 0;
+  border-radius: 4px;
+}
+.node-popup-links { margin: .25rem 0; padding-left: 1.25rem; }
