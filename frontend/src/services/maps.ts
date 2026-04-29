@@ -116,8 +116,10 @@ export const mapsService = {
   },
 
   async updateMap(mapId: number, data: UpdateMapRequest, tenantId?: number): Promise<MapRecord> {
-    const res = await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}`, data);
-    return MapRecordSchema.parse(res.data);
+    // The backend's PUT returns `{ id, updated: true }` (not the full record),
+    // so re-fetch via GET to give callers the parsed MapRecord they expect.
+    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}`, data);
+    return this.getMap(mapId, tenantId);
   },
 
   async deleteMap(mapId: number, tenantId?: number): Promise<void> {

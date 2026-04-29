@@ -6,6 +6,7 @@ import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
 import { nodesService, nodeMediaService } from '@/services/maps';
+import { useAuthStore } from '@/store/authStore';
 import type {
   MapRecord,
   NodeRecord,
@@ -176,6 +177,9 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const isOwner = currentUserId !== undefined && currentUserId === map.ownerId;
+  const xrayActive = isOwner && map.ownerXray;
 
   useEffect(() => {
     let cancelled = false;
@@ -243,6 +247,11 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
     return (
       <div className="map-view">
         {loadError && <div className="alert alert-error">{loadError}</div>}
+        {xrayActive && (
+          <div className="alert alert-xray" role="status">
+            🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+          </div>
+        )}
         <MapContainer
           crs={L.CRS.Simple}
           center={center}
@@ -269,6 +278,11 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
     return (
       <div className="map-view">
         {loadError && <div className="alert alert-error">{loadError}</div>}
+        {xrayActive && (
+          <div className="alert alert-xray" role="status">
+            🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+          </div>
+        )}
         <MapContainer
           crs={L.CRS.Simple}
           center={center}
@@ -289,6 +303,11 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   return (
     <div className="map-view">
       {loadError && <div className="alert alert-error">{loadError}</div>}
+      {xrayActive && (
+        <div className="alert alert-xray" role="status">
+          🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+        </div>
+      )}
       <MapContainer center={center} zoom={cs.zoom} className="map-view-leaflet">
         <TileLayer
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"

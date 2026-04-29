@@ -156,6 +156,15 @@ function NodeTreeRow({
             aria-hidden="true"
           />
         )}
+        {node.visibilityOverride && (
+          <span
+            className="node-tree-override-icon"
+            title="Visibility overridden — explicit set on this node"
+            aria-label="Visibility overridden"
+          >
+            🔒
+          </span>
+        )}
         <button
           type="button"
           className="node-tree-name"
