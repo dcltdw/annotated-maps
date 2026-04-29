@@ -23,6 +23,15 @@
  *   POST   /api/v1/tenants/{tenantId}/plots/{id}/notes
  *   DELETE /api/v1/tenants/{tenantId}/plots/{id}/notes/{noteId}
  *
+ * Reverse-membership ("which plots is this item in?", #139):
+ *   GET /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/plots
+ *   GET /api/v1/tenants/{tenantId}/maps/{mapId}/notes/{noteId}/plots
+ *
+ *   These power the per-item Plots section in the node/note detail panel.
+ *   The caller must be able to see the node/note (visibility check matches
+ *   GET /nodes/{id} and GET /notes/{id}); if visible, returns the array of
+ *   plots that contain it. Hidden items return 404 — never leak existence.
+ *
  * Authorization:
  *   - Read endpoints: any tenant member (TenantFilter enforces).
  *   - Write endpoints (create/update/delete plot, attach/detach members):
@@ -75,6 +84,12 @@ public:
         ADD_METHOD_TO(PlotController::removeNote,
                       "/api/v1/tenants/{tenantId}/plots/{id}/notes/{noteId}",
                       drogon::Delete, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(PlotController::listPlotsForNode,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/plots",
+                      drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(PlotController::listPlotsForNote,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/notes/{noteId}/plots",
+                      drogon::Get, "JwtFilter", "TenantFilter");
     METHOD_LIST_END
 
     void listPlots(const drogon::HttpRequestPtr&,
@@ -107,4 +122,10 @@ public:
     void removeNote(const drogon::HttpRequestPtr&,
                     std::function<void(const drogon::HttpResponsePtr&)>&&,
                     int tenantId, int id, int noteId);
+    void listPlotsForNode(const drogon::HttpRequestPtr&,
+                          std::function<void(const drogon::HttpResponsePtr&)>&&,
+                          int tenantId, int mapId, int nodeId);
+    void listPlotsForNote(const drogon::HttpRequestPtr&,
+                          std::function<void(const drogon::HttpResponsePtr&)>&&,
+                          int tenantId, int mapId, int noteId);
 };

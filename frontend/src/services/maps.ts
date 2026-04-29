@@ -460,4 +460,31 @@ export const plotsService = {
       `${tenantBase(tenantId)}/plots/${plotId}/notes/${noteId}`,
     );
   },
+
+  // ─── Reverse membership (#139) ───────────────────────────────────────────
+  // "Which plots is this item in?" — backs the per-item Plots section in
+  // the node/note detail panel. Backend returns 404 when the caller can't
+  // see the node/note (existence is never leaked).
+
+  async listPlotsForNode(
+    mapId: number,
+    nodeId: number,
+    tenantId?: number,
+  ): Promise<PlotList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/plots`,
+    );
+    return PlotListSchema.parse(res.data);
+  },
+
+  async listPlotsForNote(
+    mapId: number,
+    noteId: number,
+    tenantId?: number,
+  ): Promise<PlotList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/plots`,
+    );
+    return PlotListSchema.parse(res.data);
+  },
 };
