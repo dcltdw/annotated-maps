@@ -125,6 +125,41 @@ merging into a long-running branch, **both** of these are manual:
    long-running-branch context).
 2. Flip the board status to Done.
 
+**How to make this interruption-resistant:**
+
+A "PR merged" message often arrives in the same turn as a "proceed to the
+next task" instruction. The natural failure mode is to jump straight into
+exploring the next ticket and forget the cleanup — *especially* if the
+next task triggers a clarifying question that diverts the conversation.
+The cleanup steps live entirely in the agent's head until they're done,
+so any interruption can drop them.
+
+**The fix:** when a "PR merged" message arrives, the *first* tool call
+must be a `TodoWrite` capturing the cleanup checklist *before* any
+exploration of the next task. Concretely:
+
+1. **First action**: `TodoWrite` with two pending items at the top:
+   - "Close issue #NNN (long-running branch — auto-close didn't fire)"
+   - "Move #NNN board status to Done"
+2. Execute those two items, marking each completed as you go.
+3. *Then* start the next task (which may itself open with a clarifying
+   question — fine, the cleanup is already done).
+
+Why this works: the todo list survives across model responses. Even if
+the next-task work triggers a clarifying question, even if the user
+replies with something unrelated, even if the conversation context
+shifts entirely, the unchecked cleanup items remain visible at the top
+of every turn. The runtime's periodic "TodoWrite hasn't been used
+recently" reminders also resurface stale lists. By contrast, a cleanup
+step that lives only in the agent's narrative response has no such
+durability — once the response is sent, it's gone.
+
+**Skip the TodoWrite only if**: the merged PR was into the default
+branch (`main`) AND the issue auto-closed (visible in the user's
+message or trivially confirmable). In that case the only manual step
+is the board flip — fine to do as a single direct tool call without
+the list overhead.
+
 **Project-specific binding (annotated-maps `Focus on next` board):**
 
 ```bash
