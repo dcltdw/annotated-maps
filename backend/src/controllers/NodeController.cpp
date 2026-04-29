@@ -901,3 +901,277 @@ void NodeController::setVisibility(
             id, mapId, tenantId);
     });
 }
+
+// ─── GET /api/v1/tenants/{tid}/maps/{mid}/nodes/{id}/children ────────────────
+//
+// Direct children only. Same shape as `GET /nodes?parentId=N`; the
+// visibility filter applies. Per #99 / Phase 2b.ii, hidden parents do not
+// produce a 404 here — the response is just the visible children (which may
+// be empty). This matches the leak-safe behavior of the list endpoint.
+
+void NodeController::listChildren(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    int userId = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
+
+    std::string sql;
+    if (!isAdmin) sql = VISIBILITY_RESOLVE_CTE;
+    sql +=
+        "SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, n.description, "
+        "       n.color, n.visibility_override, n.created_by, "
+        "       u.username AS creator_username, "
+        "       n.created_at, n.updated_at "
+        "FROM nodes n "
+        "JOIN maps m  ON m.id = n.map_id "
+        "JOIN users u ON u.id = n.created_by "
+        "LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+        "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+        "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+        "WHERE n.parent_id = ? AND n.map_id = ? AND m.tenant_id = ? "
+        "  AND (m.owner_id = ? "
+        "       OR mp.level IN ('view','comment','edit','moderate','admin') "
+        "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))";
+    if (!isAdmin) sql += VISIBILITY_PREDICATE;
+    sql += " ORDER BY n.created_at ASC";
+
+    auto resultCb = [callback, id](const drogon::orm::Result& r) {
+        std::set<int> visibleIds;
+        for (const auto& row : r) visibleIds.insert(row["id"].as<int>());
+        Json::Value arr(Json::arrayValue);
+        for (const auto& row : r) {
+            Json::Value n = rowToNode(row);
+            // Same parent-leak rule as listNodes: if a child's parent isn't
+            // also visible, null out parentId. (Here the parent we're
+            // listing under is `id`, but a sibling-level case can still
+            // arise via deeper inheritance interactions.)
+            if (!n["parentId"].isNull()) {
+                int p = n["parentId"].asInt();
+                if (visibleIds.find(p) == visibleIds.end() && p != id) {
+                    n["parentId"] = Json::Value();
+                }
+            }
+            arr.append(n);
+        }
+        callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+    };
+    auto errCb = [callback](const drogon::orm::DrogonDbException&) {
+        callback(errorResponse(drogon::k500InternalServerError,
+            "db_error", "Failed to fetch children"));
+    };
+
+    auto db = drogon::app().getDbClient();
+    if (isAdmin) {
+        db->execSqlAsync(sql, resultCb, errCb,
+            userId, id, mapId, tenantId, userId);
+    } else {
+        db->execSqlAsync(sql, resultCb, errCb,
+            mapId, userId,                    // CTE
+            userId,                           // mp join
+            id, mapId, tenantId, userId,      // WHERE map gating (parent_id=id)
+            userId);                          // visibility xray
+    }
+}
+
+// ─── GET /api/v1/tenants/{tid}/maps/{mid}/nodes/{id}/subtree ─────────────────
+//
+// Recursive descent from the starting node, returning each node with a
+// `depth` field (root = 0). For non-admins, the recursion only descends
+// into visible nodes — a hidden ancestor severs its own visible descendants
+// from the response, so no gaps leak hidden-node existence.
+//
+// Pagination via cursor (last id seen) + limit (default 100, max 500).
+// Returns 404 when the starting node is hidden or missing.
+
+void NodeController::getSubtree(
+    const drogon::HttpRequestPtr& req,
+    std::function<void(const drogon::HttpResponsePtr&)>&& callback,
+    int tenantId, int mapId, int id) {
+
+    int userId = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
+
+    // Pagination params.
+    constexpr int DEFAULT_LIMIT = 100;
+    constexpr int MAX_LIMIT     = 500;
+    int limit = DEFAULT_LIMIT;
+    int cursor = 0;
+    {
+        std::string limitParam  = req->getParameter("limit");
+        std::string cursorParam = req->getParameter("cursor");
+        if (!limitParam.empty()) {
+            try { limit = std::stoi(limitParam); }
+            catch (...) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "limit must be an integer"));
+                return;
+            }
+            if (limit < 1) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "limit must be at least 1"));
+                return;
+            }
+            if (limit > MAX_LIMIT) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "limit exceeds maximum (" +
+                    std::to_string(MAX_LIMIT) + ")"));
+                return;
+            }
+        }
+        if (!cursorParam.empty()) {
+            try { cursor = std::stoi(cursorParam); }
+            catch (...) {
+                callback(errorResponse(drogon::k400BadRequest,
+                    "bad_request", "cursor must be an integer"));
+                return;
+            }
+        }
+    }
+
+    // Build the multi-CTE query. For non-admins, we prepend the standard
+    // node-visibility resolve from #99 and use it to filter the subtree's
+    // recursive descent. Admins get a simpler subtree-only CTE.
+    //
+    // Map permission gating still applies — we JOIN against maps + map
+    // permissions inside the anchor and require the caller has at least
+    // view access. (For non-admins the visibility filter further prunes,
+    // but map gating is the outer ring.)
+    //
+    // We fetch limit+1 rows to detect the "has more" boundary; the extra
+    // row's id (if present) becomes the next cursor.
+
+    std::string sql;
+    if (!isAdmin) {
+        sql = VISIBILITY_RESOLVE_CTE.substr(0, VISIBILITY_RESOLVE_CTE.size() - 1);
+        // Strip trailing space before continuing the WITH clause; we want
+        // one CTE list that includes resolve + visible_starts + subtree.
+        sql += ", ";
+    } else {
+        sql = "WITH RECURSIVE ";
+    }
+    sql +=
+        "subtree AS ("
+        "  SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, n.description, "
+        "         n.color, n.visibility_override, n.created_by, "
+        "         u.username AS creator_username, "
+        "         n.created_at, n.updated_at, 0 AS depth "
+        "  FROM nodes n "
+        "  JOIN maps m  ON m.id = n.map_id "
+        "  JOIN users u ON u.id = n.created_by "
+        "  LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+        "  LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+        "                                  AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+        "  WHERE n.id = ? AND n.map_id = ? AND m.tenant_id = ? "
+        "    AND (m.owner_id = ? "
+        "         OR mp.level IN ('view','comment','edit','moderate','admin') "
+        "         OR mp_pub.level IN ('view','comment','edit','moderate','admin'))";
+    if (!isAdmin) {
+        sql +=
+            "    AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+            "         OR n.id IN (SELECT start_id FROM visible_starts)) ";
+    }
+    sql +=
+        "  UNION ALL "
+        "  SELECT c.id, c.map_id, c.parent_id, c.name, c.geo_json, c.description, "
+        "         c.color, c.visibility_override, c.created_by, "
+        "         uc.username, "
+        "         c.created_at, c.updated_at, s.depth + 1 "
+        "  FROM subtree s "
+        "  JOIN nodes c ON c.parent_id = s.id "
+        "  JOIN users uc ON uc.id = c.created_by ";
+    if (!isAdmin) {
+        // Need maps for the per-child xray check. Same-map check stays
+        // within the requested subtree's map (no cross-map walking).
+        sql +=
+            "  JOIN maps mc ON mc.id = c.map_id "
+            "  WHERE s.depth < " + std::to_string(MAX_NODE_DEPTH) +
+            "    AND c.map_id = s.map_id "
+            "    AND ((mc.owner_id = ? AND mc.owner_xray = TRUE) "
+            "         OR c.id IN (SELECT start_id FROM visible_starts)) ";
+    } else {
+        sql +=
+            "  WHERE s.depth < " + std::to_string(MAX_NODE_DEPTH) +
+            "    AND c.map_id = s.map_id ";
+    }
+    sql +=
+        ") "
+        "SELECT * FROM subtree WHERE id > ? ORDER BY id ASC LIMIT ?";
+
+    int fetchLimit = limit + 1;  // +1 to detect "has more"
+
+    auto resultCb = [callback, limit](const drogon::orm::Result& r) {
+        Json::Value arr(Json::arrayValue);
+        std::set<int> visibleIds;
+        for (const auto& row : r) visibleIds.insert(row["id"].as<int>());
+
+        bool hasMore = static_cast<int>(r.size()) > limit;
+        int nextCursor = 0;
+        size_t emitCount = hasMore ? static_cast<size_t>(limit) : r.size();
+
+        for (size_t i = 0; i < emitCount; ++i) {
+            const auto& row = r[i];
+            Json::Value n = rowToNode(row);
+            n["depth"] = row["depth"].as<int>();
+            // parent_id leak-out: if parent isn't in the subtree response,
+            // null it out. (Won't happen for the root since its parent is
+            // outside the requested subtree by design — but the root's
+            // depth=0 still has its real parent_id, which is fine.)
+            if (!n["parentId"].isNull() && row["depth"].as<int>() > 0) {
+                int p = n["parentId"].asInt();
+                if (visibleIds.find(p) == visibleIds.end()) {
+                    n["parentId"] = Json::Value();
+                }
+            }
+            arr.append(n);
+        }
+        if (hasMore) nextCursor = arr[static_cast<int>(arr.size() - 1)]["id"].asInt();
+
+        // 404 the whole subtree if the result is empty AND cursor is 0
+        // (first page). On a follow-up page request with no more results,
+        // empty is a valid response with nextCursor=null.
+        if (arr.empty()) {
+            // For an empty first page, we can't distinguish "node hidden"
+            // from "node has no descendants and is hidden" — but since the
+            // root is always at depth=0 and is always included if visible,
+            // empty really means "root not visible or doesn't exist." 404.
+            //
+            // If the caller paginated past the end, they'll also hit
+            // empty here — accept that limitation in exchange for not
+            // probing for existence.
+            callback(errorResponse(drogon::k404NotFound,
+                "not_found", "Subtree root not found"));
+            return;
+        }
+
+        Json::Value out;
+        out["nodes"] = arr;
+        out["nextCursor"] = hasMore ? Json::Value(nextCursor) : Json::Value();
+        callback(drogon::HttpResponse::newHttpJsonResponse(out));
+    };
+    auto errCb = [callback](const drogon::orm::DrogonDbException&) {
+        callback(errorResponse(drogon::k500InternalServerError,
+            "db_error", "Failed to fetch subtree"));
+    };
+
+    auto db = drogon::app().getDbClient();
+    if (isAdmin) {
+        // Anchor params: userId (mp join), id, mapId, tenantId, userId (owner)
+        // Final SELECT params: cursor, fetchLimit
+        db->execSqlAsync(sql, resultCb, errCb,
+            userId, id, mapId, tenantId, userId,
+            cursor, fetchLimit);
+    } else {
+        // Resolve CTE params: mapId, userId
+        // Anchor: userId (mp), id, mapId, tenantId, userId (owner-or check),
+        //         userId (xray)
+        // Recursive step: userId (xray on child)
+        // Final SELECT: cursor, fetchLimit
+        db->execSqlAsync(sql, resultCb, errCb,
+            mapId, userId,
+            userId, id, mapId, tenantId, userId, userId,
+            userId,
+            cursor, fetchLimit);
+    }
+}
