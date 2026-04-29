@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, Marker, Polyline, Polygon, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
@@ -194,22 +194,78 @@ export function MapView({ map, onNodeClick }: MapViewProps) {
     onNodeClick?.(nodeId);
   };
 
-  if (map.coordinateSystem.type !== 'wgs84') {
-    // Pixel and blank renderers land with #91's frontend follow-up. Stub
-    // here so the page is intelligible until then.
+  // All three renderers share the same node-layer rendering; the only
+  // difference is the MapContainer's CRS + base layer (or lack thereof).
+  // The GeoJSON [lng, lat] → Leaflet [lat, lng] swap in `pointLatLng` /
+  // `lineLatLngs` / `polygonLatLngs` is purely about GeoJSON's axis
+  // convention and applies regardless of CRS — for pixel maps the
+  // numbers mean (x, y) but the swap is still correct.
+
+  const cs = map.coordinateSystem;
+  const renderNodeLayers = () =>
+    nodes.map((n) => (
+      <NodeLayer
+        key={n.id}
+        node={n}
+        media={mediaByNode[n.id] ?? []}
+        onClick={handleClick}
+      />
+    ));
+
+  if (cs.type === 'pixel') {
+    // CRS.Simple maps coordinate (0, 0) to the top-left. The image
+    // overlay spans from (0, 0) to (height, width) — Leaflet expects
+    // bounds as [[y, x], [y, x]]. Viewport's (x, y) center maps the
+    // same way: pass [viewport.y, viewport.x].
+    const bounds: L.LatLngBoundsExpression = [
+      [0, 0],
+      [cs.height, cs.width],
+    ];
+    const center: [number, number] = [cs.viewport.y, cs.viewport.x];
     return (
-      <div className="map-view-stub">
-        <p>
-          <strong>Coordinate system <code>{map.coordinateSystem.type}</code>: rendering coming in #91.</strong>
-        </p>
-        <p>This map has {nodes.length} node(s); the renderer for non-WGS84 backdrops isn't wired yet.</p>
+      <div className="map-view">
+        {loadError && <div className="alert alert-error">{loadError}</div>}
+        <MapContainer
+          crs={L.CRS.Simple}
+          center={center}
+          zoom={cs.viewport.zoom}
+          minZoom={-5}
+          className="map-view-leaflet"
+        >
+          <ImageOverlay url={cs.image_url} bounds={bounds} />
+          {renderNodeLayers()}
+        </MapContainer>
       </div>
     );
   }
 
-  const cs = map.coordinateSystem;
-  const center: [number, number] = [cs.center.lat, cs.center.lng];
+  if (cs.type === 'blank') {
+    // No base layer — just the canvas + nodes. Center on the middle of
+    // the extent so the user sees something at default zoom.
+    const center: [number, number] = [cs.extent.y / 2, cs.extent.x / 2];
+    const maxBounds: L.LatLngBoundsExpression = [
+      [0, 0],
+      [cs.extent.y, cs.extent.x],
+    ];
+    return (
+      <div className="map-view">
+        {loadError && <div className="alert alert-error">{loadError}</div>}
+        <MapContainer
+          crs={L.CRS.Simple}
+          center={center}
+          zoom={0}
+          minZoom={-5}
+          maxBounds={maxBounds}
+          className="map-view-leaflet map-view-blank"
+        >
+          {renderNodeLayers()}
+        </MapContainer>
+      </div>
+    );
+  }
 
+  // wgs84 — standard OSM tile layer
+  const center: [number, number] = [cs.center.lat, cs.center.lng];
   return (
     <div className="map-view">
       {loadError && <div className="alert alert-error">{loadError}</div>}
@@ -218,14 +274,7 @@ export function MapView({ map, onNodeClick }: MapViewProps) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
-        {nodes.map((n) => (
-          <NodeLayer
-            key={n.id}
-            node={n}
-            media={mediaByNode[n.id] ?? []}
-            onClick={handleClick}
-          />
-        ))}
+        {renderNodeLayers()}
       </MapContainer>
     </div>
   );

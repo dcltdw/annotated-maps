@@ -334,6 +334,7 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   text-align: center;
   color: var(--color-text-muted, #555);
 }
+.map-view-blank .leaflet-container { background: #f5f5f5; }
 .node-popup h3 { margin: 0 0 .5rem 0; font-size: 1rem; }
 .node-popup p  { margin: .25rem 0; }
 .node-popup-media { margin-top: .5rem; }
