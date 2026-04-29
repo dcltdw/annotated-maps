@@ -1,8 +1,10 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { useAuthStore } from '@/store/authStore';
 
 export function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
+  const tenantId = useAuthStore((s) => s.tenantId);
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -19,6 +21,11 @@ export function Navbar() {
         {isAuthenticated ? (
           <>
             <Link to="/maps">My Maps</Link>
+            {tenantId && (
+              <Link to={`/tenants/${tenantId}/visibility-groups`}>
+                Visibility
+              </Link>
+            )}
             <span className="navbar-user">{user?.username}</span>
             <button onClick={handleLogout} className="btn btn-ghost">
               Sign Out

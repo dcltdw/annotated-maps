@@ -528,6 +528,131 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 .note-form-pinned { display: flex; align-items: center; gap: .25rem; font-size: .85rem; cursor: pointer; }
 .note-form-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 
+/* ─── Visibility groups admin (#94) ────────────────────────────────────────── */
+.header-actions { display: flex; gap: .5rem; }
+.visibility-group-list {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+}
+.visibility-group-row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: .75rem 1rem;
+}
+.visibility-group-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  cursor: pointer;
+}
+.visibility-group-toggle {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: .8rem;
+  color: var(--color-text-muted, #666);
+  padding: 0;
+  width: 18px;
+}
+.visibility-group-name {
+  margin: 0;
+  font-size: 1rem;
+  flex: 1;
+  min-width: 0;
+}
+.visibility-group-badge {
+  font-size: .75rem;
+  padding: .15rem .5rem;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.visibility-group-count {
+  font-size: .8rem;
+  color: var(--color-text-muted, #666);
+}
+.visibility-group-actions {
+  display: flex;
+  gap: .25rem;
+}
+.visibility-group-description {
+  margin: .5rem 0 0;
+  font-size: .85rem;
+  color: var(--color-text-muted, #555);
+}
+.visibility-group-body {
+  margin-top: .75rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--color-border);
+}
+.visibility-group-empty {
+  font-size: .85rem;
+  color: var(--color-text-muted, #666);
+  margin: .5rem 0;
+}
+.visibility-member-list {
+  list-style: none;
+  padding: 0;
+  margin: .5rem 0;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+}
+.visibility-member-row {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .25rem .5rem;
+  background: #fafafa;
+  border-radius: var(--radius);
+  font-size: .85rem;
+}
+.visibility-member-name { font-weight: 500; }
+.visibility-member-email {
+  flex: 1;
+  color: var(--color-text-muted, #666);
+  font-size: .8rem;
+}
+.visibility-add-member-form {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  margin-top: .5rem;
+}
+.visibility-add-member-form select {
+  flex: 1;
+  padding: .375rem .5rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  font-size: .85rem;
+}
+.form-group-checkbox {
+  flex-direction: row;
+  gap: .5rem;
+  align-items: flex-start;
+}
+.form-group-checkbox label {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+.form-group-checkbox label > small {
+  font-weight: normal;
+  color: var(--color-text-muted, #666);
+  font-size: .75rem;
+}
+.form-group-checkbox label > input[type="checkbox"] {
+  margin-right: .5rem;
+}
+
 .node-popup h3 { margin: 0 0 .5rem 0; font-size: 1rem; }
 .node-popup p  { margin: .25rem 0; }
 .node-popup-media { margin-top: .5rem; }

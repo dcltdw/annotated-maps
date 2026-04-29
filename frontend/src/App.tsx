@@ -7,8 +7,9 @@ import { useAuthStore } from '@/store/authStore';
 import { useBranding } from '@/hooks/useBranding';
 import { lazy, Suspense } from 'react';
 
-const MapListPage   = lazy(() => import('@/pages/MapListPage').then((m)   => ({ default: m.MapListPage })));
-const MapDetailPage = lazy(() => import('@/pages/MapDetailPage').then((m) => ({ default: m.MapDetailPage })));
+const MapListPage          = lazy(() => import('@/pages/MapListPage').then((m)          => ({ default: m.MapListPage })));
+const MapDetailPage        = lazy(() => import('@/pages/MapDetailPage').then((m)        => ({ default: m.MapDetailPage })));
+const VisibilityGroupsPage = lazy(() => import('@/pages/VisibilityGroupsPage').then((m) => ({ default: m.VisibilityGroupsPage })));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -57,6 +58,16 @@ export default function App() {
               <Route
                 path="/tenants/:tenantId/maps/:mapId"
                 element={<MapDetailPage />}
+              />
+
+              {/* Tenant-scoped visibility-group admin (#94) */}
+              <Route
+                path="/tenants/:tenantId/visibility-groups"
+                element={
+                  <PrivateRoute>
+                    <VisibilityGroupsPage />
+                  </PrivateRoute>
+                }
               />
 
               {/* Default */}
