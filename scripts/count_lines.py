@@ -52,7 +52,10 @@ def examine_directory(path):
 
 
 def main():
-    root = Path('.')
+    # Resolve to the repo root so the count is consistent regardless of the
+    # caller's cwd. Script lives at scripts/count_lines.py; parent.parent
+    # is the repo root.
+    root = Path(__file__).resolve().parent.parent
     total_count = examine_directory(root)
     print(f"Number of lines: {total_count}")
 
