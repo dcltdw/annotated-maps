@@ -50,11 +50,29 @@ std::string validateCoordinateSystem(const Json::Value& cs) {
             return "coordinateSystem.width must be a positive number for type pixel";
         if (!cs.isMember("height") || !cs["height"].isNumeric() || cs["height"].asInt() <= 0)
             return "coordinateSystem.height must be a positive number for type pixel";
+        // viewport describes the initial pan/zoom on the image: pixel
+        // coordinates (x, y) of the centerpoint plus a zoom factor.
+        if (!cs.isMember("viewport") || !cs["viewport"].isObject())
+            return "coordinateSystem.viewport object required for type pixel";
+        const auto& vp = cs["viewport"];
+        if (!vp.isMember("x") || !vp["x"].isNumeric())
+            return "coordinateSystem.viewport.x must be numeric";
+        if (!vp.isMember("y") || !vp["y"].isNumeric())
+            return "coordinateSystem.viewport.y must be numeric";
+        if (!vp.isMember("zoom") || !vp["zoom"].isNumeric())
+            return "coordinateSystem.viewport.zoom must be numeric";
         return "";
     }
     if (type == "blank") {
         if (!cs.isMember("extent") || !cs["extent"].isObject())
             return "coordinateSystem.extent object required for type blank";
+        const auto& ex = cs["extent"];
+        // extent describes the canvas size in arbitrary units; positive
+        // integers since this is a bounded drawable surface.
+        if (!ex.isMember("x") || !ex["x"].isNumeric() || ex["x"].asInt() <= 0)
+            return "coordinateSystem.extent.x must be a positive number";
+        if (!ex.isMember("y") || !ex["y"].isNumeric() || ex["y"].asInt() <= 0)
+            return "coordinateSystem.extent.y must be a positive number";
         return "";
     }
     return "coordinateSystem.type must be one of: wgs84, pixel, blank";

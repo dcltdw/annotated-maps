@@ -52,6 +52,7 @@ FAST_TESTS = [
     "test_23_tree_navigation.py",
     "test_24_node_move.py",
     "test_25_node_copy.py",
+    "test_26_coordinate_systems.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
@@ -72,6 +73,9 @@ FAST_TESTS = [
 # test_25_node_copy.py landed in #100 (copy endpoint: recursive subtree
 #   duplication; new ids; tags + plot memberships dropped; notes follow
 #   with reset created_by/created_at; cross-map / cross-tenant rules).
+# test_26_coordinate_systems.py landed in #91 (backend: shape validation
+#   for wgs84 / pixel / blank coordinate-system types on map create+update;
+#   frontend rendering deferred to #101).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -100,6 +104,7 @@ TEST_DESCRIPTIONS = {
     23: "Tree navigation (children + subtree CTE descent, pagination)",
     24: "Node move (re-parent, cross-map, cross-tenant, cycle, cascade)",
     25: "Node copy (recursive subtree duplication, notes follow, tag drop)",
+    26: "Coordinate system shape validation (wgs84, pixel, blank)",
 }
 
 
