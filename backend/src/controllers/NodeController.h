@@ -16,6 +16,8 @@
  * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/children
  * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree
  *
+ * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/move
+ *
  * Node = the central new abstraction in the nodes-rebuild model
  * (tree-structured place markers, replacing annotations + adding
  * hierarchy via parent_id). See #96 and the nodes-rebuild branch
@@ -37,6 +39,25 @@
  *     to FALSE doesn't drop the rows. (Inheritance treats override
  *     = FALSE as "ignore my own tags, walk up parent_id"; the rows
  *     remain ready to re-activate.)
+ *
+ * Move (Phase 2e.a, #90):
+ *   - POST /move — re-parent and/or relocate a node and its full subtree.
+ *     Body: { newParentId: null | int, newMapId: null | int }.
+ *     - Same-map re-parent: change parent_id only; visibility tags +
+ *       plot memberships preserved (parent chain shifts but groups
+ *       stay valid).
+ *     - Cross-map (same tenant): update map_id on source + descendants;
+ *       drop their node_visibility rows (inheritance chain semantics
+ *       changed); plot memberships preserved (plots are tenant-scoped).
+ *     - Cross-tenant: requires admin in BOTH source and destination
+ *       tenants. Drops both node_visibility rows AND plot_nodes
+ *       memberships on source + descendants.
+ *     - Cycle prevention: rejects when newParentId is in source's
+ *       subtree (or equals source itself).
+ *     - Notes follow their nodes (note.node_id stays the same;
+ *       no note_visibility cleanup needed since note inheritance
+ *       walks through its node, which moved with consistent semantics).
+ *     - Audit event: node_move with descendantCount.
  *
  * Tree navigation (Phase 2d, #89):
  *   - GET /children — direct children only. Same shape as
@@ -80,6 +101,9 @@ public:
         ADD_METHOD_TO(NodeController::getSubtree,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree",
                       drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(NodeController::moveNode,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/move",
+                      drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
     METHOD_LIST_END
 
     void listNodes(const drogon::HttpRequestPtr&,
@@ -109,6 +133,9 @@ public:
     void getSubtree(const drogon::HttpRequestPtr&,
                     std::function<void(const drogon::HttpResponsePtr&)>&&,
                     int tenantId, int mapId, int id);
+    void moveNode(const drogon::HttpRequestPtr&,
+                  std::function<void(const drogon::HttpResponsePtr&)>&&,
+                  int tenantId, int mapId, int id);
 };
 
 // Maximum tree depth for node parent_id chains. Bounded so the
