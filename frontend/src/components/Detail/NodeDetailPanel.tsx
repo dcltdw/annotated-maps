@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { nodesService, notesService, nodeMediaService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
+import { VisibilityEditor } from '@/components/Visibility/VisibilityEditor';
 import type {
   NodeRecord,
   NodeMediaRecord,
@@ -179,6 +180,11 @@ export function NodeDetailPanel({
         </div>
       )}
 
+      <section className="node-detail-visibility">
+        <h3>Visibility</h3>
+        <VisibilityEditor kind="node" entityId={node.id} mapId={mapId} />
+      </section>
+
       <NotesList
         mapId={mapId}
         nodeId={node.id}
@@ -332,6 +338,7 @@ interface NoteCardProps {
 
 function NoteCard({ mapId, note, onChange }: NoteCardProps) {
   const [editing, setEditing] = useState(false);
+  const [showVisibility, setShowVisibility] = useState(false);
 
   const handleDelete = async () => {
     if (!window.confirm('Delete this note?')) return;
@@ -379,6 +386,13 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
+              onClick={() => setShowVisibility((v) => !v)}
+            >
+              {showVisibility ? 'Hide visibility' : 'Visibility'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
               onClick={handleDelete}
             >
               Delete
@@ -390,6 +404,11 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
       <footer className="note-card-footer">
         <small>by {note.createdByUsername}</small>
       </footer>
+      {showVisibility && (
+        <div className="note-card-visibility">
+          <VisibilityEditor kind="note" entityId={note.id} mapId={mapId} />
+        </div>
+      )}
     </article>
   );
 }

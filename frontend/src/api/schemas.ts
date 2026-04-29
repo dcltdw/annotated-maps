@@ -195,6 +195,33 @@ export type CreateVisibilityGroupRequest = {
 };
 export type UpdateVisibilityGroupRequest = Partial<CreateVisibilityGroupRequest>;
 
+// ─── Per-node / per-note visibility state (#86, #87) ─────────────────────────
+// GET /…/nodes/{nid}/visibility and the analogous notes endpoint return the
+// raw stored state — override flag + the explicit set of visibility-group
+// ids tagged on this entity. When `override` is FALSE, the entity inherits
+// from its parent chain (for nodes) or attached node (for notes); the
+// inherited groups aren't exposed by these endpoints. The read-time CTE
+// computes the effective set internally.
+
+export const NodeVisibilityStateSchema = z.object({
+  nodeId: z.number().int(),
+  override: z.boolean(),
+  groupIds: z.array(z.number().int()),
+});
+export type NodeVisibilityState = z.infer<typeof NodeVisibilityStateSchema>;
+
+export const NoteVisibilityStateSchema = z.object({
+  noteId: z.number().int(),
+  override: z.boolean(),
+  groupIds: z.array(z.number().int()),
+});
+export type NoteVisibilityState = z.infer<typeof NoteVisibilityStateSchema>;
+
+export type SetVisibilityRequest = {
+  override?: boolean;
+  groupIds?: number[];
+};
+
 // ─── Node media ──────────────────────────────────────────────────────────────
 // Image / link attachments rendered alongside node popups in the map view.
 

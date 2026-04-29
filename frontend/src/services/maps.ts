@@ -12,6 +12,8 @@ import {
   VisibilityGroupSchema,
   VisibilityGroupListSchema,
   VisibilityGroupMemberListSchema,
+  NodeVisibilityStateSchema,
+  NoteVisibilityStateSchema,
   type MapRecord,
   type MapList,
   type NodeRecord,
@@ -31,6 +33,9 @@ import {
   type UpdateNoteRequest,
   type CreateVisibilityGroupRequest,
   type UpdateVisibilityGroupRequest,
+  type NodeVisibilityState,
+  type NoteVisibilityState,
+  type SetVisibilityRequest,
 } from '@/api/schemas';
 import type {
   Tenant,
@@ -178,6 +183,29 @@ export const nodesService = {
     );
     return NodeSubtreeResponseSchema.parse(res.data);
   },
+
+  async getVisibility(
+    mapId: number,
+    nodeId: number,
+    tenantId?: number,
+  ): Promise<NodeVisibilityState> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/visibility`,
+    );
+    return NodeVisibilityStateSchema.parse(res.data);
+  },
+
+  async setVisibility(
+    mapId: number,
+    nodeId: number,
+    data: SetVisibilityRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/visibility`,
+      data,
+    );
+  },
 };
 
 // ─── Permissions ─────────────────────────────────────────────────────────────
@@ -320,5 +348,28 @@ export const notesService = {
 
   async deleteNote(mapId: number, noteId: number, tenantId?: number): Promise<void> {
     await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}`);
+  },
+
+  async getVisibility(
+    mapId: number,
+    noteId: number,
+    tenantId?: number,
+  ): Promise<NoteVisibilityState> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/visibility`,
+    );
+    return NoteVisibilityStateSchema.parse(res.data);
+  },
+
+  async setVisibility(
+    mapId: number,
+    noteId: number,
+    data: SetVisibilityRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/visibility`,
+      data,
+    );
   },
 };
