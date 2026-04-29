@@ -49,6 +49,7 @@ FAST_TESTS = [
     "test_20_node_visibility_filter.py",
     "test_21_note_visibility.py",
     "test_22_plots.py",
+    "test_23_tree_navigation.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
@@ -62,6 +63,8 @@ FAST_TESTS = [
 #   note → node → parent-chain inheritance).
 # test_22_plots.py landed in #88 (PlotController CRUD + membership +
 #   visibility filter on listMembers).
+# test_23_tree_navigation.py landed in #89 (children + subtree endpoints,
+#   recursive CTE descent, pagination, hidden-root 404, owner_xray).
 # Annotation/note-group tests are gone permanently — those concepts were
 # consolidated into nodes and visibility groups during the rebuild.
 
@@ -87,6 +90,7 @@ TEST_DESCRIPTIONS = {
     20: "Node visibility read filter (admin bypass, inheritance, owner_xray)",
     21: "Note visibility (tagging + filter; note → node → parent-chain)",
     22: "Plots (CRUD, membership, visibility filter on listMembers)",
+    23: "Tree navigation (children + subtree CTE descent, pagination)",
 }
 
 

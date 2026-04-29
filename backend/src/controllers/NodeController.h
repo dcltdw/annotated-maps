@@ -13,6 +13,9 @@
  * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility
  * POST   /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility
  *
+ * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/children
+ * GET    /api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree
+ *
  * Node = the central new abstraction in the nodes-rebuild model
  * (tree-structured place markers, replacing annotations + adding
  * hierarchy via parent_id). See #96 and the nodes-rebuild branch
@@ -34,6 +37,18 @@
  *     to FALSE doesn't drop the rows. (Inheritance treats override
  *     = FALSE as "ignore my own tags, walk up parent_id"; the rows
  *     remain ready to re-activate.)
+ *
+ * Tree navigation (Phase 2d, #89):
+ *   - GET /children — direct children only. Same shape as
+ *     `GET /nodes?parentId=N`; visibility filter applies.
+ *   - GET /subtree  — recursive descent from the starting node, with
+ *     a `depth` field on each entry (0 = the starting node). The
+ *     recursion only descends into visible nodes, so a hidden
+ *     ancestor severs its own visible descendants from the response
+ *     (no gaps that would leak hidden-node existence).
+ *     Returns 404 if the starting node is hidden from the caller.
+ *     Pagination: ?limit=N&cursor=<lastId>. Default limit 100, max 500.
+ *     Response shape: { nodes: [{...node fields..., depth}], nextCursor: int|null }.
  */
 class NodeController : public drogon::HttpController<NodeController> {
 public:
@@ -59,6 +74,12 @@ public:
         ADD_METHOD_TO(NodeController::setVisibility,
                       "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility",
                       drogon::Post, "JwtFilter", "TenantFilter", "RateLimitFilter");
+        ADD_METHOD_TO(NodeController::listChildren,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/children",
+                      drogon::Get, "JwtFilter", "TenantFilter");
+        ADD_METHOD_TO(NodeController::getSubtree,
+                      "/api/v1/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree",
+                      drogon::Get, "JwtFilter", "TenantFilter");
     METHOD_LIST_END
 
     void listNodes(const drogon::HttpRequestPtr&,
@@ -82,6 +103,12 @@ public:
     void setVisibility(const drogon::HttpRequestPtr&,
                        std::function<void(const drogon::HttpResponsePtr&)>&&,
                        int tenantId, int mapId, int id);
+    void listChildren(const drogon::HttpRequestPtr&,
+                      std::function<void(const drogon::HttpResponsePtr&)>&&,
+                      int tenantId, int mapId, int id);
+    void getSubtree(const drogon::HttpRequestPtr&,
+                    std::function<void(const drogon::HttpResponsePtr&)>&&,
+                    int tenantId, int mapId, int id);
 };
 
 // Maximum tree depth for node parent_id chains. Bounded so the
