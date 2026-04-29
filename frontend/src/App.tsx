@@ -10,6 +10,7 @@ import { lazy, Suspense } from 'react';
 const MapListPage          = lazy(() => import('@/pages/MapListPage').then((m)          => ({ default: m.MapListPage })));
 const MapDetailPage        = lazy(() => import('@/pages/MapDetailPage').then((m)        => ({ default: m.MapDetailPage })));
 const VisibilityGroupsPage = lazy(() => import('@/pages/VisibilityGroupsPage').then((m) => ({ default: m.VisibilityGroupsPage })));
+const PlotsPage            = lazy(() => import('@/pages/PlotsPage').then((m)            => ({ default: m.PlotsPage })));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -66,6 +67,16 @@ export default function App() {
                 element={
                   <PrivateRoute>
                     <VisibilityGroupsPage />
+                  </PrivateRoute>
+                }
+              />
+
+              {/* Tenant-scoped plot admin (#95) */}
+              <Route
+                path="/tenants/:tenantId/plots"
+                element={
+                  <PrivateRoute>
+                    <PlotsPage />
                   </PrivateRoute>
                 }
               />

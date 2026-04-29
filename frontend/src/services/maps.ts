@@ -14,6 +14,9 @@ import {
   VisibilityGroupMemberListSchema,
   NodeVisibilityStateSchema,
   NoteVisibilityStateSchema,
+  PlotRecordSchema,
+  PlotListSchema,
+  PlotMembersSchema,
   type MapRecord,
   type MapList,
   type NodeRecord,
@@ -36,6 +39,11 @@ import {
   type NodeVisibilityState,
   type NoteVisibilityState,
   type SetVisibilityRequest,
+  type PlotRecord,
+  type PlotList,
+  type PlotMembers,
+  type CreatePlotRequest,
+  type UpdatePlotRequest,
 } from '@/api/schemas';
 import type {
   Tenant,
@@ -372,6 +380,84 @@ export const notesService = {
     await apiClient.post(
       `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/visibility`,
       data,
+    );
+  },
+};
+
+// ─── Plots (#88 / #95) ───────────────────────────────────────────────────────
+// Tenant-scoped narrative groupings tying together nodes + notes across maps.
+// Same `tenantBase` resolution as everything else in this module: callers
+// pass an explicit tenantId (e.g. when browsing another user's tenant via
+// E2E SQL bypass) or rely on the auth-store fallback.
+
+export const plotsService = {
+  async listPlots(tenantId?: number): Promise<PlotList> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/plots`);
+    return PlotListSchema.parse(res.data);
+  },
+
+  async getPlot(plotId: number, tenantId?: number): Promise<PlotRecord> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/plots/${plotId}`);
+    return PlotRecordSchema.parse(res.data);
+  },
+
+  async createPlot(data: CreatePlotRequest, tenantId?: number): Promise<PlotRecord> {
+    // Backend's POST returns a partial plot (no createdAt/updatedAt) — same
+    // shape mismatch as updatePlot. POST then GET to return a fully-parsed
+    // record so the caller can rely on the timestamps.
+    const res = await apiClient.post(`${tenantBase(tenantId)}/plots`, data);
+    const id = res.data?.id;
+    if (typeof id !== 'number') {
+      throw new Error('createPlot: response missing id');
+    }
+    return this.getPlot(id, tenantId);
+  },
+
+  async updatePlot(
+    plotId: number,
+    data: UpdatePlotRequest,
+    tenantId?: number,
+  ): Promise<PlotRecord> {
+    // Same shape mismatch as mapsService.updateMap: PUT returns
+    // { id, updated: true }, so re-fetch the parsed record.
+    await apiClient.put(`${tenantBase(tenantId)}/plots/${plotId}`, data);
+    return this.getPlot(plotId, tenantId);
+  },
+
+  async deletePlot(plotId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(`${tenantBase(tenantId)}/plots/${plotId}`);
+  },
+
+  async listMembers(plotId: number, tenantId?: number): Promise<PlotMembers> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/plots/${plotId}/members`,
+    );
+    return PlotMembersSchema.parse(res.data);
+  },
+
+  async addNode(plotId: number, nodeId: number, tenantId?: number): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/plots/${plotId}/nodes`,
+      { nodeId },
+    );
+  },
+
+  async removeNode(plotId: number, nodeId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/plots/${plotId}/nodes/${nodeId}`,
+    );
+  },
+
+  async addNote(plotId: number, noteId: number, tenantId?: number): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/plots/${plotId}/notes`,
+      { noteId },
+    );
+  },
+
+  async removeNote(plotId: number, noteId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/plots/${plotId}/notes/${noteId}`,
     );
   },
 };

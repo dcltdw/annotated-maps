@@ -55,6 +55,7 @@ frontend/
 │       ├── notes.spec.ts       # note CRUD + move + note groups (#37)
 │       ├── cross-tenant.spec.ts # tenant isolation across two users (#38)
 │       ├── visibility.spec.ts # override icon, owner_xray, cross-user filter (#106)
+│       ├── plots.spec.ts      # plot CRUD, cross-map nav, visibility filtering (#95)
 │       └── *.spec.ts           # one file per feature area
 └── ...
 ```

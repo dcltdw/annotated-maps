@@ -739,6 +739,51 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   border-top: 1px dashed var(--color-border);
 }
 
+/* ─── Plots admin (#95) ──────────────────────────────────────────────────── */
+/* Reuses the visibility-group row pattern: collapsible row with inline
+   member panel, modal for create/edit. Members are split into Nodes /
+   Notes sub-sections inside each row's body. */
+.plot-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: .75rem; }
+.plot-row {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: .75rem 1rem;
+}
+.plot-header { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+.plot-toggle { background: none; border: none; cursor: pointer; font-size: .9rem; padding: 0 .25rem; }
+.plot-name { margin: 0; font-size: 1.1rem; flex: 1; }
+.plot-count { font-size: .8rem; color: #666; }
+.plot-actions { display: flex; gap: .25rem; }
+.plot-description { margin: .25rem 0 0 1.5rem; color: #555; font-size: .9rem; }
+.plot-body { margin-top: .75rem; display: flex; flex-direction: column; gap: 1rem; }
+.plot-section h3 { margin: 0 0 .35rem 0; font-size: .95rem; }
+.plot-empty { color: #888; font-size: .85rem; margin: 0 0 .25rem 0; }
+.plot-member-list { list-style: none; padding: 0; margin: 0 0 .35rem 0; display: flex; flex-direction: column; gap: .15rem; }
+.plot-member-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .25rem .5rem;
+  border-radius: var(--radius);
+  background: #fafafa;
+}
+.plot-member-link {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  text-decoration: none;
+  color: inherit;
+}
+.plot-member-link:hover { text-decoration: underline; }
+.plot-member-name { font-weight: 500; }
+.plot-member-map { font-size: .8rem; color: #666; }
+.plot-member-pin { font-size: .8rem; }
+.plot-add-form { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.plot-add-form select { flex: 1; min-width: 8rem; }
+
 .node-popup h3 { margin: 0 0 .5rem 0; font-size: 1rem; }
 .node-popup p  { margin: .25rem 0; }
 .node-popup-media { margin-top: .5rem; }
