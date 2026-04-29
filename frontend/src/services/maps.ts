@@ -9,6 +9,9 @@ import {
   NoteRecordSchema,
   NoteListSchema,
   NodeMediaListSchema,
+  VisibilityGroupSchema,
+  VisibilityGroupListSchema,
+  VisibilityGroupMemberListSchema,
   type MapRecord,
   type MapList,
   type NodeRecord,
@@ -17,12 +20,17 @@ import {
   type NoteRecord,
   type NoteList,
   type NodeMediaList,
+  type VisibilityGroup,
+  type VisibilityGroupList,
+  type VisibilityGroupMemberList,
   type CreateMapRequest,
   type UpdateMapRequest,
   type CreateNodeRequest,
   type UpdateNodeRequest,
   type CreateNoteRequest,
   type UpdateNoteRequest,
+  type CreateVisibilityGroupRequest,
+  type UpdateVisibilityGroupRequest,
 } from '@/api/schemas';
 import type {
   Tenant,
@@ -191,6 +199,70 @@ export const permissionsService = {
   async removePermission(mapId: number, userId: number | null, tenantId?: number): Promise<void> {
     const target = userId === null ? 'public' : String(userId);
     await apiClient.delete(`${tenantBase(tenantId)}/maps/${mapId}/permissions/${target}`);
+  },
+};
+
+// ─── Visibility groups (#85 / #98) ───────────────────────────────────────────
+// Auth model (server-enforced): tenant admin OR member of any group with
+// manages_visibility=TRUE in the same tenant. Setting managesVisibility=true
+// on POST/PUT is admin-only — managers can't bootstrap themselves into more
+// power.
+
+export const visibilityGroupsService = {
+  async listGroups(tenantId?: number): Promise<VisibilityGroupList> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/visibility-groups`);
+    return VisibilityGroupListSchema.parse(res.data);
+  },
+
+  async createGroup(
+    data: CreateVisibilityGroupRequest,
+    tenantId?: number,
+  ): Promise<VisibilityGroup> {
+    const res = await apiClient.post(`${tenantBase(tenantId)}/visibility-groups`, data);
+    return VisibilityGroupSchema.parse(res.data);
+  },
+
+  async updateGroup(
+    groupId: number,
+    data: UpdateVisibilityGroupRequest,
+    tenantId?: number,
+  ): Promise<VisibilityGroup> {
+    const res = await apiClient.put(
+      `${tenantBase(tenantId)}/visibility-groups/${groupId}`,
+      data,
+    );
+    return VisibilityGroupSchema.parse(res.data);
+  },
+
+  async deleteGroup(groupId: number, tenantId?: number): Promise<void> {
+    await apiClient.delete(`${tenantBase(tenantId)}/visibility-groups/${groupId}`);
+  },
+
+  async listMembers(
+    groupId: number,
+    tenantId?: number,
+  ): Promise<VisibilityGroupMemberList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/visibility-groups/${groupId}/members`,
+    );
+    return VisibilityGroupMemberListSchema.parse(res.data);
+  },
+
+  async addMember(groupId: number, userId: number, tenantId?: number): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/visibility-groups/${groupId}/members`,
+      { userId },
+    );
+  },
+
+  async removeMember(
+    groupId: number,
+    userId: number,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/visibility-groups/${groupId}/members/${userId}`,
+    );
   },
 };
 

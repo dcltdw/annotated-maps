@@ -161,6 +161,40 @@ export type NoteRecord = z.infer<typeof NoteRecordSchema>;
 export const NoteListSchema = z.array(NoteRecordSchema);
 export type NoteList = z.infer<typeof NoteListSchema>;
 
+// ─── Visibility groups (#85 / #98) ───────────────────────────────────────────
+
+export const VisibilityGroupSchema = z.object({
+  id: z.number().int(),
+  tenantId: z.number().int(),
+  name: z.string(),
+  description: z.string(),
+  managesVisibility: z.boolean(),
+  createdBy: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type VisibilityGroup = z.infer<typeof VisibilityGroupSchema>;
+
+export const VisibilityGroupListSchema = z.array(VisibilityGroupSchema);
+export type VisibilityGroupList = z.infer<typeof VisibilityGroupListSchema>;
+
+export const VisibilityGroupMemberSchema = z.object({
+  userId: z.number().int(),
+  username: z.string(),
+  email: z.string(),
+});
+export type VisibilityGroupMember = z.infer<typeof VisibilityGroupMemberSchema>;
+
+export const VisibilityGroupMemberListSchema = z.array(VisibilityGroupMemberSchema);
+export type VisibilityGroupMemberList = z.infer<typeof VisibilityGroupMemberListSchema>;
+
+export type CreateVisibilityGroupRequest = {
+  name: string;
+  description?: string;
+  managesVisibility?: boolean;
+};
+export type UpdateVisibilityGroupRequest = Partial<CreateVisibilityGroupRequest>;
+
 // ─── Node media ──────────────────────────────────────────────────────────────
 // Image / link attachments rendered alongside node popups in the map view.
 
