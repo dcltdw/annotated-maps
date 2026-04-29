@@ -160,6 +160,19 @@ message or trivially confirmable). In that case the only manual step
 is the board flip — fine to do as a single direct tool call without
 the list overhead.
 
+**Always verify after a board edit.** `gh project item-edit` can
+silently no-op: exit code 0, no output, no actual change. Encountered
+during the #106 cleanup — the first flip command returned cleanly but
+the status stayed at In Progress; only spotted when the user noticed
+the board was wrong on the next turn. The fix is cheap: every board
+edit should be paired with an immediate read-back. Either chain them
+in one shell command (`gh project item-edit ... ; gh project item-list
+... --jq '.items[] | select(.content.number == NNN) | .status'`) or
+run a follow-up read tool call. The board's eventual-consistency
+window is short — a synchronous check in the same turn is sufficient.
+Don't mark the corresponding TodoWrite item completed until the
+read-back returns the expected status.
+
 **Project-specific binding (annotated-maps `Focus on next` board):**
 
 ```bash
