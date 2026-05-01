@@ -154,8 +154,16 @@ export const nodesService = {
   },
 
   async createNode(mapId: number, data: CreateNodeRequest, tenantId?: number): Promise<NodeRecord> {
+    // Backend's POST returns a partial node (no createdAt/updatedAt) — same
+    // shape mismatch as mapsService.updateMap and plotsService.create/updatePlot.
+    // POST then GET to return a fully-parsed record so the caller can rely
+    // on the timestamps.
     const res = await apiClient.post(`${tenantBase(tenantId)}/maps/${mapId}/nodes`, data);
-    return NodeRecordSchema.parse(res.data);
+    const id = res.data?.id;
+    if (typeof id !== 'number') {
+      throw new Error('createNode: response missing id');
+    }
+    return this.getNode(mapId, id, tenantId);
   },
 
   async updateNode(

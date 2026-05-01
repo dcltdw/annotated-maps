@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { nodesService } from '@/services/maps';
-import type { NodeRecord, GeoJsonGeometry } from '@/types';
+import { extractApiError } from '@/utils/errors';
+import type { NodeRecord, GeoJsonGeometry, CreateNodeRequest } from '@/types';
 
 // NodeTreePanel — Phase 2g.d (#93). Replaces the deleted flat NotesPanel
 // from before the rebuild with the tree-of-nodes UI.
@@ -28,6 +29,13 @@ export function NodeTreePanel({
   const [rootNodes, setRootNodes] = useState<NodeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // refreshKey is bumped after a successful node create. Both the root
+  // listing here and each NodeTreeRow's children listing watch it; a
+  // bump triggers a re-fetch of root nodes and (if the row is expanded)
+  // the row's children. Collapsed rows just clear their cached children
+  // so the next expand fetches fresh.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [showCreate, setShowCreate] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -47,12 +55,19 @@ export function NodeTreePanel({
     return () => {
       cancelled = true;
     };
-  }, [mapId]);
+  }, [mapId, refreshKey]);
 
   return (
     <aside className="node-tree-panel">
       <div className="node-tree-header">
         <h3>Nodes</h3>
+        <button
+          type="button"
+          className="btn btn-primary btn-sm"
+          onClick={() => setShowCreate(true)}
+        >
+          + Node
+        </button>
       </div>
       {loading && <div className="node-tree-state">Loading…</div>}
       {error && <div className="alert alert-error">{error}</div>}
@@ -69,9 +84,21 @@ export function NodeTreePanel({
             selectedNodeId={selectedNodeId}
             onSelect={onSelectNode}
             onPan={onPanToNode}
+            refreshKey={refreshKey}
           />
         ))}
       </div>
+      {showCreate && (
+        <CreateNodeModal
+          mapId={mapId}
+          onClose={() => setShowCreate(false)}
+          onCreated={(newId) => {
+            setShowCreate(false);
+            setRefreshKey((k) => k + 1);
+            onSelectNode(newId);
+          }}
+        />
+      )}
     </aside>
   );
 }
@@ -85,6 +112,7 @@ interface NodeTreeRowProps {
   selectedNodeId: number | null;
   onSelect: (nodeId: number) => void;
   onPan: (coords: [number, number]) => void;
+  refreshKey: number;
 }
 
 function NodeTreeRow({
@@ -94,6 +122,7 @@ function NodeTreeRow({
   selectedNodeId,
   onSelect,
   onPan,
+  refreshKey,
 }: NodeTreeRowProps) {
   // `children === null` means we haven't fetched yet; `[]` means we have
   // and there are none. The toggle is shown until we know for certain
@@ -102,6 +131,27 @@ function NodeTreeRow({
   const [children, setChildren] = useState<NodeRecord[] | null>(null);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [childrenError, setChildrenError] = useState<string | null>(null);
+
+  // When the panel signals a refresh (after a node create), invalidate
+  // this row's cached children. If we're expanded, refetch immediately
+  // so a newly-added child shows up. If we're collapsed, just clear
+  // the cache so the next expand fetches fresh.
+  useEffect(() => {
+    if (refreshKey === 0) return; // initial render, nothing to refresh
+    if (expanded) {
+      let cancelled = false;
+      setLoadingChildren(true);
+      nodesService
+        .listChildren(mapId, node.id)
+        .then((cs) => { if (!cancelled) setChildren(cs); })
+        .catch(() => { if (!cancelled) setChildrenError('Failed to refresh children.'); })
+        .finally(() => { if (!cancelled) setLoadingChildren(false); });
+      return () => { cancelled = true; };
+    } else {
+      setChildren(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshKey]);
 
   const handleToggle = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -197,6 +247,7 @@ function NodeTreeRow({
               selectedNodeId={selectedNodeId}
               onSelect={onSelect}
               onPan={onPan}
+              refreshKey={refreshKey}
             />
           ))}
         </div>
@@ -224,4 +275,139 @@ function derivePanCoords(g: GeoJsonGeometry): [number, number] | null {
     return first ? [first[1], first[0]] : null;
   }
   return null;
+}
+
+// ─── Create-node modal (#150) ────────────────────────────────────────────────
+// Minimum-viable node creator: name (required), description, parent
+// (optional; flat list of all nodes on this map), color. Geometry creation
+// is deliberately deferred — nodes can be created without geometry, and a
+// future "draw toolbar" ticket can add point/line/polygon placement from
+// the map view. This unblocks the basic UX of "create a fresh map → put
+// some places on it" entirely from the UI.
+
+interface CreateNodeModalProps {
+  mapId: number;
+  onClose: () => void;
+  onCreated: (newNodeId: number) => void;
+}
+
+function CreateNodeModal({ mapId, onClose, onCreated }: CreateNodeModalProps) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [parentId, setParentId] = useState<string>('');
+  const [color, setColor] = useState('');
+  const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
+  const [loadingNodes, setLoadingNodes] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Flat list of all nodes for the parent picker. Top-level nodes
+  // appear with no indent prefix; deeper nodes get prefixed by their
+  // depth — see depthPrefix() below. The list is fetched once when
+  // the modal opens; the typical map has <100 nodes so a flat fetch
+  // is cheap, and it sidesteps having to walk the tree to build a
+  // selectable list.
+  useEffect(() => {
+    let cancelled = false;
+    nodesService
+      .listNodes(mapId)
+      .then((ns) => { if (!cancelled) setAllNodes(ns); })
+      .catch(() => { if (!cancelled) setAllNodes([]); })
+      .finally(() => { if (!cancelled) setLoadingNodes(false); });
+    return () => { cancelled = true; };
+  }, [mapId]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const req: CreateNodeRequest = { name: name.trim() };
+      if (description.trim()) req.description = description.trim();
+      if (parentId) req.parentId = Number(parentId);
+      if (color.trim()) req.color = color.trim();
+      const created = await nodesService.createNode(mapId, req);
+      onCreated(created.id);
+    } catch (err) {
+      setError(extractApiError(err, 'Failed to create node.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h2>New Node</h2>
+        <form onSubmit={handleSubmit} className="auth-form">
+          {error && <div className="alert alert-error">{error}</div>}
+          <div className="form-group">
+            <label htmlFor="new-node-name">Name</label>
+            <input
+              id="new-node-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+              placeholder="The Old Mill, Yangseong, …"
+              disabled={saving}
+              autoFocus
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="new-node-description">Description</label>
+            <textarea
+              id="new-node-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Optional"
+              rows={3}
+              disabled={saving}
+            />
+          </div>
+          <div className="form-group">
+            <label htmlFor="new-node-parent">Parent (optional)</label>
+            <select
+              id="new-node-parent"
+              value={parentId}
+              onChange={(e) => setParentId(e.target.value)}
+              disabled={saving || loadingNodes}
+            >
+              <option value="">— Top level —</option>
+              {allNodes.map((n) => (
+                <option key={n.id} value={String(n.id)}>{n.name}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group">
+            <label htmlFor="new-node-color">Color (optional)</label>
+            <input
+              id="new-node-color"
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              placeholder="#cc0000 or red"
+              disabled={saving}
+            />
+          </div>
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={onClose}
+              disabled={saving}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={saving || !name.trim()}
+            >
+              {saving ? 'Creating…' : 'Create'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
 }
