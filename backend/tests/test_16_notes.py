@@ -72,6 +72,22 @@ NOTE2 = json_field(body, ["id"])
 assert_json_field("create: color set", body, ["color"], "#ff0000")
 assert_json_field("create: title set", body, ["title"], "Beware")
 
+# Regression for #154: create-note must honor the `pinned` field
+# (previously dropped — INSERT omitted the column, response hardcoded
+# false, row landed at the schema default of FALSE).
+status, body = http_post(LIST_BASE, {
+    "text": "Pinned at creation",
+    "pinned": True,
+}, TOKEN_A)
+assert_status("create: pinned=true returns 201", 201, status)
+NOTE_PIN = json_field(body, ["id"])
+assert_json_field("create: pinned=true reflected in response", body, ["pinned"], True)
+# Round-trip through GET to confirm it's actually persisted, not just
+# echoed in the create response.
+status, body = http_get(f"{NOTE_BASE}/{NOTE_PIN}", TOKEN_A)
+assert_status("create-pinned: GET returns 200", 200, status)
+assert_json_field("create-pinned: pinned persisted in DB", body, ["pinned"], True)
+
 # Validation: missing text
 status, _ = http_post(LIST_BASE, {"title": "no text"}, TOKEN_A)
 assert_status("create: missing text returns 400", 400, status)
@@ -107,8 +123,8 @@ print("  --- List ---")
 status, body = http_get(LIST_BASE, TOKEN_A)
 assert_status("list: returns 200", 200, status)
 assert_true("list: returns array", isinstance(body, list))
-assert_true("list: contains 2 notes on NODE_A1",
-            len([n for n in body if n["nodeId"] == NODE_A1]) == 2)
+assert_true("list: contains 3 notes on NODE_A1",
+            len([n for n in body if n["nodeId"] == NODE_A1]) == 3)
 
 # Note on NODE_A2 only shows under its own list
 status, body = http_get(
