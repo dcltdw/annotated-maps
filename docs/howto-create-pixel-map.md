@@ -61,7 +61,7 @@ curl -X POST "http://localhost:8080/api/v1/tenants/${TENANT_ID}/maps" \
 
 Response includes the map id; navigate to
 `/tenants/${TENANT_ID}/maps/${id}` to view. The frontend overlays the
-image and lets you place nodes by clicking on it. Node coordinates are
+image and lets you place locations by clicking on it. Coordinates are
 stored as `(x, y)` pixel offsets within the image.
 
 ## Coordinate-system fields reference
@@ -92,9 +92,9 @@ After creation:
 
 1. Navigate to `/tenants/${TENANT_ID}/maps/${id}` in the browser
 2. The image should appear as the map backdrop
-3. Add a node via the API or (once #128's UI is wired) by clicking on the
+3. Add a location via the API or (once #128's UI is wired) by clicking on the
    image
-4. Confirm the node renders at the expected pixel position
+4. Confirm the location renders at the expected pixel position
 
 If the image fails to load, check that `image_url` is reachable from the
 browser (CORS, auth, etc.) — the backend doesn't proxy the image.

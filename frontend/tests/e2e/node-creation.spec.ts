@@ -10,7 +10,7 @@ import {
  *
  * Pre-#150, nodes could only be created via API — meaning a fresh map
  * created via the UI was uninhabitable from the browser. These tests
- * cover the "+ Node" affordance + modal that closes that gap.
+ * cover the "+ Location" affordance + modal that closes that gap.
  */
 
 test.describe('Node creation UI (#150)', () => {
@@ -25,14 +25,14 @@ test.describe('Node creation UI (#150)', () => {
     await seedAuthInBrowser(page, api);
     await page.goto(`/tenants/${api.tenantId}/maps/${map.id}`);
 
-    // Empty state — no nodes yet, "+ Node" button visible.
-    await expect(page.getByText(/no nodes on this map yet/i)).toBeVisible();
-    const addButton = page.getByRole('button', { name: /\+ Node/i });
+    // Empty state — no locations yet, "+ Location" button visible.
+    await expect(page.getByText(/no locations on this map yet/i)).toBeVisible();
+    const addButton = page.getByRole('button', { name: /\+ Location/i });
     await expect(addButton).toBeVisible();
 
-    // Click "+ Node" → modal opens.
+    // Click "+ Location" → modal opens.
     await addButton.click();
-    await expect(page.getByRole('heading', { name: /^new node$/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /^new location$/i })).toBeVisible();
 
     // Fill form + submit.
     await page.getByLabel(/^name$/i).fill('Town Hall');
@@ -47,7 +47,7 @@ test.describe('Node creation UI (#150)', () => {
     await expect(page.getByRole('heading', { name: 'Town Hall' })).toBeVisible();
 
     // Empty-state hint is gone.
-    await expect(page.getByText(/no nodes on this map yet/i)).toHaveCount(0);
+    await expect(page.getByText(/no locations on this map yet/i)).toHaveCount(0);
   });
 
   test('user creates a node with lat/lng on a wgs84 map; geometry round-trips and pans the map', async ({ page, request }) => {
@@ -61,7 +61,7 @@ test.describe('Node creation UI (#150)', () => {
     await seedAuthInBrowser(page, api);
     await page.goto(`/tenants/${api.tenantId}/maps/${map.id}`);
 
-    await page.getByRole('button', { name: /\+ Node/i }).click();
+    await page.getByRole('button', { name: /\+ Location/i }).click();
     await page.getByLabel(/^name$/i).fill('Catskills');
     // wgs84 maps surface "Latitude" and "Longitude" labels.
     await page.getByLabel(/^latitude$/i).fill('42.0');
@@ -89,6 +89,27 @@ test.describe('Node creation UI (#150)', () => {
     });
   });
 
+  test('user creates a location with an optional first note; the note is attached and visible', async ({ page, request }) => {
+    const api = await registerViaApi(request, 'node_create_first_note');
+    const map = await createMapViaApi(request, api, 'First-Note Map', {
+      type: 'wgs84',
+      center: { lat: 0, lng: 0 },
+      zoom: 3,
+    });
+
+    await seedAuthInBrowser(page, api);
+    await page.goto(`/tenants/${api.tenantId}/maps/${map.id}`);
+
+    await page.getByRole('button', { name: /\+ Location/i }).click();
+    await page.getByLabel(/^name$/i).fill('Old Library');
+    await page.getByLabel(/first note/i).fill('A dusty repository of forbidden lore.');
+    await page.getByRole('button', { name: /^create$/i }).click();
+
+    // Detail panel renders the new location with the note in its notes list.
+    await expect(page.getByRole('heading', { name: 'Old Library' })).toBeVisible();
+    await expect(page.getByText('A dusty repository of forbidden lore.')).toBeVisible();
+  });
+
   test('user creates a child node by picking a parent from the dropdown; tree shows the nested row', async ({ page, request }) => {
     const api = await registerViaApi(request, 'node_create_child');
     const map = await createMapViaApi(request, api, 'Parent-Child Map', {
@@ -103,13 +124,13 @@ test.describe('Node creation UI (#150)', () => {
     // Create the parent first via the UI to make sure the create →
     // refresh → child-create flow round-trips through the same code paths
     // a user would actually exercise.
-    await page.getByRole('button', { name: /\+ Node/i }).click();
+    await page.getByRole('button', { name: /\+ Location/i }).click();
     await page.getByLabel(/^name$/i).fill('Region');
     await page.getByRole('button', { name: /^create$/i }).click();
     await expect(page.getByRole('button', { name: 'Region', exact: true })).toBeVisible();
 
     // Now create a child of "Region" via the parent-picker.
-    await page.getByRole('button', { name: /\+ Node/i }).click();
+    await page.getByRole('button', { name: /\+ Location/i }).click();
     await page.getByLabel(/^name$/i).fill('City');
     await page.getByLabel(/parent/i).selectOption({ label: 'Region' });
     await page.getByRole('button', { name: /^create$/i }).click();

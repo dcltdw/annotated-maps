@@ -92,7 +92,7 @@ export function NodeDetailPanel({
           setNotes(ns);
         }
       })
-      .catch((e) => { if (!cancelled) setError(extractApiError(e, 'Failed to load node.')); })
+      .catch((e) => { if (!cancelled) setError(extractApiError(e, 'Failed to load location.')); })
       .finally(() => { if (!cancelled) setLoading(false); });
 
     return () => { cancelled = true; };
@@ -101,12 +101,12 @@ export function NodeDetailPanel({
   if (selectedNodeId === null) {
     return (
       <section className="node-detail-panel node-detail-empty">
-        <p>Select a node to see its details.</p>
+        <p>Select a location to see its details.</p>
       </section>
     );
   }
   if (loading && !node) {
-    return <section className="node-detail-panel">Loading node…</section>;
+    return <section className="node-detail-panel">Loading location…</section>;
   }
   if (error) {
     return (

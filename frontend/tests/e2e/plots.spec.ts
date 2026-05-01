@@ -138,7 +138,7 @@ test.describe('Plots — CRUD and cross-map navigation', () => {
     const addNodeForm = plotRow.locator('.plot-add-form').first();
     await addNodeForm.locator('select').nth(0).selectOption({ label: 'Plot Map A' });
     await addNodeForm.locator('select').nth(1).selectOption({ label: 'CityA' });
-    await addNodeForm.getByRole('button', { name: /add node/i }).click();
+    await addNodeForm.getByRole('button', { name: /add location/i }).click();
     await expect(plotRow.getByRole('link', { name: /CityA/ })).toBeVisible();
 
     // Add the note on Map B via the note picker. The note picker is the

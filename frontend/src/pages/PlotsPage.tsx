@@ -266,9 +266,9 @@ function PlotRow({ plot, tenantId, maps, onEdit, onChange }: PlotRowProps) {
           {memberError && <div className="alert alert-error">{memberError}</div>}
 
           <section className="plot-section">
-            <h3>Nodes ({members.nodes.length})</h3>
+            <h3>Locations ({members.nodes.length})</h3>
             {members.nodes.length === 0 ? (
-              <p className="plot-empty">No nodes attached.</p>
+              <p className="plot-empty">No locations attached.</p>
             ) : (
               <ul className="plot-member-list">
                 {members.nodes.map((n) => (
@@ -462,7 +462,7 @@ function AddNodePicker({
               ? 'Loading nodes…'
               : eligibleNodes.length === 0
                 ? 'No eligible nodes'
-                : 'Pick a node…'}
+                : 'Pick a location…'}
         </option>
         {eligibleNodes.map((n) => (
           <option key={n.id} value={String(n.id)}>{n.name}</option>
@@ -473,7 +473,7 @@ function AddNodePicker({
         className="btn btn-primary btn-sm"
         disabled={saving || !selectedNodeId}
       >
-        {saving ? 'Adding…' : 'Add node'}
+        {saving ? 'Adding…' : 'Add location'}
       </button>
     </form>
   );
@@ -584,7 +584,7 @@ function AddNotePicker({
             ? 'Pick a map first'
             : loadingNodes
               ? 'Loading nodes…'
-              : 'Pick a node…'}
+              : 'Pick a location…'}
         </option>
         {nodes.map((n) => (
           <option key={n.id} value={String(n.id)}>{n.name}</option>
@@ -597,7 +597,7 @@ function AddNotePicker({
       >
         <option value="">
           {!selectedNodeId
-            ? 'Pick a node first'
+            ? 'Pick a location first'
             : loadingNotes
               ? 'Loading notes…'
               : eligibleNotes.length === 0

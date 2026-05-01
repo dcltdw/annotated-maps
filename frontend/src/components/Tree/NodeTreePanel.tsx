@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { nodesService } from '@/services/maps';
+import { nodesService, notesService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
 import type {
   NodeRecord,
@@ -7,6 +7,12 @@ import type {
   CreateNodeRequest,
   CoordinateSystem,
 } from '@/types';
+
+// User-facing copy convention (#150 follow-up): the data model calls these
+// "nodes" (and that term is preserved in code, schemas, API, comments,
+// CSS class names) but UI text uses "location" — "node" is graph-theory
+// jargon that doesn't read naturally to someone annotating a map. This
+// component is the primary surface where that translation happens.
 
 // NodeTreePanel — Phase 2g.d (#93). Replaces the deleted flat NotesPanel
 // from before the rebuild with the tree-of-nodes UI.
@@ -54,7 +60,7 @@ export function NodeTreePanel({
         if (!cancelled) setRootNodes(ns);
       })
       .catch(() => {
-        if (!cancelled) setError('Failed to load nodes.');
+        if (!cancelled) setError('Failed to load locations.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -67,19 +73,19 @@ export function NodeTreePanel({
   return (
     <aside className="node-tree-panel">
       <div className="node-tree-header">
-        <h3>Nodes</h3>
+        <h3>Locations</h3>
         <button
           type="button"
           className="btn btn-primary btn-sm"
           onClick={() => setShowCreate(true)}
         >
-          + Node
+          + Location
         </button>
       </div>
       {loading && <div className="node-tree-state">Loading…</div>}
       {error && <div className="alert alert-error">{error}</div>}
       {!loading && !error && rootNodes.length === 0 && (
-        <div className="node-tree-state">No nodes on this map yet.</div>
+        <div className="node-tree-state">No locations on this map yet.</div>
       )}
       <div className="node-tree-list">
         {rootNodes.map((node) => (
@@ -221,7 +227,7 @@ function NodeTreeRow({
         {node.visibilityOverride && (
           <span
             className="node-tree-override-icon"
-            title="Visibility overridden — explicit set on this node"
+            title="Visibility overridden — explicit set on this location"
             aria-label="Visibility overridden"
           >
             🔒
@@ -242,7 +248,7 @@ function NodeTreeRow({
           className="node-tree-menu"
           title="Move/copy (coming soon)"
           disabled
-          aria-label="Node actions"
+          aria-label="Location actions"
         >
           ⋯
         </button>
@@ -319,10 +325,15 @@ function CreateNodeModal({
   const [parentId, setParentId] = useState<string>('');
   const [color, setColor] = useState('');
   // Coordinates are kept as raw strings so the user can leave them empty
-  // (= no geometry, tree-only node) without us interpreting "0" as "0,0".
-  // For wgs84 the pair is (lat, lng); for pixel/blank it's (x, y).
+  // (= no geometry, tree-only location) without us interpreting "0" as
+  // "0,0". For wgs84 the pair is (lat, lng); for pixel/blank it's (x, y).
   const [coord1, setCoord1] = useState('');
   const [coord2, setCoord2] = useState('');
+  // Optional first note (option B from the #150 design discussion). If
+  // the user fills this in, after the location is created we post a
+  // note to it as part of the same modal close. Common case ("annotate
+  // this place with one paragraph") becomes one form, one click.
+  const [firstNote, setFirstNote] = useState('');
   const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -392,9 +403,28 @@ function CreateNodeModal({
       }
 
       const created = await nodesService.createNode(mapId, req);
+
+      // Optional first-note: if the user filled in the textarea, post
+      // it as a note attached to the just-created location. Failure
+      // here is treated as non-fatal — the location IS created, and
+      // the user can add the note manually from the detail panel —
+      // but we surface the error so it isn't silently swallowed.
+      const noteText = firstNote.trim();
+      if (noteText) {
+        try {
+          await notesService.createNote(mapId, created.id, { text: noteText });
+        } catch (noteErr) {
+          window.alert(
+            `Location was created, but the first note failed to save: ` +
+            `${extractApiError(noteErr, 'unknown error')}. ` +
+            `You can add the note manually from the detail panel.`,
+          );
+        }
+      }
+
       onCreated(created.id, panCoords);
     } catch (err) {
-      setError(extractApiError(err, 'Failed to create node.'));
+      setError(extractApiError(err, 'Failed to create location.'));
     } finally {
       setSaving(false);
     }
@@ -408,7 +438,7 @@ function CreateNodeModal({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>New Node</h2>
+        <h2>New Location</h2>
         <form onSubmit={handleSubmit} className="auth-form">
           {error && <div className="alert alert-error">{error}</div>}
           <div className="form-group">
@@ -491,6 +521,17 @@ function CreateNodeModal({
               </div>
             </div>
           </fieldset>
+          <div className="form-group">
+            <label htmlFor="new-node-first-note">First note (optional)</label>
+            <textarea
+              id="new-node-first-note"
+              value={firstNote}
+              onChange={(e) => setFirstNote(e.target.value)}
+              placeholder="A short note attached to this location. Leave empty to skip."
+              rows={2}
+              disabled={saving}
+            />
+          </div>
           <div className="modal-actions">
             <button
               type="button"

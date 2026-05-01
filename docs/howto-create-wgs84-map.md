@@ -27,9 +27,9 @@ floor plan, an empty whiteboard), see
 4. The app navigates you to the new map's detail page at
    `/tenants/{tid}/maps/{mid}`. The map opens centered on `lat=0, lng=0`
    at zoom level 3 (a wide view of the equator). Pan and zoom to your
-   region of interest before adding nodes.
+   region of interest before adding locations.
 
-That's it — the map is ready for nodes (places, lines, polygons), notes,
+That's it — the map is ready for locations (placeable points, lines, polygons), notes,
 plots, and visibility tagging.
 
 ## What the UI sends to the backend

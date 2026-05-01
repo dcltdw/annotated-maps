@@ -4,7 +4,7 @@ A **blank map** is a coordinate space with no backdrop image — just an
 empty canvas of a fixed extent. Coordinates are arbitrary `(x, y)` units
 within the extent. Use this for hand-drawn diagrams, conceptual
 relationship maps, brainstorming surfaces, or any case where you want
-the spatial layout but don't want a backdrop competing with the nodes.
+the spatial layout but don't want a backdrop competing with the locations.
 
 If you want a real-world geographic map, see
 [howto-create-wgs84-map.md](howto-create-wgs84-map.md). If you want a
@@ -50,7 +50,7 @@ curl -X POST "http://localhost:8080/api/v1/tenants/${TENANT_ID}/maps" \
 
 Response includes the map id; navigate to
 `/tenants/${TENANT_ID}/maps/${id}` to view. The frontend renders an empty
-canvas of the requested extent. Add nodes to populate it.
+canvas of the requested extent. Add locations to populate it.
 
 ## Coordinate-system fields reference
 
@@ -79,7 +79,7 @@ After creation:
 
 1. Navigate to `/tenants/${TENANT_ID}/maps/${id}` in the browser
 2. You should see an empty bordered canvas (no image, no tile layer)
-3. Add a node via the API or by clicking on the canvas (once #128's UI
+3. Add a location via the API or by clicking on the canvas (once #128's UI
    is wired). Confirm it renders at the expected position
 4. Pan around — the visible area should clamp to the extent's bounds; you
    shouldn't be able to scroll into "negative space"
