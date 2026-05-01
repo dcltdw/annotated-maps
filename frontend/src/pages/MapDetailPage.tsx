@@ -82,7 +82,7 @@ export function MapDetailPage() {
         <h1>{activeMap.title}</h1>
         <div className="header-actions">
           {isOwner && (
-            <label className="owner-xray-toggle" title="Owner X-ray lets the map owner see every node regardless of visibility tagging.">
+            <label className="owner-xray-toggle" title="Owner X-ray lets the map owner see every location regardless of visibility tagging.">
               <input
                 type="checkbox"
                 checked={activeMap.ownerXray}
@@ -102,6 +102,7 @@ export function MapDetailPage() {
       <div className="map-detail-layout">
         <NodeTreePanel
           mapId={activeMap.id}
+          coordinateSystem={activeMap.coordinateSystem}
           selectedNodeId={selectedNodeId}
           onSelectNode={setSelectedNodeId}
           onPanToNode={(coords) => setPanTarget(coords)}

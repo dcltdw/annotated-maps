@@ -48,6 +48,9 @@ export function VisibilityEditor({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Display name for the kind. Code calls this "node" but UI says
+  // "location" (#150 design discussion — "node" is graph-theory jargon).
+  const displayKind = kind === 'node' ? 'location' : kind;
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -128,13 +131,13 @@ export function VisibilityEditor({
           onChange={(e) => setOverride(e.target.checked)}
           disabled={saving}
         />
-        Override (explicit visibility for this {kind})
+        Override (explicit visibility for this {displayKind})
       </label>
 
       {!override && (
         <p className="visibility-editor-help">
           Inheriting visibility from the parent chain. Toggle override to
-          set an explicit set of visibility groups for this {kind}.
+          set an explicit set of visibility groups for this {displayKind}.
         </p>
       )}
 
