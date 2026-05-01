@@ -369,6 +369,24 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   gap: .5rem;
 }
 .node-tree-header h3 { margin: 0; font-size: .9rem; font-weight: 600; }
+
+/* CreateNodeModal coordinate-pair fieldset (#150). Two number inputs
+   side by side under a shared "Location" legend with a hint underneath. */
+.form-coord-pair {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: .5rem .75rem;
+  margin: 0;
+}
+.form-coord-pair legend { font-size: .85rem; font-weight: 500; padding: 0 .25rem; }
+.form-coord-hint {
+  display: block;
+  font-size: .75rem;
+  color: var(--color-text-muted, #666);
+  margin-bottom: .5rem;
+}
+.form-coord-inputs { display: flex; gap: .5rem; }
+.form-coord-inputs .form-group { flex: 1; }
 .node-tree-state {
   padding: .75rem;
   font-size: .85rem;

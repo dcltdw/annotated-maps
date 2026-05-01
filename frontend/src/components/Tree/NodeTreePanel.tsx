@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { nodesService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
-import type { NodeRecord, GeoJsonGeometry, CreateNodeRequest } from '@/types';
+import type {
+  NodeRecord,
+  GeoJsonGeometry,
+  CreateNodeRequest,
+  CoordinateSystem,
+} from '@/types';
 
 // NodeTreePanel — Phase 2g.d (#93). Replaces the deleted flat NotesPanel
 // from before the rebuild with the tree-of-nodes UI.
@@ -15,6 +20,7 @@ import type { NodeRecord, GeoJsonGeometry, CreateNodeRequest } from '@/types';
 
 interface NodeTreePanelProps {
   mapId: number;
+  coordinateSystem: CoordinateSystem;
   selectedNodeId: number | null;
   onSelectNode: (nodeId: number) => void;
   onPanToNode: (coords: [number, number]) => void;
@@ -22,6 +28,7 @@ interface NodeTreePanelProps {
 
 export function NodeTreePanel({
   mapId,
+  coordinateSystem,
   selectedNodeId,
   onSelectNode,
   onPanToNode,
@@ -91,11 +98,16 @@ export function NodeTreePanel({
       {showCreate && (
         <CreateNodeModal
           mapId={mapId}
+          coordinateSystem={coordinateSystem}
           onClose={() => setShowCreate(false)}
-          onCreated={(newId) => {
+          onCreated={(newId, panCoords) => {
             setShowCreate(false);
             setRefreshKey((k) => k + 1);
             onSelectNode(newId);
+            // If the user supplied coordinates, also pan the map to the
+            // new node so the marker is visible immediately. Mirrors what
+            // happens when the user clicks an existing node row.
+            if (panCoords) onPanToNode(panCoords);
           }}
         />
       )}
@@ -287,15 +299,30 @@ function derivePanCoords(g: GeoJsonGeometry): [number, number] | null {
 
 interface CreateNodeModalProps {
   mapId: number;
+  coordinateSystem: CoordinateSystem;
   onClose: () => void;
-  onCreated: (newNodeId: number) => void;
+  // panCoords (Leaflet [lat,lng] for wgs84, [y,x] for pixel/blank per
+  // the existing onPanToNode contract) is supplied only when the user
+  // entered coordinates. Caller uses it to pan the map to the new
+  // marker; passes nothing for tree-only nodes.
+  onCreated: (newNodeId: number, panCoords?: [number, number]) => void;
 }
 
-function CreateNodeModal({ mapId, onClose, onCreated }: CreateNodeModalProps) {
+function CreateNodeModal({
+  mapId,
+  coordinateSystem,
+  onClose,
+  onCreated,
+}: CreateNodeModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [parentId, setParentId] = useState<string>('');
   const [color, setColor] = useState('');
+  // Coordinates are kept as raw strings so the user can leave them empty
+  // (= no geometry, tree-only node) without us interpreting "0" as "0,0".
+  // For wgs84 the pair is (lat, lng); for pixel/blank it's (x, y).
+  const [coord1, setCoord1] = useState('');
+  const [coord2, setCoord2] = useState('');
   const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -317,9 +344,25 @@ function CreateNodeModal({ mapId, onClose, onCreated }: CreateNodeModalProps) {
     return () => { cancelled = true; };
   }, [mapId]);
 
+  // Both inputs must be filled (or both empty). Half-filled = treat as
+  // tree-only and silently ignore — the validation message would clutter
+  // the form and the backend has no half-coordinate semantics anyway.
+  const c1Trim = coord1.trim();
+  const c2Trim = coord2.trim();
+  const bothCoordsProvided = c1Trim !== '' && c2Trim !== '';
+  const c1Num = bothCoordsProvided ? Number(c1Trim) : NaN;
+  const c2Num = bothCoordsProvided ? Number(c2Trim) : NaN;
+  const coordsValid = bothCoordsProvided
+    && Number.isFinite(c1Num) && Number.isFinite(c2Num);
+  const coordsInvalid = bothCoordsProvided && !coordsValid;
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    if (coordsInvalid) {
+      setError('Coordinates must be numeric, or leave both fields empty.');
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
@@ -327,14 +370,40 @@ function CreateNodeModal({ mapId, onClose, onCreated }: CreateNodeModalProps) {
       if (description.trim()) req.description = description.trim();
       if (parentId) req.parentId = Number(parentId);
       if (color.trim()) req.color = color.trim();
+
+      // GeoJSON coordinate ordering is type-dependent:
+      //   wgs84 → [lng, lat] (GeoJSON's standard horizontal-then-vertical)
+      //   pixel/blank → [x, y] (Leaflet CRS.Simple maps these directly)
+      // Both forms collapse to a Point geometry. The corresponding
+      // pan-coords for the existing onPanToNode contract are:
+      //   wgs84 → [lat, lng] (Leaflet's [lat, lng] tuple)
+      //   pixel/blank → [y, x] (Leaflet's coord swap on CRS.Simple)
+      let panCoords: [number, number] | undefined;
+      if (coordsValid) {
+        if (coordinateSystem.type === 'wgs84') {
+          // c1 = lat, c2 = lng
+          req.geoJson = { type: 'Point', coordinates: [c2Num, c1Num] };
+          panCoords = [c1Num, c2Num];
+        } else {
+          // c1 = x, c2 = y for both pixel and blank
+          req.geoJson = { type: 'Point', coordinates: [c1Num, c2Num] };
+          panCoords = [c2Num, c1Num];
+        }
+      }
+
       const created = await nodesService.createNode(mapId, req);
-      onCreated(created.id);
+      onCreated(created.id, panCoords);
     } catch (err) {
       setError(extractApiError(err, 'Failed to create node.'));
     } finally {
       setSaving(false);
     }
   };
+
+  // Coordinate-input labels and placeholders depend on the map's type.
+  const coordLabels = coordinateSystem.type === 'wgs84'
+    ? { c1: 'Latitude', c2: 'Longitude', c1ph: 'e.g. 42.0', c2ph: 'e.g. -74.4' }
+    : { c1: 'X', c2: 'Y', c1ph: '0', c2ph: '0' };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -389,6 +458,39 @@ function CreateNodeModal({ mapId, onClose, onCreated }: CreateNodeModalProps) {
               disabled={saving}
             />
           </div>
+          <fieldset className="form-coord-pair">
+            <legend>Location (optional)</legend>
+            <small className="form-coord-hint">
+              Fill both to place a marker on the map; leave both empty for
+              a tree-only node.
+            </small>
+            <div className="form-coord-inputs">
+              <div className="form-group">
+                <label htmlFor="new-node-coord1">{coordLabels.c1}</label>
+                <input
+                  id="new-node-coord1"
+                  type="number"
+                  step="any"
+                  value={coord1}
+                  onChange={(e) => setCoord1(e.target.value)}
+                  placeholder={coordLabels.c1ph}
+                  disabled={saving}
+                />
+              </div>
+              <div className="form-group">
+                <label htmlFor="new-node-coord2">{coordLabels.c2}</label>
+                <input
+                  id="new-node-coord2"
+                  type="number"
+                  step="any"
+                  value={coord2}
+                  onChange={(e) => setCoord2(e.target.value)}
+                  placeholder={coordLabels.c2ph}
+                  disabled={saving}
+                />
+              </div>
+            </div>
+          </fieldset>
           <div className="modal-actions">
             <button
               type="button"

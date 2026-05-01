@@ -102,6 +102,7 @@ export function MapDetailPage() {
       <div className="map-detail-layout">
         <NodeTreePanel
           mapId={activeMap.id}
+          coordinateSystem={activeMap.coordinateSystem}
           selectedNodeId={selectedNodeId}
           onSelectNode={setSelectedNodeId}
           onPanToNode={(coords) => setPanTarget(coords)}

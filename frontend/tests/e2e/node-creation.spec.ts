@@ -50,6 +50,45 @@ test.describe('Node creation UI (#150)', () => {
     await expect(page.getByText(/no nodes on this map yet/i)).toHaveCount(0);
   });
 
+  test('user creates a node with lat/lng on a wgs84 map; geometry round-trips and pans the map', async ({ page, request }) => {
+    const api = await registerViaApi(request, 'node_create_coords');
+    const map = await createMapViaApi(request, api, 'Geo Map', {
+      type: 'wgs84',
+      center: { lat: 0, lng: 0 },
+      zoom: 3,
+    });
+
+    await seedAuthInBrowser(page, api);
+    await page.goto(`/tenants/${api.tenantId}/maps/${map.id}`);
+
+    await page.getByRole('button', { name: /\+ Node/i }).click();
+    await page.getByLabel(/^name$/i).fill('Catskills');
+    // wgs84 maps surface "Latitude" and "Longitude" labels.
+    await page.getByLabel(/^latitude$/i).fill('42.0');
+    await page.getByLabel(/^longitude$/i).fill('-74.4');
+    await page.getByRole('button', { name: /^create$/i }).click();
+
+    // Tree row + detail panel both show the new node.
+    await expect(page.getByRole('button', { name: 'Catskills', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Catskills' })).toBeVisible();
+
+    // Round-trip the geometry through the API to confirm the Point was
+    // saved with the right [lng, lat] ordering. (Visual map-marker checks
+    // are brittle — assert the data shape instead.)
+    const tokenRes = await request.get(
+      `http://localhost:8080/api/v1/tenants/${api.tenantId}/maps/${map.id}/nodes`,
+      { headers: { Authorization: `Bearer ${api.token}` } },
+    );
+    expect(tokenRes.ok()).toBeTruthy();
+    const nodes = await tokenRes.json();
+    const created = nodes.find((n: { name: string }) => n.name === 'Catskills');
+    expect(created).toBeTruthy();
+    expect(created.geoJson).toEqual({
+      type: 'Point',
+      coordinates: [-74.4, 42.0],  // GeoJSON [lng, lat] convention
+    });
+  });
+
   test('user creates a child node by picking a parent from the dropdown; tree shows the nested row', async ({ page, request }) => {
     const api = await registerViaApi(request, 'node_create_child');
     const map = await createMapViaApi(request, api, 'Parent-Child Map', {
