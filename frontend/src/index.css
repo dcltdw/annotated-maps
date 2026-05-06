@@ -86,6 +86,50 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 .map-card h3 { font-size: 1rem; margin-bottom: .25rem; }
 .map-card p { font-size: .85rem; color: var(--color-text-muted); margin-bottom: .5rem; }
 .map-card-permission { font-size: .75rem; color: var(--color-text-muted); }
+/* Per-card actions menu (#160). Wrapper is positioned over the card's
+   top-right; the menu button + dropdown sit on top of the card body. */
+.map-card-wrapper { position: relative; }
+.map-card-menu-wrapper {
+  position: absolute;
+  top: .5rem;
+  right: .5rem;
+}
+.map-card-menu-wrapper:focus { outline: none; }
+.map-card-menu {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  width: 1.75rem;
+  height: 1.75rem;
+  font-size: .9rem;
+  cursor: pointer;
+  padding: 0;
+}
+.map-card-menu:hover { background: var(--color-bg); }
+.map-card-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-width: 7rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  margin-top: .25rem;
+}
+.map-card-menu-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: .35rem .65rem;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.map-card-menu-item:hover { background: var(--color-bg); }
+.map-card-menu-item-danger { color: var(--color-danger); }
 
 /* ─── Map Page ──────────────────────────────────────────────────────────────── */
 .map-page { display: flex; flex-direction: column; height: calc(100vh - var(--nav-height)); }
