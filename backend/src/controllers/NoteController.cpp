@@ -182,6 +182,11 @@ void NoteController::createNote(
     std::string title = (*body).get("title", "").asString();
     std::string text  = (*body)["text"].asString();
     std::string color = (*body).get("color", "").asString();
+    // Mirror updateNote's pinned handling (line 352–353). Default to FALSE
+    // when the field is absent. Bug #154: previously the create path
+    // dropped pinned entirely — column was missing from the INSERT, the
+    // response hardcoded false, and the row landed at the schema default.
+    bool pinned       = (*body).get("pinned", false).asBool();
 
     if (!checkMaxLen("title", title, MAX_TITLE_LEN, callback)) return;
     if (!checkMaxLen("text", text, MAX_TEXT_LEN, callback)) return;
@@ -199,7 +204,7 @@ void NoteController::createNote(
         "WHERE nd.id = ? AND nd.map_id = ? AND m.tenant_id = ? "
         "  AND (m.owner_id = ? OR mp.level IN ('view','comment','edit','moderate','admin') "
         "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, nodeId, userId, callerUsername, title, text, color]
+        [callback, mapId, nodeId, userId, callerUsername, title, text, color, pinned]
         (const drogon::orm::Result& r) {
             if (r.empty()) {
                 callback(errorResponse(drogon::k403Forbidden,
@@ -211,12 +216,12 @@ void NoteController::createNote(
             // via JOIN through nodes since notes carry node_id only.
             auto db2 = drogon::app().getDbClient();
             db2->execSqlAsync(
-                "INSERT INTO notes (node_id, created_by, title, text, color) "
-                "SELECT ?,?,?,?,NULLIF(?,'') FROM dual "
+                "INSERT INTO notes (node_id, created_by, title, text, color, pinned) "
+                "SELECT ?,?,?,?,NULLIF(?,''),? FROM dual "
                 "WHERE (SELECT COUNT(*) FROM notes n2 "
                 "       JOIN nodes nd2 ON nd2.id = n2.node_id "
                 "       WHERE nd2.map_id = ?) < 10000",
-                [callback, mapId, nodeId, userId, callerUsername, title, text, color]
+                [callback, mapId, nodeId, userId, callerUsername, title, text, color, pinned]
                 (const drogon::orm::Result& r2) {
                     if (r2.affectedRows() == 0) {
                         callback(errorResponse(drogon::k400BadRequest,
@@ -233,7 +238,7 @@ void NoteController::createNote(
                     db3->execSqlAsync(
                         "SELECT created_at, updated_at FROM notes WHERE id = ?",
                         [callback, newId, nodeId, mapId, userId, callerUsername,
-                         title, text, color]
+                         title, text, color, pinned]
                         (const drogon::orm::Result& rTs) {
                             Json::Value n;
                             n["id"]                  = newId;
@@ -243,7 +248,7 @@ void NoteController::createNote(
                             n["createdByUsername"]   = callerUsername;
                             n["title"]               = title;
                             n["text"]                = text;
-                            n["pinned"]              = false;
+                            n["pinned"]              = pinned;
                             n["color"]               = color.empty()
                                                          ? Json::Value()
                                                          : Json::Value(color);
@@ -267,7 +272,7 @@ void NoteController::createNote(
                     callback(errorResponse(drogon::k500InternalServerError,
                         "db_error", "Failed to create note"));
                 },
-                nodeId, userId, title, text, color, mapId);
+                nodeId, userId, title, text, color, pinned, mapId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
