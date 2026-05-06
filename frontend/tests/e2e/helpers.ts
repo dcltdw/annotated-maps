@@ -72,9 +72,20 @@ export async function registerViaApi(
   tag: string,
 ): Promise<ApiUser> {
   const u = makeUser(tag);
-  const res = await request.post(`${API_URL}/auth/register`, {
+  // /auth/register is rate-limited per-IP (no JWT yet to key on userId).
+  // In multi-worker CI all tests share one IP, so the suite can saturate
+  // the bucket near the tail. Defensive single-retry on 429 with a short
+  // backoff catches a one-off saturation without masking a real outage.
+  // Backend config (config.docker.json) is sized for 10× current suite
+  // load; this retry is belt-and-suspenders.
+  const post = () => request.post(`${API_URL}/auth/register`, {
     data: { username: u.username, email: u.email, password: u.password },
   });
+  let res = await post();
+  if (res.status() === 429) {
+    await new Promise((r) => setTimeout(r, 1500));
+    res = await post();
+  }
   expect(res.ok()).toBeTruthy();
   const body = await res.json();
   return { token: body.token, tenantId: body.tenantId, user: body.user };
