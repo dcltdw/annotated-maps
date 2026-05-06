@@ -106,6 +106,7 @@ export function MapDetailPage() {
           selectedNodeId={selectedNodeId}
           onSelectNode={setSelectedNodeId}
           onPanToNode={(coords) => setPanTarget(coords)}
+          onLocationDeleted={() => setSelectedNodeId(null)}
         />
         <MapView
           map={activeMap}

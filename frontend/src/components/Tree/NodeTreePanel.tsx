@@ -5,6 +5,7 @@ import type {
   NodeRecord,
   GeoJsonGeometry,
   CreateNodeRequest,
+  UpdateNodeRequest,
   CoordinateSystem,
 } from '@/types';
 
@@ -30,6 +31,12 @@ interface NodeTreePanelProps {
   selectedNodeId: number | null;
   onSelectNode: (nodeId: number) => void;
   onPanToNode: (coords: [number, number]) => void;
+  // Called when a location is deleted. The parent (MapDetailPage) uses
+  // this to clear its `selectedNodeId` if the deleted location was
+  // the selected one — the detail panel needs to fall back to its
+  // empty state instead of trying to render a node that no longer
+  // exists.
+  onLocationDeleted?: (nodeId: number) => void;
 }
 
 export function NodeTreePanel({
@@ -38,17 +45,21 @@ export function NodeTreePanel({
   selectedNodeId,
   onSelectNode,
   onPanToNode,
+  onLocationDeleted,
 }: NodeTreePanelProps) {
   const [rootNodes, setRootNodes] = useState<NodeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // refreshKey is bumped after a successful node create. Both the root
-  // listing here and each NodeTreeRow's children listing watch it; a
-  // bump triggers a re-fetch of root nodes and (if the row is expanded)
-  // the row's children. Collapsed rows just clear their cached children
-  // so the next expand fetches fresh.
+  // refreshKey is bumped after a successful create / edit / delete.
+  // Both the root listing here and each NodeTreeRow's children listing
+  // watch it; a bump triggers a re-fetch of root nodes and (if the row
+  // is expanded) the row's children. Collapsed rows just clear their
+  // cached children so the next expand fetches fresh.
   const [refreshKey, setRefreshKey] = useState(0);
   const [showCreate, setShowCreate] = useState(false);
+  // Edit-modal state (#158): when non-null, the modal renders in edit
+  // mode pre-populated with this node's fields.
+  const [editingNode, setEditingNode] = useState<NodeRecord | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -98,21 +109,37 @@ export function NodeTreePanel({
             onSelect={onSelectNode}
             onPan={onPanToNode}
             refreshKey={refreshKey}
+            onEdit={setEditingNode}
+            onDelete={async (n) => {
+              if (!window.confirm(`Delete location "${n.name}"?`)) return;
+              try {
+                await nodesService.deleteNode(mapId, n.id);
+                setRefreshKey((k) => k + 1);
+                if (selectedNodeId === n.id && onLocationDeleted) {
+                  onLocationDeleted(n.id);
+                }
+              } catch (e) {
+                window.alert(extractApiError(e, 'Failed to delete location.'));
+              }
+            }}
           />
         ))}
       </div>
-      {showCreate && (
-        <CreateNodeModal
+      {(showCreate || editingNode) && (
+        <LocationFormModal
+          mode={editingNode ? 'edit' : 'create'}
           mapId={mapId}
           coordinateSystem={coordinateSystem}
-          onClose={() => setShowCreate(false)}
-          onCreated={(newId, panCoords) => {
+          existingNode={editingNode ?? undefined}
+          onClose={() => {
             setShowCreate(false);
+            setEditingNode(null);
+          }}
+          onSaved={(savedId, panCoords) => {
+            setShowCreate(false);
+            setEditingNode(null);
             setRefreshKey((k) => k + 1);
-            onSelectNode(newId);
-            // If the user supplied coordinates, also pan the map to the
-            // new node so the marker is visible immediately. Mirrors what
-            // happens when the user clicks an existing node row.
+            onSelectNode(savedId);
             if (panCoords) onPanToNode(panCoords);
           }}
         />
@@ -131,6 +158,8 @@ interface NodeTreeRowProps {
   onSelect: (nodeId: number) => void;
   onPan: (coords: [number, number]) => void;
   refreshKey: number;
+  onEdit: (node: NodeRecord) => void;
+  onDelete: (node: NodeRecord) => void;
 }
 
 function NodeTreeRow({
@@ -141,7 +170,12 @@ function NodeTreeRow({
   onSelect,
   onPan,
   refreshKey,
+  onEdit,
+  onDelete,
 }: NodeTreeRowProps) {
+  // Per-row dropdown state (#158). Toggled by the ⋯ button; closed
+  // automatically on Edit/Delete dispatch and on click-outside.
+  const [menuOpen, setMenuOpen] = useState(false);
   // `children === null` means we haven't fetched yet; `[]` means we have
   // and there are none. The toggle is shown until we know for certain
   // the node is a leaf (then it's a placeholder for layout consistency).
@@ -241,17 +275,61 @@ function NodeTreeRow({
         >
           {node.name}
         </button>
-        {/* Move/copy menu placeholder — wired up when the move/copy frontend
-            ticket lands; backend support is in #90 / #100. */}
-        <button
-          type="button"
-          className="node-tree-menu"
-          title="Move/copy (coming soon)"
-          disabled
-          aria-label="Location actions"
+        {/* Per-row actions menu (#158): Edit + Delete. Move/copy still
+            future per #90 / #100. The menu is intentionally simple — a
+            controlled dropdown closed on click-outside via the wrapper's
+            onBlur (the menu div is focusable so blur fires when focus
+            leaves the dropdown subtree). */}
+        <div
+          className="node-tree-menu-wrapper"
+          tabIndex={-1}
+          onBlur={(e) => {
+            // Only close if focus is leaving the subtree entirely.
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+              setMenuOpen(false);
+            }
+          }}
         >
-          ⋯
-        </button>
+          <button
+            type="button"
+            className="node-tree-menu"
+            aria-label="Location actions"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((m) => !m);
+            }}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <div className="node-tree-menu-dropdown" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                className="node-tree-menu-item"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onEdit(node);
+                }}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="node-tree-menu-item node-tree-menu-item-danger"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete(node);
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
       </div>
       {childrenError && <div className="alert alert-error">{childrenError}</div>}
       {expanded && children && children.length > 0 && (
@@ -266,6 +344,8 @@ function NodeTreeRow({
               onSelect={onSelect}
               onPan={onPan}
               refreshKey={refreshKey}
+              onEdit={onEdit}
+              onDelete={onDelete}
             />
           ))}
         </div>
@@ -295,44 +375,61 @@ function derivePanCoords(g: GeoJsonGeometry): [number, number] | null {
   return null;
 }
 
-// ─── Create-node modal (#150) ────────────────────────────────────────────────
-// Minimum-viable node creator: name (required), description, parent
-// (optional; flat list of all nodes on this map), color. Geometry creation
-// is deliberately deferred — nodes can be created without geometry, and a
-// future "draw toolbar" ticket can add point/line/polygon placement from
-// the map view. This unblocks the basic UX of "create a fresh map → put
-// some places on it" entirely from the UI.
+// ─── Location form modal (#150 + #158) ──────────────────────────────────────
+// Single component for both create and edit. Mode-specific behavior:
+//
+//   create (#150):
+//     - blank fields, optional coordinates inputs (constructs a Point
+//       geometry with type-specific axis ordering), optional first-note
+//       textarea (creates the note as part of the same submit if filled)
+//     - POST /maps/{mid}/nodes
+//
+//   edit (#158):
+//     - fields pre-populated from the existing node
+//     - coordinate inputs hidden (edit-geometry deferred to the
+//       click-on-map / draw-toolbar ticket #153 — modal-based geometry
+//       editing would duplicate the pattern coming there)
+//     - first-note textarea hidden (only relevant for fresh locations;
+//       the detail panel's Notes section handles further note CRUD)
+//     - parent picker omits the location being edited (and its
+//       descendants — a node can't become its own ancestor)
+//     - PUT /maps/{mid}/nodes/{nid} with only changed fields
+//
+// Both modes share the field layout, the parent picker fetch, and the
+// modal scaffolding.
 
-interface CreateNodeModalProps {
+interface LocationFormModalProps {
+  mode: 'create' | 'edit';
   mapId: number;
   coordinateSystem: CoordinateSystem;
+  /** Required when mode === 'edit'; ignored when mode === 'create'. */
+  existingNode?: NodeRecord;
   onClose: () => void;
-  // panCoords (Leaflet [lat,lng] for wgs84, [y,x] for pixel/blank per
-  // the existing onPanToNode contract) is supplied only when the user
-  // entered coordinates. Caller uses it to pan the map to the new
-  // marker; passes nothing for tree-only nodes.
-  onCreated: (newNodeId: number, panCoords?: [number, number]) => void;
+  // panCoords is supplied only on create when the user entered fresh
+  // coordinates. Caller uses it to pan the map. On edit, no pan happens
+  // here — geometry is preserved as-is.
+  onSaved: (savedNodeId: number, panCoords?: [number, number]) => void;
 }
 
-function CreateNodeModal({
+function LocationFormModal({
+  mode,
   mapId,
   coordinateSystem,
+  existingNode,
   onClose,
-  onCreated,
-}: CreateNodeModalProps) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [parentId, setParentId] = useState<string>('');
-  const [color, setColor] = useState('');
-  // Coordinates are kept as raw strings so the user can leave them empty
-  // (= no geometry, tree-only location) without us interpreting "0" as
-  // "0,0". For wgs84 the pair is (lat, lng); for pixel/blank it's (x, y).
+  onSaved,
+}: LocationFormModalProps) {
+  const [name, setName] = useState(existingNode?.name ?? '');
+  const [description, setDescription] = useState(existingNode?.description ?? '');
+  const [parentId, setParentId] = useState<string>(
+    existingNode?.parentId != null ? String(existingNode.parentId) : '',
+  );
+  const [color, setColor] = useState(existingNode?.color ?? '');
+  // Coordinates only apply on create — see scope note in the component
+  // header. On edit they're hidden + unused.
   const [coord1, setCoord1] = useState('');
   const [coord2, setCoord2] = useState('');
-  // Optional first note (option B from the #150 design discussion). If
-  // the user fills this in, after the location is created we post a
-  // note to it as part of the same modal close. Common case ("annotate
-  // this place with one paragraph") becomes one form, one click.
+  // First note only applies on create — see scope note.
   const [firstNote, setFirstNote] = useState('');
   const [allNodes, setAllNodes] = useState<NodeRecord[]>([]);
   const [loadingNodes, setLoadingNodes] = useState(true);
@@ -370,13 +467,45 @@ function CreateNodeModal({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    if (coordsInvalid) {
+    if (mode === 'create' && coordsInvalid) {
       setError('Coordinates must be numeric, or leave both fields empty.');
       return;
     }
     setSaving(true);
     setError(null);
     try {
+      if (mode === 'edit' && existingNode) {
+        // Build a partial update: only include fields that actually
+        // changed, so we don't accidentally overwrite something the
+        // backend handled differently (e.g. a parent picker change vs
+        // an unchanged blank parent).
+        const req: UpdateNodeRequest = {};
+        if (name.trim() !== existingNode.name) req.name = name.trim();
+        if (description.trim() !== (existingNode.description ?? '')) {
+          req.description = description.trim();
+        }
+        if (color.trim() !== (existingNode.color ?? '')) {
+          req.color = color.trim();
+        }
+        // parentId in the form is a string; backend expects number or
+        // null. Empty string in the form means "Top level" (parentId
+        // = null) — but the schema's UpdateNodeRequest doesn't carry
+        // parentId (re-parenting is a separate move endpoint, #90),
+        // so we can't actually change parent via this path. Keep the
+        // dropdown for symmetry with create, but skip in the diff —
+        // a future ticket can wire move/copy through this same UI.
+
+        if (Object.keys(req).length === 0) {
+          // Nothing changed — close without making a network call.
+          onSaved(existingNode.id);
+          return;
+        }
+        await nodesService.updateNode(mapId, existingNode.id, req);
+        onSaved(existingNode.id);
+        return;
+      }
+
+      // mode === 'create' below.
       const req: CreateNodeRequest = { name: name.trim() };
       if (description.trim()) req.description = description.trim();
       if (parentId) req.parentId = Number(parentId);
@@ -422,9 +551,9 @@ function CreateNodeModal({
         }
       }
 
-      onCreated(created.id, panCoords);
+      onSaved(created.id, panCoords);
     } catch (err) {
-      setError(extractApiError(err, 'Failed to create location.'));
+      setError(extractApiError(err, mode === 'edit' ? 'Failed to save location.' : 'Failed to create location.'));
     } finally {
       setSaving(false);
     }
@@ -435,16 +564,27 @@ function CreateNodeModal({
     ? { c1: 'Latitude', c2: 'Longitude', c1ph: 'e.g. 42.0', c2ph: 'e.g. -74.4' }
     : { c1: 'X', c2: 'Y', c1ph: '0', c2ph: '0' };
 
+  // On edit, exclude the node being edited from the parent picker —
+  // a node can't become its own ancestor. Excluding direct descendants
+  // would also be ideal, but requires a tree walk and the backend
+  // would catch the cycle anyway. v1 covers the common case.
+  const parentOptions = mode === 'edit' && existingNode
+    ? allNodes.filter((n) => n.id !== existingNode.id)
+    : allNodes;
+
+  const isEdit = mode === 'edit';
+  const idPrefix = isEdit ? 'edit-node' : 'new-node';
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <h2>New Location</h2>
+        <h2>{isEdit ? 'Edit Location' : 'New Location'}</h2>
         <form onSubmit={handleSubmit} className="auth-form">
           {error && <div className="alert alert-error">{error}</div>}
           <div className="form-group">
-            <label htmlFor="new-node-name">Name</label>
+            <label htmlFor={`${idPrefix}-name`}>Name</label>
             <input
-              id="new-node-name"
+              id={`${idPrefix}-name`}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -454,9 +594,9 @@ function CreateNodeModal({
             />
           </div>
           <div className="form-group">
-            <label htmlFor="new-node-description">Description</label>
+            <label htmlFor={`${idPrefix}-description`}>Description</label>
             <textarea
-              id="new-node-description"
+              id={`${idPrefix}-description`}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional"
@@ -465,73 +605,79 @@ function CreateNodeModal({
             />
           </div>
           <div className="form-group">
-            <label htmlFor="new-node-parent">Parent (optional)</label>
+            <label htmlFor={`${idPrefix}-parent`}>
+              Parent {isEdit ? '(read-only — re-parent via move, future ticket)' : '(optional)'}
+            </label>
             <select
-              id="new-node-parent"
+              id={`${idPrefix}-parent`}
               value={parentId}
               onChange={(e) => setParentId(e.target.value)}
-              disabled={saving || loadingNodes}
+              disabled={saving || loadingNodes || isEdit}
             >
               <option value="">— Top level —</option>
-              {allNodes.map((n) => (
+              {parentOptions.map((n) => (
                 <option key={n.id} value={String(n.id)}>{n.name}</option>
               ))}
             </select>
           </div>
           <div className="form-group">
-            <label htmlFor="new-node-color">Color (optional)</label>
+            <label htmlFor={`${idPrefix}-color`}>Color (optional)</label>
             <input
-              id="new-node-color"
+              id={`${idPrefix}-color`}
               value={color}
               onChange={(e) => setColor(e.target.value)}
               placeholder="#cc0000 or red"
               disabled={saving}
             />
           </div>
-          <fieldset className="form-coord-pair">
-            <legend>Location (optional)</legend>
-            <small className="form-coord-hint">
-              Fill both to place a marker on the map; leave both empty for
-              a tree-only node.
-            </small>
-            <div className="form-coord-inputs">
-              <div className="form-group">
-                <label htmlFor="new-node-coord1">{coordLabels.c1}</label>
-                <input
-                  id="new-node-coord1"
-                  type="number"
-                  step="any"
-                  value={coord1}
-                  onChange={(e) => setCoord1(e.target.value)}
-                  placeholder={coordLabels.c1ph}
-                  disabled={saving}
-                />
+          {!isEdit && (
+            <fieldset className="form-coord-pair">
+              <legend>Location (optional)</legend>
+              <small className="form-coord-hint">
+                Fill both to place a marker on the map; leave both empty for
+                a tree-only node.
+              </small>
+              <div className="form-coord-inputs">
+                <div className="form-group">
+                  <label htmlFor={`${idPrefix}-coord1`}>{coordLabels.c1}</label>
+                  <input
+                    id={`${idPrefix}-coord1`}
+                    type="number"
+                    step="any"
+                    value={coord1}
+                    onChange={(e) => setCoord1(e.target.value)}
+                    placeholder={coordLabels.c1ph}
+                    disabled={saving}
+                  />
+                </div>
+                <div className="form-group">
+                  <label htmlFor={`${idPrefix}-coord2`}>{coordLabels.c2}</label>
+                  <input
+                    id={`${idPrefix}-coord2`}
+                    type="number"
+                    step="any"
+                    value={coord2}
+                    onChange={(e) => setCoord2(e.target.value)}
+                    placeholder={coordLabels.c2ph}
+                    disabled={saving}
+                  />
+                </div>
               </div>
-              <div className="form-group">
-                <label htmlFor="new-node-coord2">{coordLabels.c2}</label>
-                <input
-                  id="new-node-coord2"
-                  type="number"
-                  step="any"
-                  value={coord2}
-                  onChange={(e) => setCoord2(e.target.value)}
-                  placeholder={coordLabels.c2ph}
-                  disabled={saving}
-                />
-              </div>
+            </fieldset>
+          )}
+          {!isEdit && (
+            <div className="form-group">
+              <label htmlFor={`${idPrefix}-first-note`}>First note (optional)</label>
+              <textarea
+                id={`${idPrefix}-first-note`}
+                value={firstNote}
+                onChange={(e) => setFirstNote(e.target.value)}
+                placeholder="A short note attached to this location. Leave empty to skip."
+                rows={2}
+                disabled={saving}
+              />
             </div>
-          </fieldset>
-          <div className="form-group">
-            <label htmlFor="new-node-first-note">First note (optional)</label>
-            <textarea
-              id="new-node-first-note"
-              value={firstNote}
-              onChange={(e) => setFirstNote(e.target.value)}
-              placeholder="A short note attached to this location. Leave empty to skip."
-              rows={2}
-              disabled={saving}
-            />
-          </div>
+          )}
           <div className="modal-actions">
             <button
               type="button"
@@ -546,7 +692,7 @@ function CreateNodeModal({
               className="btn btn-primary"
               disabled={saving || !name.trim()}
             >
-              {saving ? 'Creating…' : 'Create'}
+              {saving ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save' : 'Create')}
             </button>
           </div>
         </form>

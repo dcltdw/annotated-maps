@@ -370,6 +370,36 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 }
 .node-tree-header h3 { margin: 0; font-size: .9rem; font-weight: 600; }
 
+/* Per-row actions menu (#158): the ⋯ button + popover with Edit + Delete. */
+.node-tree-menu-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.node-tree-menu-wrapper:focus { outline: none; }
+.node-tree-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  min-width: 7rem;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+.node-tree-menu-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: .35rem .65rem;
+  font-size: .85rem;
+  cursor: pointer;
+}
+.node-tree-menu-item:hover { background: var(--color-bg); }
+.node-tree-menu-item-danger { color: var(--color-danger); }
+
 /* CreateNodeModal coordinate-pair fieldset (#150). Two number inputs
    side by side under a shared "Location" legend with a hint underneath. */
 .form-coord-pair {
