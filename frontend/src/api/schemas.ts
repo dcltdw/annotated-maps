@@ -241,6 +241,24 @@ export type NodeMediaRecord = z.infer<typeof NodeMediaRecordSchema>;
 export const NodeMediaListSchema = z.array(NodeMediaRecordSchema);
 export type NodeMediaList = z.infer<typeof NodeMediaListSchema>;
 
+// ─── Note media ──────────────────────────────────────────────────────────────
+// Image / link attachments specifically on notes (parallel to node media,
+// stored in a separate `note_media` table on the backend). Same shape as
+// NodeMediaRecord but parented by noteId.
+
+export const NoteMediaRecordSchema = z.object({
+  id: z.number().int(),
+  noteId: z.number().int(),
+  mediaType: NodeMediaTypeSchema,  // shared enum: 'image' | 'link'
+  url: z.string().url(),
+  caption: z.string(),
+  createdAt: z.string(),
+});
+export type NoteMediaRecord = z.infer<typeof NoteMediaRecordSchema>;
+
+export const NoteMediaListSchema = z.array(NoteMediaRecordSchema);
+export type NoteMediaList = z.infer<typeof NoteMediaListSchema>;
+
 // ─── Plots (#88 / #95) ───────────────────────────────────────────────────────
 // Tenant-scoped narrative groupings. Plots are many-to-many to both nodes
 // and notes via parallel junction tables; the read endpoint returns the two
@@ -328,3 +346,16 @@ export type CreatePlotRequest = {
 };
 
 export type UpdatePlotRequest = Partial<CreatePlotRequest>;
+
+// Media (#166): same request shape for node-media and note-media
+// (mediaType + url required at create; only caption editable on update —
+// URL changes go through delete-and-recreate per backend semantics).
+export type CreateMediaRequest = {
+  mediaType: NodeMediaType;
+  url: string;
+  caption?: string;
+};
+
+export type UpdateMediaRequest = {
+  caption: string;
+};
