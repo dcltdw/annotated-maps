@@ -41,7 +41,7 @@
       "max_size_bytes": 10485760
     },
     "rate_limit": {
-      "max_requests": 1000,
+      "max_requests": 100,
       "window_seconds": 60
     },
     "allowed_origins": ["http://localhost:5173"],

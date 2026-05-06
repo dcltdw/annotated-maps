@@ -74,16 +74,23 @@ export async function registerViaApi(
   const u = makeUser(tag);
   // /auth/register is rate-limited per-IP (no JWT yet to key on userId).
   // In multi-worker CI all tests share one IP, so the suite can saturate
-  // the bucket near the tail. Defensive single-retry on 429 with a short
-  // backoff catches a one-off saturation without masking a real outage.
-  // Backend config (config.docker.json) is sized for 10× current suite
-  // load; this retry is belt-and-suspenders.
+  // the bucket near the tail — and the backend's own rate-limit test
+  // (test_06_rate_limit_fast.py) explicitly fills the bucket as part of
+  // verifying the limiter, leaving E2E to start with a saturated bucket.
+  //
+  // Backoff schedule: [2, 5, 10] seconds. With a 60s window and a 100-
+  // request limit, an entry expires every ~600ms. After 17s of total
+  // backoff (worst case), ~28 entries have aged out — comfortably enough
+  // for E2E's burst rate. Real outages still surface on the final 429
+  // via the existing toBeTruthy assertion.
+  const BACKOFFS_MS = [2000, 5000, 10000];
   const post = () => request.post(`${API_URL}/auth/register`, {
     data: { username: u.username, email: u.email, password: u.password },
   });
   let res = await post();
-  if (res.status() === 429) {
-    await new Promise((r) => setTimeout(r, 1500));
+  for (const delay of BACKOFFS_MS) {
+    if (res.status() !== 429) break;
+    await new Promise((r) => setTimeout(r, delay));
     res = await post();
   }
   expect(res.ok()).toBeTruthy();
