@@ -47,22 +47,26 @@ frontend/
 ├── playwright.config.ts        # config
 ├── tests/
 │   └── e2e/
-│       ├── helpers.ts          # shared utilities (e.g. makeUser())
-│       ├── smoke.spec.ts       # minimal: login page renders
-│       ├── auth.spec.ts        # registration / login / logout (#34)
-│       ├── maps.spec.ts        # map CRUD (#35 + #70)
-│       ├── annotations.spec.ts # annotation CRUD + move, 3 geometries (#36)
-│       ├── notes.spec.ts       # note CRUD + move + note groups (#37)
-│       ├── cross-tenant.spec.ts # tenant isolation across two users (#38)
-│       ├── visibility.spec.ts # override icon, owner_xray, cross-user filter (#106)
-│       ├── plots.spec.ts      # plot CRUD, cross-map nav, visibility filtering (#95)
-│       ├── plots-in-detail-panel.spec.ts  # node/note "Plots" section attach round-trip (#139)
-│       └── *.spec.ts           # one file per feature area
+│       ├── helpers.ts                        # shared fixtures (makeUser, registerViaApi, seedAuthInBrowser, mysqlQuery)
+│       ├── smoke.spec.ts                     # stack-wiring smoke check
+│       ├── auth.spec.ts                      # registration / login / logout (#34)
+│       ├── maps.spec.ts                      # map CRUD via UI (#35, #102)
+│       ├── map-edit-delete.spec.ts           # map title/description edit + delete (#160)
+│       ├── coordinate-systems.spec.ts        # pixel + blank renderers (#128)
+│       ├── tree.spec.ts                      # tree panel + node detail (#104)
+│       ├── node-creation.spec.ts             # node creation in NodeTreePanel (#150)
+│       ├── node-edit-delete.spec.ts          # node edit + delete UI (#158)
+│       ├── plots.spec.ts                     # plot CRUD, cross-map nav, visibility (#95)
+│       ├── plots-in-detail-panel.spec.ts     # node/note "Plots" attach round-trip (#139)
+│       ├── media-management.spec.ts          # node/note media management UI (#166)
+│       ├── visibility.spec.ts                # override icon, owner_xray, cross-user filter (#106)
+│       ├── visibility-groups.spec.ts         # visibility-group CRUD + member management (#137)
+│       └── cross-tenant.spec.ts              # tenant isolation across two users (#38)
 └── ...
 ```
 
-Per-area suites are now complete for v0.1: auth (#34), maps (#35 + edit/delete
-from #70), annotations (#36), notes (#37), cross-tenant (#38).
+Each spec is self-contained: tests register fresh users via the API
+helper and exercise UI flows; nothing is shared between specs.
 
 ## Configuration
 

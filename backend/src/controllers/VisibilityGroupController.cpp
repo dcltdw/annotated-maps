@@ -122,19 +122,32 @@ void VisibilityGroupController::createGroup(
                 "INSERT INTO visibility_groups "
                 "  (tenant_id, name, description, manages_visibility, created_by) "
                 "VALUES (?, ?, NULLIF(?, ''), ?, ?)",
-                [callback, tenantId, userId, name, description, managesVisibility]
-                (const drogon::orm::Result& r) {
+                [callback, tenantId](const drogon::orm::Result& r) {
+                    // Re-SELECT to return the canonical row (including
+                    // created_at / updated_at) so the response shape matches
+                    // GET /visibility-groups/{id} — the frontend Zod schema
+                    // requires both timestamps.
                     int newId = static_cast<int>(r.insertId());
-                    Json::Value g;
-                    g["id"]                 = newId;
-                    g["tenantId"]           = tenantId;
-                    g["name"]               = name;
-                    g["description"]        = description;
-                    g["managesVisibility"]  = managesVisibility;
-                    g["createdBy"]          = userId;
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(g);
-                    resp->setStatusCode(drogon::k201Created);
-                    callback(resp);
+                    auto db = drogon::app().getDbClient();
+                    db->execSqlAsync(
+                        "SELECT id, tenant_id, name, description, manages_visibility, "
+                        "       created_by, created_at, updated_at "
+                        "FROM visibility_groups WHERE id = ? AND tenant_id = ?",
+                        [callback](const drogon::orm::Result& sel) {
+                            if (sel.empty()) {
+                                callback(errorResponse(drogon::k500InternalServerError,
+                                    "db_error", "Failed to fetch created group"));
+                                return;
+                            }
+                            auto resp = drogon::HttpResponse::newHttpJsonResponse(rowToGroup(sel[0]));
+                            resp->setStatusCode(drogon::k201Created);
+                            callback(resp);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to fetch created group"));
+                        },
+                        newId, tenantId);
                 },
                 [callback](const drogon::orm::DrogonDbException& ex) {
                     if (std::string(ex.base().what()).find("Duplicate") != std::string::npos) {
@@ -223,16 +236,33 @@ void VisibilityGroupController::updateGroup(
                 "  description        = IF(?='', description, ?), "
                 "  manages_visibility = IF(?, ?, manages_visibility) "
                 "WHERE id = ? AND tenant_id = ?",
-                [callback, id](const drogon::orm::Result& r) {
+                [callback, tenantId, id](const drogon::orm::Result& r) {
                     if (r.affectedRows() == 0) {
                         callback(errorResponse(drogon::k404NotFound,
                             "not_found", "Visibility group not found"));
                         return;
                     }
-                    Json::Value v;
-                    v["id"]      = id;
-                    v["updated"] = true;
-                    callback(drogon::HttpResponse::newHttpJsonResponse(v));
+                    // Re-SELECT so the response carries the canonical row
+                    // (including the bumped updated_at) — matches the
+                    // VisibilityGroup shape the frontend Zod schema expects.
+                    auto db = drogon::app().getDbClient();
+                    db->execSqlAsync(
+                        "SELECT id, tenant_id, name, description, manages_visibility, "
+                        "       created_by, created_at, updated_at "
+                        "FROM visibility_groups WHERE id = ? AND tenant_id = ?",
+                        [callback](const drogon::orm::Result& sel) {
+                            if (sel.empty()) {
+                                callback(errorResponse(drogon::k404NotFound,
+                                    "not_found", "Visibility group not found"));
+                                return;
+                            }
+                            callback(drogon::HttpResponse::newHttpJsonResponse(rowToGroup(sel[0])));
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to fetch updated group"));
+                        },
+                        id, tenantId);
                 },
                 [callback](const drogon::orm::DrogonDbException& ex) {
                     if (std::string(ex.base().what()).find("Duplicate") != std::string::npos) {

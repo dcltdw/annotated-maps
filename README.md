@@ -1,16 +1,21 @@
 # Annotated Maps
 
-A multi-tenant, collaborative map annotation platform. Users create maps, draw markers, lines, and polygons, attach notes and media, and manage access with fine-grained per-user permissions. Supports organizational deployments with departmental SSO.
+A multi-tenant, collaborative map annotation platform. Users create
+maps, mark places as a tree of *nodes*, attach *notes* and media,
+group nodes and notes into narrative *plots* across maps, and control
+who sees what via *visibility groups* and per-map permissions.
+Supports organizational deployments with departmental SSO.
 
 ## Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Frontend | React 18 + TypeScript, Vite, Leaflet + Leaflet.draw, Zustand, PWA |
+| Frontend | React 18 + TypeScript, Vite, Leaflet, Zustand, Zod, PWA |
 | Backend | C++20, Drogon framework (v1.9.3), jwt-cpp (v0.7.0), libsodium (Argon2id) |
 | Database | MySQL 8 (MariaDB connector for async I/O) |
 | Dev Environment | Docker Compose (Ubuntu 22.04 containers) |
-| Testing | Python 3 (stdlib only) |
+| Backend tests | Python 3 (stdlib only) |
+| E2E tests | Playwright (Chromium) |
 
 ## Project Structure
 
@@ -18,51 +23,53 @@ A multi-tenant, collaborative map annotation platform. Users create maps, draw m
 annotated-maps/
 ├── frontend/              # React PWA
 │   ├── src/
-│   │   ├── components/    Map, Auth, Layout components
-│   │   ├── hooks/         useAuth, useMap, useBranding
-│   │   ├── pages/         MapListPage, MapDetailPage, SsoCallbackPage
-│   │   ├── services/      REST API clients
+│   │   ├── api/           Zod schemas + axios client
+│   │   ├── components/    Map, Tree, Detail, Visibility, Auth, Layout
+│   │   ├── hooks/
+│   │   ├── pages/         MapListPage, MapDetailPage, PlotsPage,
+│   │   │                  VisibilityGroupsPage, SsoCallbackPage
+│   │   ├── services/      REST API clients (auth, maps + nested resources)
 │   │   ├── store/         Zustand stores (auth, map)
-│   │   └── types/         Shared TypeScript types
+│   │   ├── types/         Hand-written types not yet covered by Zod
+│   │   └── utils/         errors.ts and other shared helpers
+│   ├── tests/e2e/         Playwright specs
 │   └── Dockerfile.dev
 ├── backend/               # C++ Drogon REST API
 │   ├── src/
-│   │   ├── controllers/   Auth, Map, Annotation, Note, Tenant, SSO
+│   │   ├── controllers/   Auth, Map, Node, NodeMedia, Note, NoteMedia,
+│   │   │                  Plot, Tenant, VisibilityGroup, SSO
 │   │   ├── filters/       JwtFilter, TenantFilter, RateLimitFilter
 │   │   ├── AuditLog.cpp   Fire-and-forget security event logging
+│   │   ├── ErrorResponse.h
 │   │   └── main.cpp
 │   ├── tests/             Backend integration tests (Python)
 │   ├── CMakeLists.txt
 │   ├── Dockerfile
 │   └── config.json
 ├── database/
-│   ├── migrations/        001 (schema) + 002 (audit log) SQL
-│   ├── tests/             Database schema tests (SQL + Python runner)
+│   ├── migrations/        001 (consolidated schema) + 002 (audit log)
+│   ├── tests/             Schema tests (SQL + Python runner)
 │   ├── run_migrations.py
 │   └── seed-local-dev.py
-├── docs/                  Requirements, security audit, setup guides, test docs
-├── .github/workflows/     PR gate, nightly + weekend CI (GitHub Actions)
+├── docs/                  Requirements, security audit, setup, test docs
+├── .github/workflows/     PR gate, nightly + weekend CI
 └── docker-compose.yml
 ```
 
 ## Quick Start (Docker)
 
 ```bash
-# 1. Clone and enter
 git clone https://github.com/dcltdw/annotated-maps.git
 cd annotated-maps
-
-# 2. Start all services
 docker compose up --build
-
-# 3. Open the app
 open http://localhost:5173
 ```
 
 > The MySQL container runs migrations automatically on first boot via
 > `docker-entrypoint-initdb.d`.
 
-For detailed setup including test data seeding, see `docs/SETUP-LOCAL-DEV.md`.
+For detailed setup including test data seeding, see
+[docs/SETUP-LOCAL-DEV.md](docs/SETUP-LOCAL-DEV.md).
 
 ## Local Development (without Docker)
 
@@ -87,9 +94,9 @@ npm run dev        # http://localhost:5173
 
 ```bash
 cd backend
-# Edit config.json — set DB credentials and a strong JWT secret
-# Custom settings go under the "custom_config" key
 cp config.json config.local.json
+# edit config.local.json: DB credentials and a strong JWT secret under
+# the "custom_config" key
 
 cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build -j$(nproc)
@@ -103,105 +110,155 @@ cd database
 DB_PASS=yourpassword python3 run_migrations.py
 ```
 
+## Domain Concepts
+
+- **Map** — a coordinate plane (real-world WGS84, an uploaded image, or
+  a blank canvas) that holds a tree of nodes.
+- **Node** — a place marker on a map. Nodes form a tree per-map; each
+  node may carry GeoJSON geometry (Point / LineString / Polygon).
+- **Note** — a text entry attached to a node; inherits position from
+  its parent node.
+- **Media** — image or link attachments on nodes or notes.
+- **Plot** — a tenant-scoped narrative grouping that can contain nodes
+  and notes from multiple maps.
+- **Visibility group** — a tenant-scoped subset of users; nodes/notes
+  tagged with a group are visible only to members of that group, with
+  inherit-from-parent semantics.
+
 ## Multi-tenancy
 
-- An **organization** is the top-level identity unit (one company = one org).
-- Each organization has one or more **tenants** (departments, teams, projects).
-- All maps, annotations, and notes are scoped to a tenant.
-- A user may belong to multiple tenants with independent roles (`admin`, `editor`, `viewer`).
+- An **organization** is the top-level identity unit (one company =
+  one org).
+- Each organization has one or more **tenants** (departments, teams,
+  projects).
+- All maps, nodes, notes, plots, and visibility groups are scoped to a
+  tenant.
+- A user may belong to multiple tenants with independent roles
+  (`admin`, `editor`, `viewer`).
 - Cross-organization data access is not permitted.
-- New users get a personal organization and tenant automatically on registration.
+- New users get a personal organization and tenant automatically on
+  registration.
 
 ## Permission Model
 
-Every map has a permission table. A row with `user_id = NULL` represents public
-(unauthenticated) access.
+Two layers stack:
 
-| Scenario | Row |
-|----------|-----|
-| Publicly viewable map | `user_id=NULL, level='view'` |
-| Collaborator with edit | `user_id=42, level='edit'` |
-| Read-only collaborator | `user_id=42, level='view'` |
-| Map owner | No row needed — owner always has full access |
+1. **Tenant role** — base level (`admin` / `editor` / `viewer`)
+   granting access to all maps in the tenant.
+2. **Per-map permissions** — fine-grained overrides. Levels:
+   `none < view < comment < edit < moderate < admin`. A row with
+   `user_id = NULL` represents public (unauthenticated) access. Map
+   owners always have full access without a row.
+
+A third layer — **visibility groups** — filters which nodes and notes
+are visible to which users *within* a map they have access to.
 
 ## API Reference
 
-All map, annotation, and note endpoints are tenant-scoped under `/api/v1/tenants/{tenantId}/`.
+All routes are mounted under `/api/v1`. Tenant-scoped routes pass
+`{tenantId}` in the URL path and run through `JwtFilter` +
+`TenantFilter`.
 
 ### Auth
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/api/v1/auth/register` | None (rate limited) | Create account + personal org/tenant |
-| POST | `/api/v1/auth/login` | None (rate limited) | Login, receive JWT + tenant list |
-| POST | `/api/v1/auth/refresh` | JWT | Refresh token |
-| POST | `/api/v1/auth/logout` | JWT | Logout (client drops token) |
-| GET | `/api/v1/auth/sso/{orgSlug}` | None (rate limited) | Initiate OIDC SSO flow |
-| GET | `/api/v1/auth/sso/{orgSlug}/callback` | None (rate limited) | OIDC callback |
+| Method | Path | Auth |
+|--------|------|------|
+| POST | `/auth/register` | None (rate limited) |
+| POST | `/auth/login` | None (rate limited) |
+| POST | `/auth/refresh` | JWT |
+| POST | `/auth/logout` | JWT |
+| GET | `/auth/sso/{orgSlug}` | None (rate limited) |
+| GET | `/auth/sso/{orgSlug}/callback` | None (rate limited) |
+| POST | `/auth/sso/exchange` | None (rate limited) |
 
 ### Tenants
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/api/v1/tenants` | JWT | List caller's tenants |
-| GET | `.../tenants/{tenantId}/branding` | JWT + Tenant | Get branding |
-| PUT | `.../tenants/{tenantId}/branding` | JWT + Tenant(admin) | Update branding |
-| GET | `.../tenants/{tenantId}/members` | JWT + Tenant(admin) | List members |
-| POST | `.../tenants/{tenantId}/members` | JWT + Tenant(admin) | Add member |
-| DELETE | `.../tenants/{tenantId}/members/{userId}` | JWT + Tenant(admin) | Remove member |
+| Method | Path |
+|--------|------|
+| GET | `/tenants` |
+| GET / PUT | `/tenants/{tenantId}/branding` |
+| GET / POST | `/tenants/{tenantId}/members` |
+| DELETE | `/tenants/{tenantId}/members/{userId}` |
 
 ### Maps
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `.../tenants/{tenantId}/maps` | JWT + Tenant | List maps |
-| POST | `.../tenants/{tenantId}/maps` | JWT + Tenant | Create map |
-| GET | `.../tenants/{tenantId}/maps/{id}` | JWT + Tenant | Get map |
-| PUT | `.../tenants/{tenantId}/maps/{id}` | JWT + Tenant | Update map (owner) |
-| DELETE | `.../tenants/{tenantId}/maps/{id}` | JWT + Tenant | Delete map (owner) |
-| GET | `.../maps/{id}/permissions` | JWT + Tenant | List permissions (owner) |
-| PUT | `.../maps/{id}/permissions` | JWT + Tenant | Set permission (owner) |
-| DELETE | `.../maps/{id}/permissions/{target}` | JWT + Tenant | Remove permission (owner) |
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/maps` |
+| GET / PUT / DELETE | `/tenants/{tenantId}/maps/{id}` |
+| GET / PUT | `/tenants/{tenantId}/maps/{id}/permissions` |
+| DELETE | `/tenants/{tenantId}/maps/{id}/permissions/{target}` |
 
-### Annotations
+### Nodes
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `.../maps/{mapId}/annotations` | JWT + Tenant | List annotations |
-| POST | `.../maps/{mapId}/annotations` | JWT + Tenant | Create (edit perm) |
-| GET | `.../maps/{mapId}/annotations/{id}` | JWT + Tenant | Get annotation |
-| PUT | `.../maps/{mapId}/annotations/{id}` | JWT + Tenant | Update |
-| DELETE | `.../maps/{mapId}/annotations/{id}` | JWT + Tenant | Delete |
-| POST | `.../maps/{mapId}/annotations/{id}/media` | JWT + Tenant | Attach media |
-| DELETE | `.../maps/{mapId}/annotations/{id}/media/{mId}` | JWT + Tenant | Remove media |
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/maps/{mapId}/nodes` |
+| GET / PUT / DELETE | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}` |
+| GET | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}/children` |
+| GET | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}/subtree` |
+| POST | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}/move` |
+| POST | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}/copy` |
+| GET / PUT | `/tenants/{tenantId}/maps/{mapId}/nodes/{id}/visibility` |
 
 ### Notes
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `.../maps/{mapId}/notes` | JWT + Tenant | List notes |
-| POST | `.../maps/{mapId}/notes` | JWT + Tenant | Create note |
-| GET | `.../maps/{mapId}/notes/{id}` | JWT + Tenant | Get note |
-| PUT | `.../maps/{mapId}/notes/{id}` | JWT + Tenant | Update note |
-| DELETE | `.../maps/{mapId}/notes/{id}` | JWT + Tenant | Delete note |
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/notes` |
+| GET / PUT / DELETE | `/tenants/{tenantId}/maps/{mapId}/notes/{id}` |
+| GET / PUT | `/tenants/{tenantId}/maps/{mapId}/notes/{id}/visibility` |
 
-### Note Groups
+### Media
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `.../maps/{mapId}/note-groups` | JWT + Tenant | List groups |
-| POST | `.../maps/{mapId}/note-groups` | JWT + Tenant(admin) | Create group |
-| PUT | `.../maps/{mapId}/note-groups/{id}` | JWT + Tenant(admin) | Update group |
-| DELETE | `.../maps/{mapId}/note-groups/{id}` | JWT + Tenant(admin) | Delete group |
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/media` |
+| PUT / DELETE | `/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/media/{id}` |
+| GET / POST | `/tenants/{tenantId}/maps/{mapId}/notes/{noteId}/media` |
+| PUT / DELETE | `/tenants/{tenantId}/maps/{mapId}/notes/{noteId}/media/{id}` |
+
+### Plots
+
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/plots` |
+| GET / PUT / DELETE | `/tenants/{tenantId}/plots/{id}` |
+| GET | `/tenants/{tenantId}/plots/{id}/members` |
+| POST | `/tenants/{tenantId}/plots/{id}/nodes` |
+| DELETE | `/tenants/{tenantId}/plots/{id}/nodes/{nodeId}` |
+| POST | `/tenants/{tenantId}/plots/{id}/notes` |
+| DELETE | `/tenants/{tenantId}/plots/{id}/notes/{noteId}` |
+| GET | `/tenants/{tenantId}/maps/{mapId}/nodes/{nodeId}/plots` |
+| GET | `/tenants/{tenantId}/maps/{mapId}/notes/{noteId}/plots` |
+
+### Visibility Groups
+
+| Method | Path |
+|--------|------|
+| GET / POST | `/tenants/{tenantId}/visibility-groups` |
+| GET / PUT / DELETE | `/tenants/{tenantId}/visibility-groups/{id}` |
+| GET / POST | `/tenants/{tenantId}/visibility-groups/{id}/members` |
+| DELETE | `/tenants/{tenantId}/visibility-groups/{id}/members/{userId}` |
+
+See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full route
+table including descriptions and authorization requirements.
 
 ## Security
 
-- Passwords hashed with **Argon2id** via libsodium. Legacy SHA-256 hashes are rejected at login.
-- JWT includes `sub`, `username`, `orgId`, and `aud` (audience) claims. Validated per-request including `status` DB check (must be `active`).
-- CORS uses an origin whitelist (not echo). Security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) on all responses.
-- Rate limiting on auth endpoints (configurable, default: 100 req/60s for dev, recommend 5 req/300s for production).
+- Passwords hashed with **Argon2id** via libsodium. Legacy SHA-256
+  hashes are rejected at login.
+- JWT includes `sub`, `username`, `orgId`, and `aud` (audience)
+  claims. Validated per-request including a `status` DB check (must
+  be `active`).
+- CORS uses an origin whitelist (not echo). Security headers
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`) on
+  all responses.
+- Rate limiting on auth endpoints (configurable, default 100 req/60s
+  for dev, recommend 5 req/300s for production).
 - JWT secret overridable via `JWT_SECRET` environment variable.
-- See `docs/SECURITY-AUDIT.md` for the full audit report.
+- See [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) for the full
+  audit report.
 
 ## Testing
 
@@ -211,33 +268,36 @@ python3 database/tests/run-db-tests.py
 
 # Backend integration tests (fast tier, ~60s)
 python3 backend/tests/run-tests.py
+python3 backend/tests/run-tests.py --only 14   # single test
 
-# Run a single test suite
-python3 backend/tests/run-tests.py --only 1
-
-# Notes-specific tests
-python3 backend/tests/run-notes-tests.py
+# Frontend E2E (Playwright)
+cd frontend && npm run test:e2e
 ```
 
-See `docs/TESTING-BACKEND.md` and `docs/TESTING-DATABASE.md` for details.
+See [docs/TESTING-BACKEND.md](docs/TESTING-BACKEND.md),
+[docs/TESTING-E2E.md](docs/TESTING-E2E.md), and
+[docs/TESTING-DATABASE.md](docs/TESTING-DATABASE.md) for details.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| `docs/REQUIREMENTS.md` | Full requirements specification |
-| `docs/SECURITY-AUDIT.md` | Security audit with open findings |
-| `docs/SETUP-LOCAL-DEV.md` | Local development setup with test data |
-| `docs/TESTING-BACKEND.md` | Backend test tiers and usage |
-| `docs/TESTING-DATABASE.md` | Database test framework |
-| `docs/TESTING-NOTES.md` | Notes feature test guide |
+| [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Full requirements specification |
+| [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | Backend + frontend conventions |
+| [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) | Security audit with open findings |
+| [docs/SETUP-LOCAL-DEV.md](docs/SETUP-LOCAL-DEV.md) | Local development setup with test data |
+| [docs/TESTING-BACKEND.md](docs/TESTING-BACKEND.md) | Backend test tiers and usage |
+| [docs/TESTING-E2E.md](docs/TESTING-E2E.md) | Playwright E2E suite |
+| [docs/TESTING-DATABASE.md](docs/TESTING-DATABASE.md) | Database test framework |
 | `docs/flow-*.md` | Mermaid sequence diagrams for key flows |
+| `docs/howto-*.md` | Step-by-step guides for common tasks |
 
 ## PWA / Mobile
 
-The frontend is a Progressive Web App. On mobile browsers, users can "Add to
-Home Screen" to install it as a native-feeling app. Map tiles are cached via
-Workbox for offline viewing of previously visited areas.
+The frontend is a Progressive Web App. On mobile browsers, users can
+"Add to Home Screen" to install it as a native-feeling app. Map tiles
+are cached via Workbox for offline viewing of previously visited
+areas.
 
 ## License
 

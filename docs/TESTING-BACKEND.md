@@ -39,18 +39,26 @@ python3 backend/tests/run-tests.py --only 1
 |---|---|---|
 | `test_01_auth.py` | fast | Registration, login, refresh, deactivated user, error messages |
 | `test_02_filters.py` | fast | JwtFilter (missing/bad/expired token, deactivated user), TenantFilter (membership, cross-org) |
-| `test_03_maps.py` | fast | Map CRUD, tenant scoping, pagination bounds, cross-org isolation |
-| `test_04_annotations.py` | fast | Annotation CRUD, GeoJSON validation, media URL scheme validation |
+| `test_03_maps.py` | fast | Map CRUD, tenant scoping, pagination bounds, permissions |
 | `test_05_tenants.py` | fast | Member add/remove, cross-org member rejection, branding validation |
 | `test_06_rate_limit_fast.py` | fast | Rate limiter blocks after limit, 429 has Retry-After header |
 | `test_07_rate_limit_slow.py` | nightly | Exhausts limit, waits 300s, verifies requests succeed again |
 | `test_08_audit.py` | fast | Audit log entries created for login failure, registration, login success |
-| `test_09_security.py` | fast | Cross-org isolation (maps, annotations, permissions, members), security headers |
+| `test_09_security.py` | fast | Cross-org isolation (maps, nodes, permissions, members), security headers |
 | `test_10_soak.py` | extended | 5-minute continuous load verifying rate limiter never over-admits |
-| `test_11_notes.py` | fast | Notes CRUD, cross-org isolation |
-| `test_12_annotation_edit_delete_move.py` | fast | Annotation edit, delete, move for all geometry types |
-| `test_13_note_groups.py` | fast | Note group CRUD, note-group assignment, filtering, permissions |
-| `test_15_cors.py` | fast | CORS preflight: OPTIONS at all path depths, Allow-Origin echo for allowed Origins, absence for bogus ones |
+| `test_14_nodes.py` | fast | Node CRUD with tenant scoping, parent_id trees, max-depth |
+| `test_15_cors.py` | fast | CORS preflight at all path depths, Allow-Origin echo |
+| `test_16_notes.py` | fast | Note CRUD attached to nodes |
+| `test_17_media.py` | fast | Media attachments on nodes and notes |
+| `test_18_visibility_groups.py` | fast | Visibility-group CRUD, members, bootstrap |
+| `test_19_node_visibility.py` | fast | Node visibility tagging endpoints |
+| `test_20_node_visibility_filter.py` | fast | Read-time effective-visibility CTE filtering, owner_xray bypass |
+| `test_21_note_visibility.py` | fast | Note visibility tagging + read-time filtering |
+| `test_22_plots.py` | fast | Plot CRUD + plot-membership endpoints |
+| `test_23_tree_navigation.py` | fast | Tree navigation endpoints (subtree fetch, breadcrumb) |
+| `test_24_node_move.py` | fast | Node move endpoint (cycle prevention, depth checks) |
+| `test_25_node_copy.py` | fast | Node copy endpoint (subtree copy with rebinding) |
+| `test_26_coordinate_systems.py` | fast | Coordinate-system shape validation (wgs84/pixel/blank) |
 
 ## How it works
 
