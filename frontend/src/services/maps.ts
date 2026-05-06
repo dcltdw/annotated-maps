@@ -9,6 +9,7 @@ import {
   NoteRecordSchema,
   NoteListSchema,
   NodeMediaListSchema,
+  NoteMediaListSchema,
   VisibilityGroupSchema,
   VisibilityGroupListSchema,
   VisibilityGroupMemberListSchema,
@@ -25,6 +26,9 @@ import {
   type NoteRecord,
   type NoteList,
   type NodeMediaList,
+  type NoteMediaList,
+  type CreateMediaRequest,
+  type UpdateMediaRequest,
   type VisibilityGroup,
   type VisibilityGroupList,
   type VisibilityGroupMemberList,
@@ -312,7 +316,11 @@ export const visibilityGroupsService = {
   },
 };
 
-// ─── Node media ──────────────────────────────────────────────────────────────
+// ─── Node media (#84 read; #166 add/update/delete) ──────────────────────────
+// All write methods return void — backend's POST/PUT have the same partial-
+// response anti-pattern as the other create/update endpoints (#152), and
+// callers always re-fetch the list after a write anyway. Skipping the
+// return value avoids the parse mismatch without a POST-then-GET dance.
 
 export const nodeMediaService = {
   async listMedia(mapId: number, nodeId: number, tenantId?: number): Promise<NodeMediaList> {
@@ -320,6 +328,91 @@ export const nodeMediaService = {
       `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/media`
     );
     return NodeMediaListSchema.parse(res.data);
+  },
+
+  async addMedia(
+    mapId: number,
+    nodeId: number,
+    data: CreateMediaRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/media`,
+      data,
+    );
+  },
+
+  async updateMedia(
+    mapId: number,
+    nodeId: number,
+    mediaId: number,
+    data: UpdateMediaRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.put(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/media/${mediaId}`,
+      data,
+    );
+  },
+
+  async deleteMedia(
+    mapId: number,
+    nodeId: number,
+    mediaId: number,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/media/${mediaId}`,
+    );
+  },
+};
+
+// ─── Note media (#166) ───────────────────────────────────────────────────────
+// Parallel surface for media attached to notes. Same shape as nodeMediaService
+// but parented by noteId. Backend has full CRUD in NoteMediaController.
+
+export const noteMediaService = {
+  async listMedia(mapId: number, noteId: number, tenantId?: number): Promise<NoteMediaList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/media`,
+    );
+    return NoteMediaListSchema.parse(res.data);
+  },
+
+  async addMedia(
+    mapId: number,
+    noteId: number,
+    data: CreateMediaRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/media`,
+      data,
+    );
+  },
+
+  async updateMedia(
+    mapId: number,
+    noteId: number,
+    mediaId: number,
+    data: UpdateMediaRequest,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.put(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/media/${mediaId}`,
+      data,
+    );
+  },
+
+  async deleteMedia(
+    mapId: number,
+    noteId: number,
+    mediaId: number,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/media/${mediaId}`,
+    );
   },
 };
 

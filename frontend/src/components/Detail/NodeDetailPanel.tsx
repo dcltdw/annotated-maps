@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { nodesService, notesService, nodeMediaService } from '@/services/maps';
+import { nodesService, notesService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
 import { VisibilityEditor } from '@/components/Visibility/VisibilityEditor';
 import { PlotsSection } from '@/components/Detail/PlotsSection';
+import { MediaSection } from '@/components/Detail/MediaSection';
 import type {
   NodeRecord,
-  NodeMediaRecord,
   NoteRecord,
   CreateNoteRequest,
   UpdateNoteRequest,
@@ -36,10 +36,10 @@ export function NodeDetailPanel({
 }: NodeDetailPanelProps) {
   const [node, setNode] = useState<NodeRecord | null>(null);
   const [parent, setParent] = useState<NodeRecord | null>(null);
-  const [media, setMedia] = useState<NodeMediaRecord[]>([]);
   const [notes, setNotes] = useState<NoteRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Media is owned by MediaSection (#166); no local state here anymore.
 
   // Reload notes after a CRUD op. Tightly scoped so callers don't need
   // to know the mapId / nodeId separately.
@@ -57,7 +57,6 @@ export function NodeDetailPanel({
     if (selectedNodeId === null) {
       setNode(null);
       setParent(null);
-      setMedia([]);
       setNotes([]);
       return;
     }
@@ -82,15 +81,11 @@ export function NodeDetailPanel({
           setParent(null);
         }
 
-        // Media + notes in parallel; failures don't block each other.
-        const [m, ns] = await Promise.all([
-          nodeMediaService.listMedia(mapId, n.id).catch(() => [] as NodeMediaRecord[]),
-          notesService.listNotesForNode(mapId, n.id).catch(() => [] as NoteRecord[]),
-        ]);
-        if (!cancelled) {
-          setMedia(m);
-          setNotes(ns);
-        }
+        // Notes only — MediaSection owns its own list/refresh now.
+        const ns = await notesService
+          .listNotesForNode(mapId, n.id)
+          .catch(() => [] as NoteRecord[]);
+        if (!cancelled) setNotes(ns);
       })
       .catch((e) => { if (!cancelled) setError(extractApiError(e, 'Failed to load location.')); })
       .finally(() => { if (!cancelled) setLoading(false); });
@@ -148,38 +143,12 @@ export function NodeDetailPanel({
         <p className="node-detail-description">{node.description}</p>
       )}
 
-      {media.length > 0 && (
-        <div className="node-detail-media">
-          <h3>Media</h3>
-          {media.filter((m) => m.mediaType === 'image').length > 0 && (
-            <div className="node-detail-media-images">
-              {media
-                .filter((m) => m.mediaType === 'image')
-                .map((m) => (
-                  <img
-                    key={m.id}
-                    src={m.url}
-                    alt={m.caption || node.name}
-                    className="node-detail-thumb"
-                  />
-                ))}
-            </div>
-          )}
-          {media.filter((m) => m.mediaType === 'link').length > 0 && (
-            <ul className="node-detail-media-links">
-              {media
-                .filter((m) => m.mediaType === 'link')
-                .map((m) => (
-                  <li key={m.id}>
-                    <a href={m.url} target="_blank" rel="noopener noreferrer">
-                      {m.caption || m.url}
-                    </a>
-                  </li>
-                ))}
-            </ul>
-          )}
-        </div>
-      )}
+      {/* Media section (#166): full CRUD on images + links attached to
+          this location. Replaces the read-only inline render that used
+          to live here; MediaSection owns its own list/refresh state. */}
+      <section className="node-detail-media">
+        <MediaSection mapId={mapId} kind="node" entityId={node.id} />
+      </section>
 
       <section className="node-detail-visibility">
         <h3>Visibility</h3>
@@ -345,6 +314,7 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
   const [editing, setEditing] = useState(false);
   const [showVisibility, setShowVisibility] = useState(false);
   const [showPlots, setShowPlots] = useState(false);
+  const [showMedia, setShowMedia] = useState(false);
 
   const handleDelete = async () => {
     if (!window.confirm('Delete this note?')) return;
@@ -406,6 +376,13 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
             <button
               type="button"
               className="btn btn-ghost btn-sm"
+              onClick={() => setShowMedia((v) => !v)}
+            >
+              {showMedia ? 'Hide media' : 'Media'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
               onClick={handleDelete}
             >
               Delete
@@ -425,6 +402,11 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
       {showPlots && (
         <div className="note-card-plots">
           <PlotsSection mapId={mapId} kind="note" entityId={note.id} />
+        </div>
+      )}
+      {showMedia && (
+        <div className="note-card-media">
+          <MediaSection mapId={mapId} kind="note" entityId={note.id} />
         </div>
       )}
     </article>
