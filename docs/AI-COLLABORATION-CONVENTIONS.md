@@ -48,6 +48,10 @@ agent instructions:
     source and update the cache before retrying.** Don't blindly retry,
     don't ask the user — refresh on first failure, escalate only if the
     fresh value also fails.
+13. **Surface service-restart needs in both reports and PR bodies.** When
+    a change touches code/config/schema, explicitly state what the user
+    needs to restart (or "no restart needed") in the conversation report
+    AND in a section of the PR body. Skip for doc-only / test-only PRs.
 
 ---
 
@@ -674,6 +678,80 @@ When using a cached value in an operation:
 | GitHub repo metadata | `gh api repos/<owner>/<repo>` |
 | File paths in the project | `find` / `Glob` |
 | External service IDs (Slack channel, JIRA project, etc.) | each service's API |
+
+### 13. Surface service-restart needs in reports and PR bodies
+
+> **Rule:** When a change requires a service restart, container rebuild,
+> migration, or any other operational step before the change takes effect,
+> explicitly state that step in (a) the conversation report when handing
+> back to the user, AND (b) a section of the PR body. When a code/config
+> change requires NO restart, say so explicitly too — both audiences
+> benefit from knowing the agent considered the question. Skip the
+> convention entirely for doc-only or test-only PRs (no operational
+> impact possible).
+
+**Why:** A change to backend C++ requires `docker compose up -d --build
+backend` before the user can exercise it in the running stack. A change
+to a Vite-built dependency may need a full container restart instead of
+relying on HMR. A schema change may need a migration run or a `down -v`
+volume wipe. The user has hit the "I changed something but my browser
+shows the old behavior" trap repeatedly when these steps weren't called
+out — and a future reader of the PR loses important context if the
+restart needed isn't recorded next to the diff. Saying "no restart
+needed" when none is needed is also valuable: it explicitly acknowledges
+the agent considered the question rather than leaving the reader to
+guess whether the agent forgot.
+
+**How to apply:**
+
+In the **conversation report** when handing back work:
+
+- Always include a one-liner about what (if anything) needs restarting
+- Frame the answer either as a single sentence or a small table when
+  multiple layers are touched (backend / frontend / DB / etc.)
+- Examples:
+  - "No restart needed — frontend code change picked up by Vite HMR."
+  - "Backend rebuild needed: `docker compose up -d --build backend`."
+  - "DB action needed: `docker compose down -v && docker compose up -d`
+    to apply the schema change (or run the migration explicitly)."
+
+In the **PR body**, add a section (or fold into an existing section
+like a "Test plan" with one bullet) calling out the same:
+
+```markdown
+## Operational impact
+
+- **Backend**: rebuild required (`docker compose up -d --build backend`)
+- **Frontend**: no restart needed (HMR picks it up)
+- **Database**: no schema change
+```
+
+If no operational impact at all, a single line is fine:
+
+```markdown
+## Operational impact
+
+No restart, rebuild, or migration needed.
+```
+
+**When the rule does not apply:**
+
+- **Pure doc PRs** (`docs/*.md`, README updates, comment-only edits)
+- **Pure test PRs** that don't touch the production code paths exercised
+  by tests (e.g. backend test additions where the controller code is
+  unchanged — tests pick up the new test file automatically)
+- **Workflow / CI-only PRs** (`.github/workflows/*.yml`) where the
+  change only affects future CI runs
+
+For everything else (code, schema, lockfile/dep changes, Dockerfile,
+config files, env vars), include the line.
+
+**Origin:** rule established 2026-05-06 after the user pointed out that
+they'd hit the "I have to ask whether the backend was rebuilt" pattern
+multiple times during the `nodes-rebuild` work and would prefer it be
+surfaced proactively. Two-sided: the answer in the conversation
+prevents the immediate confusion; the answer in the PR body preserves
+the same information for whoever pulls the change later.
 
 ---
 
