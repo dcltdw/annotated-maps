@@ -715,6 +715,32 @@ In the **conversation report** when handing back work:
   - "DB action needed: `docker compose down -v && docker compose up -d`
     to apply the schema change (or run the migration explicitly)."
 
+**Branch switches count too.** When the agent switches the local
+checkout to a different branch — e.g. branching off `main` for a
+small doc PR while the rest of the work is on a long-running feature
+branch — the running dev stack's behavior may change immediately:
+
+- **Frontend (volume-mounted)**: Vite picks up the new branch's source
+  via HMR within seconds. The browser will start serving the new
+  branch's code on next reload (or sooner). If the two branches differ
+  in significant ways — e.g. one has a dependency the other doesn't —
+  the user may see import errors, missing UI, or unexpected layouts
+  immediately, with no other warning.
+- **Backend (compiled)**: the running binary is whatever was last
+  built. A branch switch alone doesn't change runtime behavior; only
+  a `docker compose up -d --build backend` does. So the backend may
+  silently be on a different branch's code than the frontend.
+- **Database**: unaffected by branch switches at the file level, but
+  schema state reflects whichever migrations have actually been run.
+
+When making a branch switch as part of a multi-step task (especially
+when the user is expected to interact with the running stack), state
+explicitly: "switching from `branchA` to `branchB` — frontend dev
+stack will start serving `branchB`'s code; backend binary unchanged
+(still on `branchA`'s last build); switch back when this PR closes
+out." This prevents the "old code referencing missing dep / new dep
+not yet built / API mismatch between layers" surprise.
+
 In the **PR body**, add a section (or fold into an existing section
 like a "Test plan" with one bullet) calling out the same:
 
@@ -752,6 +778,18 @@ multiple times during the `nodes-rebuild` work and would prefer it be
 surfaced proactively. Two-sided: the answer in the conversation
 prevents the immediate confusion; the answer in the PR body preserves
 the same information for whoever pulls the change later.
+
+**Live test of the rule (same session it was filed):** within minutes
+of opening the PR adding this rule, the agent silently violated it.
+The agent branched off `main` for the doc PR, leaving the local
+checkout on a `main`-based branch. The Docker frontend container's
+volume mount immediately served `main`'s pre-rebuild `MapView.tsx`,
+which references a `leaflet-draw` dependency the rebuild had dropped.
+The user resumed manual smoke testing, hit a Vite import error, and
+had to ask the agent to investigate. The branch-switch clause above
+was added in response. The pattern generalizes: any change to what
+the running stack serves — including filesystem-level changes the
+agent makes — counts as operational impact and must be surfaced.
 
 ---
 
