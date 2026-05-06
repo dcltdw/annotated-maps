@@ -5,6 +5,7 @@ import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
 import { NodeDetailPanel } from '@/components/Detail/NodeDetailPanel';
 import { useMap } from '@/hooks/useMap';
 import { useAuthStore } from '@/store/authStore';
+import { mapsService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
 
 // Map detail page. NodeTreePanel + MapView + NodeDetailPanel are all wired
@@ -76,6 +77,20 @@ export function MapDetailPage() {
     }
   };
 
+  // Delete-from-detail-page (#160). Edit-from-detail isn't here — users
+  // can navigate to /tenants/{tid}/maps to edit. v1 minimum keeps this
+  // page focused on viewing/working with the map.
+  const handleDeleteMap = async () => {
+    if (!activeMap) return;
+    if (!window.confirm(`Delete map "${activeMap.title}"? This cannot be undone.`)) return;
+    try {
+      await mapsService.deleteMap(activeMap.id);
+      navigate(`/tenants/${tenantId}/maps`);
+    } catch (e) {
+      setXrayError(extractApiError(e, 'Failed to delete map.'));
+    }
+  };
+
   return (
     <div className="page-container">
       <div className="page-header">
@@ -91,6 +106,16 @@ export function MapDetailPage() {
               />
               {xraySaving ? 'Saving…' : 'Owner X-ray'}
             </label>
+          )}
+          {isOwner && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={handleDeleteMap}
+              title="Delete this map (and all its locations + notes)"
+            >
+              Delete map
+            </button>
           )}
           <Link to={`/tenants/${tenantId}/maps`} className="btn btn-ghost">
             ← Back to maps
