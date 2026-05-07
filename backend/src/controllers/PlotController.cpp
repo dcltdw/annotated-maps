@@ -489,7 +489,14 @@ void PlotController::listMembers(
                 return;
             }
 
-            // Step 2: fetch visible node members. Admins skip the CTE.
+            // Step 2: fetch visible node members. Admins skip the CTE *and*
+            // the map-permission gate (tenant admin sees everything in
+            // their tenant). Non-admins must satisfy both layers:
+            //   1. Map-permission gate (#213) — caller is map owner OR has
+            //      a per-user grant OR the map has a public grant.
+            //   2. Visibility-group filter (PLOT_NODE_VISIBILITY_CTE) —
+            //      effective visibility tags include a group the caller
+            //      is in (or owner_xray bypass).
             std::string nodeSql;
             if (!isAdmin) nodeSql = PLOT_NODE_VISIBILITY_CTE;
             nodeSql +=
@@ -499,12 +506,19 @@ void PlotController::listMembers(
                 "JOIN maps m ON m.id = n.map_id AND m.tenant_id = ? ";
             if (!isAdmin) {
                 nodeSql +=
-                    "WHERE ((m.owner_id = ? AND m.owner_xray = TRUE) "
+                    "LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+                    "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+                    "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+                    "WHERE (m.owner_id = ? "
+                    "       OR mp.level IN ('view','comment','edit','moderate','admin') "
+                    "       OR mp_pub.level IN ('view','comment','edit','moderate','admin')) "
+                    "  AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
                     "       OR n.id IN (SELECT start_id FROM node_visible_starts)) ";
             }
             nodeSql += "ORDER BY n.created_at ASC";
 
-            // Step 3: fetch visible note members. Admins skip the CTE.
+            // Step 3: fetch visible note members. Same two-layer gate as
+            // nodes — map-permission first, then visibility filter.
             std::string noteSql;
             if (!isAdmin) noteSql = PLOT_NOTE_VISIBILITY_CTE;
             noteSql +=
@@ -516,7 +530,13 @@ void PlotController::listMembers(
                 "JOIN maps m ON m.id = nd.map_id AND m.tenant_id = ? ";
             if (!isAdmin) {
                 noteSql +=
-                    "WHERE ((m.owner_id = ? AND m.owner_xray = TRUE) "
+                    "LEFT JOIN map_permissions mp     ON mp.map_id = m.id     AND mp.user_id = ? "
+                    "LEFT JOIN map_permissions mp_pub ON mp_pub.map_id = m.id AND mp_pub.user_id IS NULL "
+                    "                                AND mp_pub.level IN ('view','comment','edit','moderate','admin') "
+                    "WHERE (m.owner_id = ? "
+                    "       OR mp.level IN ('view','comment','edit','moderate','admin') "
+                    "       OR mp_pub.level IN ('view','comment','edit','moderate','admin')) "
+                    "  AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
                     "       OR nt.id IN (SELECT visible_note_id FROM note_visible)) ";
             }
             noteSql += "ORDER BY nt.pinned DESC, nt.created_at ASC";
@@ -548,9 +568,14 @@ void PlotController::listMembers(
                     // — anchor uses plotId, node_visible_starts uses userId,
                     // note_visible's outer JOIN uses plotId, override-TRUE
                     // EXISTS uses userId, then SELECT JOIN uses plotId.
+                    // SELECT binds (post-#213): plotId, tenantId, userId(mp),
+                    // userId(owner-perm), userId(xray).
                     dbT->execSqlAsync(noteSql, onNotes, onNotesErr,
-                        id, userId, id, userId,   // CTE
-                        id, tenantId, userId);    // SELECT WHERE + xray
+                        id, userId, id, userId,            // CTE
+                        id, tenantId,                       // SELECT JOINs
+                        userId,                             // mp.user_id
+                        userId,                             // m.owner_id (perm)
+                        userId);                            // m.owner_id (xray)
                 }
             };
 
@@ -569,9 +594,14 @@ void PlotController::listMembers(
             if (isAdmin) {
                 dbN->execSqlAsync(nodeSql, onNodes, onNodesErr, id, tenantId);
             } else {
+                // SELECT binds (post-#213): plotId, tenantId, userId(mp),
+                // userId(owner-perm), userId(xray).
                 dbN->execSqlAsync(nodeSql, onNodes, onNodesErr,
-                    id, userId,             // CTE (plotId, userId)
-                    id, tenantId, userId);  // SELECT WHERE + xray
+                    id, userId,                          // CTE (plotId, userId)
+                    id, tenantId,                        // SELECT JOINs
+                    userId,                              // mp.user_id
+                    userId,                              // m.owner_id (perm)
+                    userId);                             // m.owner_id (xray)
             }
         },
         [callback](const drogon::orm::DrogonDbException&) {
