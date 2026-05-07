@@ -56,6 +56,22 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 .auth-card h1 { margin-bottom: 1.5rem; font-size: 1.5rem; }
 .auth-form { display: flex; flex-direction: column; gap: 1rem; }
 .auth-footer { margin-top: 1rem; font-size: .875rem; text-align: center; color: var(--color-text-muted); }
+.auth-sso-divider {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: 1rem 0;
+  color: var(--color-text-muted);
+  font-size: .75rem;
+}
+.auth-sso-divider::before,
+.auth-sso-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+.auth-sso-form { gap: .5rem; margin-top: .5rem; }
 .auth-footer a { color: var(--color-primary); }
 .form-group { display: flex; flex-direction: column; gap: .375rem; }
 .form-group label { font-size: .875rem; font-weight: 500; }
@@ -700,6 +716,19 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 }
 .note-card-titlebar { display: flex; align-items: center; gap: .25rem; flex: 1; min-width: 0; }
 .note-pin { font-size: .85rem; }
+.note-pin-toggle {
+  font-size: .85rem;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.35;
+  transition: opacity .12s;
+}
+.note-pin-toggle:hover { opacity: 0.7; }
+.note-pin-toggle:disabled { cursor: progress; }
+.note-pin-toggle-on { opacity: 1; }
+.note-pin-toggle-on:hover { opacity: 0.85; }
 .note-card-actions { display: flex; gap: .25rem; }
 .note-card-text { margin: .25rem 0; font-size: .85rem; white-space: pre-wrap; }
 .note-card-footer { font-size: .75rem; color: var(--color-text-muted, #666); margin-top: .25rem; }
@@ -1019,6 +1048,82 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   border-radius: 4px;
 }
 .node-popup-links { margin: .25rem 0; padding-left: 1.25rem; }
+
+/* ─── Tenant admin (branding, members) ──────────────────────────────────────── */
+.tenant-admin-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+.tenant-admin-section h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+.tenant-admin-form { display: flex; flex-direction: column; gap: 1rem; }
+.tenant-admin-actions { display: flex; gap: .5rem; }
+
+/* Branding (#163) */
+.branding-color-row { display: flex; align-items: center; gap: .5rem; }
+.branding-color-row input[type="color"] {
+  width: 3rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.branding-color-hex {
+  font-family: monospace;
+  font-size: .85rem;
+  color: var(--color-text-muted);
+}
+.branding-preview {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem;
+  background: var(--color-bg);
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.branding-preview-label {
+  font-size: .85rem;
+  color: var(--color-text-muted);
+}
+.branding-preview-swatch {
+  padding: .25rem .75rem;
+  border-radius: var(--radius);
+  font-size: .85rem;
+  font-weight: 500;
+}
+
+/* Members (#162) */
+.form-hint { font-size: .8rem; color: var(--color-text-muted); }
+
+.member-list { list-style: none; display: flex; flex-direction: column; gap: .5rem; }
+.member-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto auto;
+  align-items: center;
+  gap: .75rem;
+  padding: .5rem .75rem;
+  background: var(--color-bg);
+  border-radius: var(--radius);
+}
+.member-name { font-weight: 500; }
+.member-email { color: var(--color-text-muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; }
+.member-role {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: .15rem .5rem;
+  border-radius: var(--radius);
+  background: var(--color-border);
+}
+.member-role-admin  { background: #fee2e2; color: #991b1b; }
+.member-role-editor { background: #dbeafe; color: #1e40af; }
+.member-role-viewer { background: #e2e8f0; color: #475569; }
+
+.btn-sm { padding: .25rem .5rem; font-size: .8rem; }
 
 /* ─── Map sharing modal (#161) ──────────────────────────────────────────────── */
 .sharing-section { margin: 1rem 0; }
