@@ -53,6 +53,7 @@ FAST_TESTS = [
     "test_24_node_move.py",
     "test_25_node_copy.py",
     "test_26_coordinate_systems.py",
+    "test_28_permissions.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
