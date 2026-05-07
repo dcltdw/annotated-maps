@@ -350,29 +350,39 @@ void NodeController::createNode(
                              hasParent, parentId, tenantId]() {
                 auto db3 = drogon::app().getDbClient();
 
-                auto insertedCb = [callback, req, mapId, userId, callerUsername,
-                                   name, description, color, hasGeo, geoJsonStr,
-                                   hasParent, parentId, tenantId]
+                auto insertedCb = [callback, req, mapId, userId, tenantId]
                     (const drogon::orm::Result& r3) {
                     int newId = static_cast<int>(r3.insertId());
-                    Json::Value n;
-                    n["id"]                  = newId;
-                    n["mapId"]               = mapId;
-                    n["parentId"]            = hasParent ? Json::Value(parentId) : Json::Value();
-                    n["name"]                = name;
-                    n["geoJson"]             = hasGeo ? parseJsonColumn(geoJsonStr) : Json::Value();
-                    n["description"]         = description;
-                    n["color"]               = color.empty() ? Json::Value() : Json::Value(color);
-                    n["visibilityOverride"]  = false;
-                    n["createdBy"]           = userId;
-                    n["createdByUsername"]   = callerUsername;
                     Json::Value detail;
                     detail["mapId"]  = mapId;
                     detail["nodeId"] = newId;
                     AuditLog::record("node_create", req, userId, 0, tenantId, detail);
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(n);
-                    resp->setStatusCode(drogon::k201Created);
-                    callback(resp);
+                    // #152: re-fetch the canonical row so POST returns the
+                    // same shape as GET — frontend NodeRecordSchema requires
+                    // createdAt / updatedAt that we can't compute pre-INSERT.
+                    auto db4 = drogon::app().getDbClient();
+                    db4->execSqlAsync(
+                        "SELECT n.id, n.map_id, n.parent_id, n.name, n.geo_json, "
+                        "       n.description, n.color, n.visibility_override, "
+                        "       n.created_by, u.username AS creator_username, "
+                        "       n.created_at, n.updated_at "
+                        "FROM nodes n JOIN users u ON u.id = n.created_by "
+                        "WHERE n.id = ?",
+                        [callback](const drogon::orm::Result& rGet) {
+                            if (rGet.empty()) {
+                                callback(errorResponse(drogon::k500InternalServerError,
+                                    "internal_error", "Node vanished after insert"));
+                                return;
+                            }
+                            auto resp = drogon::HttpResponse::newHttpJsonResponse(rowToNode(rGet[0]));
+                            resp->setStatusCode(drogon::k201Created);
+                            callback(resp);
+                        },
+                        [callback](const drogon::orm::DrogonDbException&) {
+                            callback(errorResponse(drogon::k500InternalServerError,
+                                "db_error", "Failed to fetch created node"));
+                        },
+                        newId);
                 };
                 auto errCb = [callback](const drogon::orm::DrogonDbException&) {
                     callback(errorResponse(drogon::k500InternalServerError,

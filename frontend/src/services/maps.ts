@@ -128,10 +128,8 @@ export const mapsService = {
   },
 
   async updateMap(mapId: number, data: UpdateMapRequest, tenantId?: number): Promise<MapRecord> {
-    // The backend's PUT returns `{ id, updated: true }` (not the full record),
-    // so re-fetch via GET to give callers the parsed MapRecord they expect.
-    await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}`, data);
-    return this.getMap(mapId, tenantId);
+    const res = await apiClient.put(`${tenantBase(tenantId)}/maps/${mapId}`, data);
+    return MapRecordSchema.parse(res.data);
   },
 
   async deleteMap(mapId: number, tenantId?: number): Promise<void> {
@@ -158,16 +156,8 @@ export const nodesService = {
   },
 
   async createNode(mapId: number, data: CreateNodeRequest, tenantId?: number): Promise<NodeRecord> {
-    // Backend's POST returns a partial node (no createdAt/updatedAt) — same
-    // shape mismatch as mapsService.updateMap and plotsService.create/updatePlot.
-    // POST then GET to return a fully-parsed record so the caller can rely
-    // on the timestamps.
     const res = await apiClient.post(`${tenantBase(tenantId)}/maps/${mapId}/nodes`, data);
-    const id = res.data?.id;
-    if (typeof id !== 'number') {
-      throw new Error('createNode: response missing id');
-    }
-    return this.getNode(mapId, id, tenantId);
+    return NodeRecordSchema.parse(res.data);
   },
 
   async updateNode(
@@ -503,15 +493,8 @@ export const plotsService = {
   },
 
   async createPlot(data: CreatePlotRequest, tenantId?: number): Promise<PlotRecord> {
-    // Backend's POST returns a partial plot (no createdAt/updatedAt) — same
-    // shape mismatch as updatePlot. POST then GET to return a fully-parsed
-    // record so the caller can rely on the timestamps.
     const res = await apiClient.post(`${tenantBase(tenantId)}/plots`, data);
-    const id = res.data?.id;
-    if (typeof id !== 'number') {
-      throw new Error('createPlot: response missing id');
-    }
-    return this.getPlot(id, tenantId);
+    return PlotRecordSchema.parse(res.data);
   },
 
   async updatePlot(
@@ -519,10 +502,8 @@ export const plotsService = {
     data: UpdatePlotRequest,
     tenantId?: number,
   ): Promise<PlotRecord> {
-    // Same shape mismatch as mapsService.updateMap: PUT returns
-    // { id, updated: true }, so re-fetch the parsed record.
-    await apiClient.put(`${tenantBase(tenantId)}/plots/${plotId}`, data);
-    return this.getPlot(plotId, tenantId);
+    const res = await apiClient.put(`${tenantBase(tenantId)}/plots/${plotId}`, data);
+    return PlotRecordSchema.parse(res.data);
   },
 
   async deletePlot(plotId: number, tenantId?: number): Promise<void> {

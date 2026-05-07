@@ -6,6 +6,26 @@ codebase stays internally consistent.
 
 ## Backend (C++)
 
+### POST/PUT response shape
+
+Write endpoints (POST creates, PUT updates) must return the same record
+shape as the corresponding GET endpoint, never a partial acknowledgment
+like `{ id, updated: true }`. The frontend's Zod schemas (e.g.
+`MapRecordSchema`, `NodeRecordSchema`, `PlotRecordSchema`) are shared
+between read and write paths; a partial response throws on parse and
+forces an awkward POST-then-GET round-trip in the service layer.
+
+The standard pattern is **INSERT/UPDATE → SELECT → respond with
+`rowToX(row)`** (or the inline equivalent). See
+`MapController::createMap` / `updateMap`,
+`PlotController::createPlot` / `updatePlot`,
+`NodeController::createNode`, and
+`VisibilityGroupController::createGroup` / `updateGroup` for examples.
+
+Endpoints that intentionally return a small acknowledgment (plot member
+add, visibility-group member add, node visibility set) are exempt —
+those aren't "create or update a record" semantically.
+
 ### Error responses
 
 All controllers emit errors as JSON via the shared helpers in
