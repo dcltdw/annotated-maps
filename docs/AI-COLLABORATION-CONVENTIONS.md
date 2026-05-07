@@ -52,6 +52,11 @@ agent instructions:
     a change touches code/config/schema, explicitly state what the user
     needs to restart (or "no restart needed") in the conversation report
     AND in a section of the PR body. Skip for doc-only / test-only PRs.
+14. **Every 10 PRs into a tracked branch (`main` and any long-running phase
+    branch), perform a midpoint audit:** doc+test audit of the divergence
+    range per §5a/§5b, plus trigger `weekend.yml` against the branch HEAD.
+    Each audited branch has a dedicated tracking issue; comment the audit
+    result there so the next audit knows where to start counting.
 
 ---
 
@@ -819,6 +824,85 @@ was added in response. The pattern generalizes: any change to what
 the running stack serves — including filesystem-level changes the
 agent makes — counts as operational impact and must be surfaced.
 
+### 14. Midpoint audits — every 10 PRs into a tracked branch
+
+> **Rule:** Every 10 PRs that land into a tracked branch (`main` and any
+> long-running phase branch), perform a doc+test audit of the
+> divergence range and trigger `weekend.yml` against the branch HEAD.
+> The agent runs this proactively when it notices the threshold is
+> crossed, before opening the next ticket.
+
+**Why:** §5 keeps each PR locally compliant on docs and tests, but
+cross-cutting docs (README, REQUIREMENTS, DEVELOPER-GUIDE) and
+integration-level coverage drift in aggregate. The closeout sweep on
+`nodes-rebuild` (PR #178) had to rewrite five top-level docs and add a
+missing E2E in a single PR because drift went uncaught for ~80 commits.
+A 10-PR cadence catches the same drift in ~8 smaller chunks.
+
+Audit cost scales with diff content — 10 typo fixes ≈ minutes; 10
+controller PRs ≈ longer — so the rule self-throttles. The ~20-min
+`weekend.yml` run fires unconditionally; the runtime cost is paid by
+GitHub Actions, not the user, and best practices apply to `main`
+regardless of whether a regression is "expected." Catching one
+pre-merge is far cheaper than debugging it post-merge.
+
+**How to apply:**
+
+Each audited branch has a dedicated tracking issue — the rebuild
+ticket for phase branches; for `main`, a permanent "Audit log: main"
+issue. The agent counts PRs merged since the most recent audit
+comment on that issue using:
+
+```bash
+git log --merges --grep="Merge pull request" <last-baseline-sha>..HEAD | wc -l
+```
+
+This project uses merge-commit merges exclusively (`git log --first-parent main`
+shows one merge commit per landed PR), so the grep matches every PR.
+If the project ever switches to squash-merging, replace with
+`git log --first-parent <last-baseline>..HEAD | wc -l`.
+
+At every 10 PRs:
+
+1. **Doc audit** — per §5a, for each PR in the window, list user-facing
+   docs that reference the changed area. Update README + REQUIREMENTS
+   + relevant `flow-*.md` / `howto-*.md` for any drift. Cross-check
+   the inventory tables in `docs/TESTING-*.md` against
+   `git ls-files backend/tests frontend/tests` to catch stale rows.
+
+2. **Test audit** — per §5b, for each new UI page or endpoint in the
+   window, confirm a Playwright spec exercises the primary flow; add
+   one if missing.
+
+3. **Long test** — `gh workflow run weekend.yml --ref <branch>`.
+
+4. **Bundle any deltas into one "midpoint audit" PR.** The long-test
+   run is evidence, not a deliverable — don't block the PR on it.
+
+When the audit completes, comment on the tracking issue:
+
+- audit point: `NN PRs (since <last-sha>)`
+- doc/test deltas: link to audit PR, or "none"
+- long test: ✅ / ❌ + run URL
+
+The next audit reads the most recent such comment to find its
+counting baseline.
+
+**Concurrent-agent races:** before starting an audit, scan the
+tracking issue for an in-progress audit comment posted in the last
+hour. If one exists, defer — the other agent will land it. The race
+window is small in practice (single-user, mostly serial sessions),
+and the worst case if the rule is skipped (two parallel `weekend.yml`
+runs and a duplicate audit PR) is annoyance, not damage. A full
+lease/TTL mechanism is overkill until this actually bites.
+
+**Bootstrapping:** The same PR that lands this rule also files the
+"Audit log: main" tracking issue and posts the first baseline comment
+("audit point: 0 PRs (since `<HEAD>`)") so the next agent has a
+counting anchor. For long-running branches that already exist, the
+audit issue is the rebuild's existing tracking ticket; retroactive
+baseline = the most recent `Merge main into <branch>` commit.
+
 ---
 
 ## Adapting these conventions to other projects
@@ -851,3 +935,8 @@ When porting to another project:
 - **Rule 12 (refresh stale caches)** transfers as a concept; the specific
   re-derive commands depend on what type of cache value is at stake (project
   board IDs, file paths, external service IDs, etc.).
+- **Rule 14 (midpoint audits)** assumes GitHub Actions (`weekend.yml` via
+  `gh workflow run`) and the merge-commit counting recipe assumes
+  merge-commit merges. Adapt the workflow trigger and counting recipe to
+  the target project's CI system and merge style. The cadence (every 10
+  PRs) and the tracking-issue mechanic transfer directly.
