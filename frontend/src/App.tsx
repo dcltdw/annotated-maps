@@ -11,6 +11,7 @@ const MapListPage          = lazy(() => import('@/pages/MapListPage').then((m)  
 const MapDetailPage        = lazy(() => import('@/pages/MapDetailPage').then((m)        => ({ default: m.MapDetailPage })));
 const VisibilityGroupsPage = lazy(() => import('@/pages/VisibilityGroupsPage').then((m) => ({ default: m.VisibilityGroupsPage })));
 const PlotsPage            = lazy(() => import('@/pages/PlotsPage').then((m)            => ({ default: m.PlotsPage })));
+const TenantAdminPage      = lazy(() => import('@/pages/TenantAdminPage').then((m)      => ({ default: m.TenantAdminPage })));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -77,6 +78,16 @@ export default function App() {
                 element={
                   <PrivateRoute>
                     <PlotsPage />
+                  </PrivateRoute>
+                }
+              />
+
+              {/* Tenant-admin (#163 branding; #162 members to follow) */}
+              <Route
+                path="/tenants/:tenantId/admin"
+                element={
+                  <PrivateRoute>
+                    <TenantAdminPage />
                   </PrivateRoute>
                 }
               />
