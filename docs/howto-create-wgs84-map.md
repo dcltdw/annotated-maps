@@ -32,6 +32,10 @@ floor plan, an empty whiteboard), see
 That's it — the map is ready for locations (placeable points, lines, polygons), notes,
 plots, and visibility tagging.
 
+To rename, edit the description, or delete the map later, use the **⋯**
+menu on the map's card on the **My Maps** page (Edit modal / Delete confirm
+landed in #160).
+
 ## What the UI sends to the backend
 
 The form constructs this `CreateMapRequest`:
@@ -48,8 +52,9 @@ The form constructs this `CreateMapRequest`:
 }
 ```
 
-You can change the saved center / zoom later by panning the map and using
-**Save view** *(if exposed in your build)* or via direct API call (below).
+The saved center / zoom can be changed later via the API (`PUT /maps/{id}`)
+— see the API call below for the request shape. A "Save current view"
+UI affordance hasn't shipped yet (tracked separately).
 
 ## Steps (API — for scripts, tests, or non-default centers)
 

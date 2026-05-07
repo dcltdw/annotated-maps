@@ -13,12 +13,12 @@ sequenceDiagram
     participant DB as MySQL
 
     User->>ML: clicks "+ New Map", fills title/description, submits
-    ML->>ML: build CreateMapRequest<br/>{title, description, centerLat:0, centerLng:0, zoom:3}
+    ML->>ML: build CreateMapRequest<br/>{title, description,<br/>coordinateSystem: {type:"wgs84",<br/>center:{lat:0,lng:0}, zoom:3}}
 
     ML->>UM: createMap(data)
     UM->>MS: mapsService.createMap(data)
     MS->>MS: tenantBase() → reads authStore.tenantId
-    MS->>AX: POST /api/v1/tenants/{tenantId}/maps<br/>{title, description, centerLat, centerLng, zoom}
+    MS->>AX: POST /api/v1/tenants/{tenantId}/maps<br/>{title, description, coordinateSystem}
 
     Note over AX: Axios interceptor attaches<br/>Authorization: Bearer {token}
 
@@ -56,14 +56,17 @@ sequenceDiagram
     TF->>TF: inject into req attributes:<br/>tenantId, tenantRole
     TF->>MC: nextCb()
 
-    MC->>MC: read userId from req attributes<br/>read title, description, centerLat,<br/>centerLng, zoom from JSON body
+    MC->>MC: read userId from req attributes<br/>read title, description from JSON body<br/>validate coordinateSystem (wgs84|pixel|blank)<br/>serialize coordinate_system to JSON string
 
-    MC->>DB: INSERT INTO maps<br/>(owner_id={userId}, tenant_id={tenantId},<br/>title, description, center_lat, center_lng, zoom)
+    MC->>DB: INSERT INTO maps<br/>(owner_id={userId}, tenant_id={tenantId},<br/>title, description, coordinate_system, owner_xray=false)
     DB-->>MC: newMapId (insertId)
 
-    MC-->>AX: 201 {id, ownerId, tenantId, title,<br/>description, centerLat, centerLng,<br/>zoom, permission:"owner"}
+    MC->>DB: SELECT id, owner_id, owner_username, title,<br/>description, coordinate_system, owner_xray,<br/>created_at, updated_at FROM maps WHERE id={newMapId}
+    DB-->>MC: full row
+
+    MC-->>AX: 201 {id, ownerId, ownerUsername, title,<br/>description, coordinateSystem, ownerXray,<br/>createdAt, updatedAt, permission:"owner"}
     AX-->>MS: AxiosResponse
-    MS-->>UM: MapRecord
+    MS-->>UM: MapRecord (Zod-parsed via MapRecordSchema)
 
     UM->>UM: mapStore.setMaps([...maps, newMap])
     UM-->>ML: MapRecord

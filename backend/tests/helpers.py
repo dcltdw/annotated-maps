@@ -89,6 +89,38 @@ def assert_true(test_name: str, condition: bool, detail: str = ""):
         _errors.append(msg)
 
 
+def assert_error_shape(test_name: str, body: dict, expected_code: str = None):
+    """
+    Verify a 4xx/5xx response body matches the project's standard error shape:
+    `{"error": "<code>", "message": "<text>"}`. Both fields must be present
+    non-empty strings. If `expected_code` is given, also verify the `error`
+    field equals that value.
+
+    Used to catch controllers that accidentally return a different structure
+    (e.g., {"detail": "..."}) — the frontend's `extractApiError()` depends
+    on this exact shape, so any drift would silently downgrade UI errors to
+    the generic fallback message.
+    """
+    global _passed, _failed
+    if not isinstance(body, dict):
+        msg = f"FAIL: {test_name} — body is not a dict, got {type(body).__name__}"
+        print(msg); _failed += 1; _errors.append(msg); return
+    has_error = isinstance(body.get("error"), str) and body["error"]
+    has_message = isinstance(body.get("message"), str) and body["message"]
+    if not has_error:
+        msg = f"FAIL: {test_name} — missing or empty 'error' field; got {body!r}"
+        print(msg); _failed += 1; _errors.append(msg); return
+    if not has_message:
+        msg = f"FAIL: {test_name} — missing or empty 'message' field; got {body!r}"
+        print(msg); _failed += 1; _errors.append(msg); return
+    if expected_code is not None and body["error"] != expected_code:
+        msg = (f"FAIL: {test_name} — expected error code '{expected_code}', "
+               f"got '{body['error']}' (message: {body.get('message')!r})")
+        print(msg); _failed += 1; _errors.append(msg); return
+    print(f"PASS: {test_name}")
+    _passed += 1
+
+
 # ─── HTTP helpers ─────────────────────────────────────────────────────────────
 
 def _request(method: str, path: str, data: dict = None, token: str = None) -> tuple:
