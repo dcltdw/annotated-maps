@@ -27,7 +27,8 @@ annotated-maps/
 │   │   ├── components/    Map, Tree, Detail, Visibility, Auth, Layout
 │   │   ├── hooks/
 │   │   ├── pages/         MapListPage, MapDetailPage, PlotsPage,
-│   │   │                  VisibilityGroupsPage, SsoCallbackPage
+│   │   │                  VisibilityGroupsPage, TenantAdminPage,
+│   │   │                  TenantMembersPage, SsoCallbackPage
 │   │   ├── services/      REST API clients (auth, maps + nested resources)
 │   │   ├── store/         Zustand stores (auth, map)
 │   │   ├── types/         Hand-written types not yet covered by Zod
