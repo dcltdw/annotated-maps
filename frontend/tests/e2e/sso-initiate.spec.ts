@@ -14,7 +14,7 @@ test.describe('SSO initiate (#167)', () => {
 
     // Initial state: only the email/password form is visible; SSO button shown
     await expect(page.getByLabel(/organization slug/i)).toHaveCount(0);
-    const ssoButton = page.getByRole('button', { name: /sign in with sso/i });
+    const ssoButton = page.getByRole('button', { name: /use sso/i });
     await expect(ssoButton).toBeVisible();
 
     // Click "Sign in with SSO" → org-slug form appears, password form stays
@@ -25,7 +25,7 @@ test.describe('SSO initiate (#167)', () => {
     // Cancel returns to the initial state
     await page.getByRole('button', { name: /^cancel$/i }).click();
     await expect(page.getByLabel(/organization slug/i)).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /sign in with sso/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /use sso/i })).toBeVisible();
   });
 
   test('submitting an org slug navigates to the backend SSO initiate URL', async ({ page }) => {
@@ -40,7 +40,7 @@ test.describe('SSO initiate (#167)', () => {
     });
 
     await page.goto('/login');
-    await page.getByRole('button', { name: /sign in with sso/i }).click();
+    await page.getByRole('button', { name: /use sso/i }).click();
     await page.getByLabel(/organization slug/i).fill('acme-corp');
     await page.getByRole('button', { name: /continue to sso/i }).click();
 
@@ -51,7 +51,7 @@ test.describe('SSO initiate (#167)', () => {
 
   test('empty org-slug submit is blocked by the disabled button', async ({ page }) => {
     await page.goto('/login');
-    await page.getByRole('button', { name: /sign in with sso/i }).click();
+    await page.getByRole('button', { name: /use sso/i }).click();
     await expect(
       page.getByRole('button', { name: /continue to sso/i }),
     ).toBeDisabled();

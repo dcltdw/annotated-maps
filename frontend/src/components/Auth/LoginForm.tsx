@@ -80,7 +80,7 @@ export function LoginForm() {
             className="btn btn-ghost btn-full"
             onClick={() => setShowSso(true)}
           >
-            Sign in with SSO
+            Use SSO
           </button>
         ) : (
           <form onSubmit={handleSsoSubmit} className="auth-form auth-sso-form">
