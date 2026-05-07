@@ -286,6 +286,7 @@ See [docs/TESTING-BACKEND.md](docs/TESTING-BACKEND.md),
 | [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) | Full requirements specification |
 | [docs/DEVELOPER-GUIDE.md](docs/DEVELOPER-GUIDE.md) | Backend + frontend conventions |
 | [docs/SECURITY-AUDIT.md](docs/SECURITY-AUDIT.md) | Security audit with open findings |
+| [docs/SECURITY-AUDIT-NODES-REBUILD.md](docs/SECURITY-AUDIT-NODES-REBUILD.md) | Post-nodes-rebuild audit findings (#46) |
 | [docs/SETUP-LOCAL-DEV.md](docs/SETUP-LOCAL-DEV.md) | Local development setup with test data |
 | [docs/TESTING-BACKEND.md](docs/TESTING-BACKEND.md) | Backend test tiers and usage |
 | [docs/TESTING-E2E.md](docs/TESTING-E2E.md) | Playwright E2E suite |

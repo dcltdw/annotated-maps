@@ -4,6 +4,7 @@
 **Audit date:** 2026-04-17
 **Previous audit:** 2026-03-31
 **Scope:** Full codebase — backend (C++/Drogon), frontend (React/TypeScript), database (MySQL), infrastructure (Docker). Post-refactor clean-sheet audit.
+**Subsequent focused audits:** [`SECURITY-AUDIT-NODES-REBUILD.md`](SECURITY-AUDIT-NODES-REBUILD.md) (2026-05-06, post-nodes-rebuild, #46).
 
 ---
 
