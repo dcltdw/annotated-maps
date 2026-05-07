@@ -261,6 +261,7 @@ void TenantController::addMember(
 
     int         targetUserId = (*body)["userId"].asInt();
     std::string role         = (*body)["role"].asString();
+    int         callerId     = req->getAttributes()->get<int>("userId");
 
     if (role != "admin" && role != "editor" && role != "viewer") {
         auto resp = drogon::HttpResponse::newHttpJsonResponse(
@@ -270,55 +271,86 @@ void TenantController::addMember(
         return;
     }
 
-    // Verify target user is in the same org as this tenant
-    auto db = drogon::app().getDbClient();
-    db->execSqlAsync(
-        "SELECT u.id FROM users u "
-        "JOIN tenants t ON t.org_id = u.org_id "
-        "WHERE t.id = ? AND u.id = ? LIMIT 1",
-        [callback, req, tenantId, targetUserId, role](const drogon::orm::Result& r) {
-            if (r.empty()) {
-                auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                    errorJson("bad_request", "Target user is not in this organization"));
-                resp->setStatusCode(drogon::k400BadRequest);
-                callback(resp);
-                return;
-            }
-
-            int callerId = 0;
-            try { callerId = req->getAttributes()->get<int>("userId"); } catch (...) {}
-
-            auto db2 = drogon::app().getDbClient();
-            db2->execSqlAsync(
-                "INSERT INTO tenant_members (tenant_id, user_id, role) "
-                "VALUES (?,?,?) "
-                "ON DUPLICATE KEY UPDATE role=VALUES(role)",
-                [callback, req, callerId, tenantId, targetUserId, role](const drogon::orm::Result&) {
-                    Json::Value detail; detail["role"] = role;
-                    AuditLog::record("member_add", req, callerId, targetUserId, tenantId, detail);
-                    Json::Value v;
-                    v["userId"] = targetUserId;
-                    v["role"]   = role;
-                    v["added"]  = true;
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(v);
-                    resp->setStatusCode(drogon::k201Created);
-                    callback(resp);
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
+    // Continuation: existing org-membership check + INSERT/UPDATE.
+    auto proceed = [callback, req, tenantId, callerId, targetUserId, role]() {
+        auto dbInner = drogon::app().getDbClient();
+        dbInner->execSqlAsync(
+            "SELECT u.id FROM users u "
+            "JOIN tenants t ON t.org_id = u.org_id "
+            "WHERE t.id = ? AND u.id = ? LIMIT 1",
+            [callback, req, tenantId, callerId, targetUserId, role](const drogon::orm::Result& r) {
+                if (r.empty()) {
                     auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                        errorJson("db_error", "Failed to add member"));
-                    resp->setStatusCode(drogon::k500InternalServerError);
+                        errorJson("bad_request", "Target user is not in this organization"));
+                    resp->setStatusCode(drogon::k400BadRequest);
                     callback(resp);
-                },
-                tenantId, targetUserId, role);
-        },
-        [callback](const drogon::orm::DrogonDbException&) {
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson("db_error", "Database error"));
-            resp->setStatusCode(drogon::k500InternalServerError);
-            callback(resp);
-        },
-        tenantId, targetUserId);
+                    return;
+                }
+                auto db2 = drogon::app().getDbClient();
+                db2->execSqlAsync(
+                    "INSERT INTO tenant_members (tenant_id, user_id, role) "
+                    "VALUES (?,?,?) "
+                    "ON DUPLICATE KEY UPDATE role=VALUES(role)",
+                    [callback, req, callerId, tenantId, targetUserId, role](const drogon::orm::Result&) {
+                        Json::Value detail; detail["role"] = role;
+                        AuditLog::record("member_add", req, callerId, targetUserId, tenantId, detail);
+                        Json::Value v;
+                        v["userId"] = targetUserId;
+                        v["role"]   = role;
+                        v["added"]  = true;
+                        auto resp = drogon::HttpResponse::newHttpJsonResponse(v);
+                        resp->setStatusCode(drogon::k201Created);
+                        callback(resp);
+                    },
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                            errorJson("db_error", "Failed to add member"));
+                        resp->setStatusCode(drogon::k500InternalServerError);
+                        callback(resp);
+                    },
+                    tenantId, targetUserId, role);
+            },
+            [callback](const drogon::orm::DrogonDbException&) {
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                    errorJson("db_error", "Database error"));
+                resp->setStatusCode(drogon::k500InternalServerError);
+                callback(resp);
+            },
+            tenantId, targetUserId);
+    };
+
+    // Self-demote guard: if the caller is targeting themselves with a
+    // non-admin role and they're the only admin, refuse — there's no
+    // API-only path to recover (removeMember blocks self-removal, no
+    // role-change endpoint exists), so the tenant would be orphaned.
+    if (targetUserId == callerId && role != "admin") {
+        auto db = drogon::app().getDbClient();
+        db->execSqlAsync(
+            "SELECT COUNT(*) AS c FROM tenant_members "
+            "WHERE tenant_id = ? AND role = 'admin'",
+            [callback, proceed](const drogon::orm::Result& r) {
+                int adminCount = r[0]["c"].as<int>();
+                if (adminCount <= 1) {
+                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                        errorJson("bad_request",
+                            "Cannot demote the last admin; promote another admin first"));
+                    resp->setStatusCode(drogon::k400BadRequest);
+                    callback(resp);
+                    return;
+                }
+                proceed();
+            },
+            [callback](const drogon::orm::DrogonDbException&) {
+                auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                    errorJson("db_error", "Database error"));
+                resp->setStatusCode(drogon::k500InternalServerError);
+                callback(resp);
+            },
+            tenantId);
+        return;
+    }
+
+    proceed();
 }
 
 // ─── DELETE /api/v1/tenants/{tenantId}/members/{userId} ───────────────────────
