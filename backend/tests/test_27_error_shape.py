@@ -15,7 +15,6 @@ identified the codes in use; this test pins them as a contract.
 
 import os
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -122,26 +121,12 @@ status, body = http_get(f"/tenants/{A_TENANT}/maps", "Bearer not-a-jwt")
 assert_status("bogus token → 401", 401, status)
 assert_error_shape("bogus token: error shape", body)
 
-print("  --- shape on rate-limit (429) ---")
-
-# Burst the auth-login bucket until 429 fires; assert shape on the 429.
-# RateLimitFilter is its own emitter — separate from errorResponse — so this
-# is the most likely place the shape could drift unnoticed.
-got_429_shape = False
-for i in range(120):
-    status, body = http_post("/auth/login", {
-        "email": A_EMAIL, "password": "wrongpassword",
-    }, None)
-    if status == 429:
-        assert_error_shape("rate-limit 429: error shape", body)
-        got_429_shape = True
-        break
-
-if not got_429_shape:
-    # Bucket may already be empty + window long; record but don't fail —
-    # other tests that explicitly exercise rate limiting (test_06) cover
-    # the 429 emission path itself.
-    print("PASS: rate-limit 429: bucket didn't trigger in this run "
-          "(non-fatal; covered by test_06 emission test)")
+# Note: rate-limit 429 shape coverage lives in test_06_rate_limit_fast.py
+# (where saturation already happens, and the runner correctly restarts
+# the backend before the next NEEDS_RESTART test, leaving downstream
+# tests with a clean bucket). Saturating here instead would leave the
+# bucket full for the rest of the fast tier and break the post-suite
+# E2E run on registration-form flows that don't have the
+# `registerViaApi` retry-on-429 wrapper.
 
 sys.exit(0 if report() else 1)
