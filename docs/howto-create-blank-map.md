@@ -79,7 +79,12 @@ After creation:
 
 1. Navigate to `/tenants/${TENANT_ID}/maps/${id}` in the browser
 2. You should see an empty bordered canvas (no image, no tile layer)
-3. Add a location via the API or by clicking on the canvas (once #128's UI
-   is wired). Confirm it renders at the expected position
+3. Add a location via the API or via the **+ Location** button in the
+   node tree panel (click-on-canvas placement is tracked in #153 and
+   not yet wired). Confirm it renders at the expected position
 4. Pan around — the visible area should clamp to the extent's bounds; you
    shouldn't be able to scroll into "negative space"
+
+To rename, edit the description, or delete the map later, use the **⋯**
+menu on the map's card on the **My Maps** page (Edit modal / Delete confirm
+landed in #160).
