@@ -316,6 +316,34 @@ shape). If truly nothing needs updating, **say so explicitly** in the PR
 description — e.g., "No docs/tests updated — refactor preserves behavior
 exactly and no convention docs exist yet."
 
+**Two specific gaps the "alongside" wording does NOT catch by default —
+treat both as binding extensions of this rule:**
+
+**5a. Cross-cutting docs when adding a new top-level concept.** Adding a
+new entity (node, plot, visibility group), a new admin page, a new domain
+primitive, or a new top-level API surface — the SAME PR must update
+**README.md** (project structure, API table, domain concepts) and
+**docs/REQUIREMENTS.md** (the §2 capability list and §5 route tables) for
+anything those docs name. Each individual sub-PR may feel narrowly scoped
+("I'm just adding NodeController"), but README/REQUIREMENTS describe the
+whole system; if no one updates them per-PR, they rot in aggregate. This
+is what produced the multi-doc rewrite in PR #178 at the end of the
+nodes-rebuild branch — every sub-PR was *locally* compliant with §5; the
+system was *globally* non-compliant because no one owned the cross-cutting
+docs.
+
+**5b. New CRUD / admin pages need an E2E spec in the same PR.** Backend
+integration tests verify the API contract; they do not verify the
+frontend Zod parse, the modal wiring, or that the create-then-list
+roundtrip actually works in a browser. PR #178 surfaced a
+`createGroup`/`updateGroup` response-shape bug that backend
+`test_18_visibility_groups.py` had silently ignored for months because it
+asserted on a subset of fields and the only path that exercises the full
+schema (Zod `.parse()` on the modal save response) had no E2E coverage.
+When a PR adds a new page that does CRUD on an entity through the UI,
+ship a Playwright spec covering at minimum: create → list → edit → delete
+through the UI, asserting the response renders without error.
+
 **Verify lint/typecheck per-file on the touched files**, not just by
 running the project-wide command. ESLint's daemon and watcher caches can
 hold a stale "clean" answer for a recently-touched file, so a project-
