@@ -9,8 +9,10 @@ INSERT INTO organizations (id, name, slug) VALUES (70, 'TrigOrg', 'trig');
 INSERT INTO tenants (id, org_id, name, slug) VALUES (70, 70, 'TrigTenant', 'trig');
 INSERT INTO users (id, username, email, password_hash, org_id, status)
     VALUES (70, 'trig_user', 'trig@test.com', NULL, 70, 'active');
-INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (70, 70, 70, 'TrigMap');
-INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (71, 70, 70, 'TrigMap2');
+INSERT INTO maps (id, owner_id, tenant_id, title, coordinate_system)
+    VALUES (70, 70, 70, 'TrigMap',  '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
+INSERT INTO maps (id, owner_id, tenant_id, title, coordinate_system)
+    VALUES (71, 70, 70, 'TrigMap2', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 
 -- ─── Test: first public row is accepted ──────────────────────────────────────
 

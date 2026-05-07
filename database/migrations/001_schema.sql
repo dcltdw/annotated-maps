@@ -1,10 +1,26 @@
--- Migration 001: Core schema (consolidated)
+-- Migration 001: Core schema (nodes-rebuild edition)
 --
--- This file represents the complete schema after consolidation of the
--- incremental migrations 001-007 that existed during pre-release
--- development. Since the project has no deployed databases, we rebuilt
--- the schema from scratch in final form instead of carrying ALTER TABLE
--- history forward. See #44 for the consolidation rationale.
+-- This file represents the complete schema after the nodes-rebuild
+-- effort (see #82 and the long-running `nodes-rebuild` branch). Since
+-- the project has no deployed databases, the schema is rebuilt from
+-- scratch in final form on each branch rather than carrying ALTER TABLE
+-- history forward. See #44 for the original consolidation rationale.
+--
+-- High-level model:
+--   * `nodes` form a tree (parent_id) on a map. Each node has optional
+--     GeoJSON geometry (point/polyline/polygon), a name, description,
+--     color, and a visibility-override flag. They replace the old
+--     `annotations` table and add hierarchy.
+--   * `notes` attach to a node (no own coordinates). Inherit position
+--     and (in later phases) visibility from the attached node.
+--   * `visibility_groups` are tenant-scoped, generic audiences. Nodes
+--     and notes are tagged with N visibility groups (multi-tag).
+--     Visibility cascades up the node tree via NULL-fallthrough.
+--   * `plots` are tenant-scoped narrative groupings, many-to-many to
+--     both nodes and notes via two parallel junction tables.
+--   * Maps carry a `coordinate_system` JSON column so the geometry
+--     numbers in nodes can mean different things (WGS84 lat/lng,
+--     image pixels, blank canvas) — see Phase 2f for backdrop work.
 --
 -- Audit log lives in 002_audit_log.sql (separate lifecycle).
 -- Dev seed data is in database/seed-local-dev.{sql,py}, not in migrations.
@@ -123,19 +139,29 @@ CREATE TABLE IF NOT EXISTS org_members (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ─── Maps ─────────────────────────────────────────────────────────────────────
+-- `coordinate_system` is a JSON config that tells the frontend how to
+-- render the map and what the geometry numbers in `nodes.geo_json` mean.
+-- Validated at the API layer; expected shapes:
+--   { "type": "wgs84", "center": {"lat", "lng"}, "zoom": N }
+--   { "type": "pixel", "image_url", "width", "height", "viewport": {x, y, zoom} }
+--   { "type": "blank", "extent": {x, y} }
+--
+-- `owner_xray` (default FALSE) is an opt-in toggle so map owners can
+-- bypass node-visibility filtering when they need to see hidden content
+-- (e.g., a GM testing what's set up before a session). Off by default
+-- so the owner gets the same view as everyone else.
 
 CREATE TABLE IF NOT EXISTS maps (
-    id          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
-    owner_id    BIGINT UNSIGNED  NOT NULL,
-    tenant_id   BIGINT UNSIGNED  NOT NULL,
-    title       VARCHAR(255)     NOT NULL,
-    description TEXT,
-    center_lat  DECIMAL(10, 7)   NOT NULL DEFAULT 0.0,
-    center_lng  DECIMAL(10, 7)   NOT NULL DEFAULT 0.0,
-    zoom        TINYINT UNSIGNED NOT NULL DEFAULT 3,
-    created_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          ON UPDATE CURRENT_TIMESTAMP,
+    id                BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+    owner_id          BIGINT UNSIGNED  NOT NULL,
+    tenant_id         BIGINT UNSIGNED  NOT NULL,
+    title             VARCHAR(255)     NOT NULL,
+    description       TEXT,
+    coordinate_system JSON             NOT NULL,
+    owner_xray        BOOLEAN          NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
     KEY idx_maps_owner   (owner_id),
@@ -210,103 +236,249 @@ END$$
 
 DELIMITER ;
 
--- ─── Annotations ──────────────────────────────────────────────────────────────
+-- ─── Visibility Groups ────────────────────────────────────────────────────────
+-- Tenant-scoped, generic audiences. No "GM" / "Player" baked in — each
+-- tenant defines its own audience names. A node or note tagged with N
+-- groups is visible to a user who is a member of *any* of those groups
+-- (multi-tag, OR semantics).
+--
+-- `manages_visibility = TRUE` means members of this group can manage
+-- (CRUD) any visibility group in the tenant, in addition to tenant
+-- admins. Bootstrapped per-tenant — see Phase 2b.i for the bootstrap
+-- behavior.
+--
+-- This table is declared here so node_visibility / note_visibility FKs
+-- below resolve. Phase 2b.i fills in the controller and bootstrap.
 
-CREATE TABLE IF NOT EXISTS annotations (
-    id          BIGINT UNSIGNED                     NOT NULL AUTO_INCREMENT,
-    map_id      BIGINT UNSIGNED                     NOT NULL,
-    created_by  BIGINT UNSIGNED                     NOT NULL,
-    type        ENUM('marker','polyline','polygon')  NOT NULL,
-    title       VARCHAR(255)                        NOT NULL,
-    description TEXT,
-    geo_json    JSON                                NOT NULL,
-    created_at  TIMESTAMP                           NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP                           NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                                             ON UPDATE CURRENT_TIMESTAMP,
+CREATE TABLE IF NOT EXISTS visibility_groups (
+    id                  BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    tenant_id           BIGINT UNSIGNED NOT NULL,
+    name                VARCHAR(255)    NOT NULL,
+    description         TEXT                     DEFAULT NULL,
+    manages_visibility  BOOLEAN         NOT NULL DEFAULT FALSE,
+    created_by          BIGINT UNSIGNED NOT NULL,
+    created_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                 ON UPDATE CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    KEY idx_ann_map     (map_id),
-    KEY idx_ann_creator (created_by),
-    KEY idx_ann_updated (updated_at),
+    UNIQUE KEY uq_vg_tenant_name (tenant_id, name),
+    KEY idx_vg_tenant            (tenant_id),
 
-    CONSTRAINT fk_ann_map
+    CONSTRAINT fk_vg_tenant
+        FOREIGN KEY (tenant_id)  REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT fk_vg_creator
+        FOREIGN KEY (created_by) REFERENCES users   (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS visibility_group_members (
+    visibility_group_id BIGINT UNSIGNED NOT NULL,
+    user_id             BIGINT UNSIGNED NOT NULL,
+    joined_at           TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (visibility_group_id, user_id),
+    KEY idx_vgm_user (user_id),
+
+    CONSTRAINT fk_vgm_group
+        FOREIGN KEY (visibility_group_id) REFERENCES visibility_groups (id) ON DELETE CASCADE,
+    CONSTRAINT fk_vgm_user
+        FOREIGN KEY (user_id)             REFERENCES users             (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Nodes ────────────────────────────────────────────────────────────────────
+-- The new central abstraction. Replaces the old `annotations` table and
+-- adds hierarchy. Each node lives on a map, has an optional GeoJSON
+-- geometry of any type (NULL = tree-only, no map presence), and may
+-- have a parent node for tree structure.
+--
+-- `parent_id` must reference a node on the same map (enforced at the
+-- application layer; MySQL doesn't easily express cross-row CHECKs).
+--
+-- `visibility_override`:
+--   FALSE  → effective visibility inherits from parent (recursive walk
+--            up parent_id chain until a node with override = TRUE; if
+--            none found, falls back to "admin-only" — i.e., the empty
+--            visibility group set).
+--   TRUE   → effective visibility is exactly this node's `node_visibility`
+--            rows. An empty set = explicit "admin-only".
+-- (Phase 2b.ii wires up the filtering; this column ships in 2a.i.)
+--
+-- Tree depth ceiling: enforced at the application layer (~20 levels).
+-- The recursive visibility walk and Phase 2d's subtree CTE both bound
+-- their recursion against this.
+
+CREATE TABLE IF NOT EXISTS nodes (
+    id                   BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+    map_id               BIGINT UNSIGNED  NOT NULL,
+    parent_id            BIGINT UNSIGNED           DEFAULT NULL,
+    name                 VARCHAR(255)     NOT NULL,
+    geo_json             JSON                      DEFAULT NULL,
+    description          TEXT                      DEFAULT NULL,
+    color                VARCHAR(9)                DEFAULT NULL,
+    visibility_override  BOOLEAN          NOT NULL DEFAULT FALSE,
+    created_by           BIGINT UNSIGNED  NOT NULL,
+    created_at           TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                   ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_nodes_map     (map_id),
+    KEY idx_nodes_parent  (parent_id),
+    KEY idx_nodes_creator (created_by),
+
+    CONSTRAINT fk_nodes_map
         FOREIGN KEY (map_id)     REFERENCES maps  (id) ON DELETE CASCADE,
-    CONSTRAINT fk_ann_creator
+    CONSTRAINT fk_nodes_parent
+        FOREIGN KEY (parent_id)  REFERENCES nodes (id) ON DELETE CASCADE,
+    CONSTRAINT fk_nodes_creator
         FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ─── Annotation Media ─────────────────────────────────────────────────────────
+-- ─── Node Visibility (junction) ──────────────────────────────────────────────
+-- A node tagged with N visibility groups. See `nodes.visibility_override`
+-- for inheritance semantics. Filtering wired up in Phase 2b.ii.
 
-CREATE TABLE IF NOT EXISTS annotation_media (
+CREATE TABLE IF NOT EXISTS node_visibility (
+    node_id              BIGINT UNSIGNED NOT NULL,
+    visibility_group_id  BIGINT UNSIGNED NOT NULL,
+
+    PRIMARY KEY (node_id, visibility_group_id),
+    KEY idx_nv_group (visibility_group_id),
+
+    CONSTRAINT fk_nv_node
+        FOREIGN KEY (node_id)             REFERENCES nodes             (id) ON DELETE CASCADE,
+    CONSTRAINT fk_nv_group
+        FOREIGN KEY (visibility_group_id) REFERENCES visibility_groups (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Notes ────────────────────────────────────────────────────────────────────
+-- Lightweight text content attached to a node. No own coordinates —
+-- inherits position from `node_id`. Inherits visibility from its node
+-- by default; can override per-note (Phase 2b.iii wires up filtering).
+
+CREATE TABLE IF NOT EXISTS notes (
+    id                   BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+    node_id              BIGINT UNSIGNED  NOT NULL,
+    created_by           BIGINT UNSIGNED  NOT NULL,
+    title                VARCHAR(255)              DEFAULT NULL,
+    text                 TEXT             NOT NULL,
+    pinned               BOOLEAN          NOT NULL DEFAULT FALSE,
+    color                VARCHAR(9)                DEFAULT NULL,
+    visibility_override  BOOLEAN          NOT NULL DEFAULT FALSE,
+    created_at           TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                                   ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_notes_node    (node_id),
+    KEY idx_notes_creator (created_by),
+    FULLTEXT idx_notes_text (title, text),
+
+    CONSTRAINT fk_notes_node
+        FOREIGN KEY (node_id)    REFERENCES nodes (id) ON DELETE CASCADE,
+    CONSTRAINT fk_notes_creator
+        FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Note Visibility (junction) ──────────────────────────────────────────────
+-- Same shape as node_visibility. Inheritance walks: note → its node →
+-- node's parent chain. Filtering wired up in Phase 2b.iii.
+
+CREATE TABLE IF NOT EXISTS note_visibility (
+    note_id              BIGINT UNSIGNED NOT NULL,
+    visibility_group_id  BIGINT UNSIGNED NOT NULL,
+
+    PRIMARY KEY (note_id, visibility_group_id),
+    KEY idx_notev_group (visibility_group_id),
+
+    CONSTRAINT fk_notev_note
+        FOREIGN KEY (note_id)             REFERENCES notes             (id) ON DELETE CASCADE,
+    CONSTRAINT fk_notev_group
+        FOREIGN KEY (visibility_group_id) REFERENCES visibility_groups (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Plots ────────────────────────────────────────────────────────────────────
+-- Tenant-scoped narrative groupings. Many-to-many to both nodes and
+-- notes via two parallel junction tables (clean FKs, no discriminator).
+-- Phase 2c wires up the controller; this ticket just lays the schema.
+
+CREATE TABLE IF NOT EXISTS plots (
+    id          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
+    tenant_id   BIGINT UNSIGNED  NOT NULL,
+    name        VARCHAR(255)     NOT NULL,
+    description TEXT                      DEFAULT NULL,
+    created_by  BIGINT UNSIGNED  NOT NULL,
+    created_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
+                                          ON UPDATE CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY idx_plots_tenant (tenant_id),
+
+    CONSTRAINT fk_plots_tenant
+        FOREIGN KEY (tenant_id)  REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT fk_plots_creator
+        FOREIGN KEY (created_by) REFERENCES users   (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS plot_nodes (
+    plot_id BIGINT UNSIGNED NOT NULL,
+    node_id BIGINT UNSIGNED NOT NULL,
+
+    PRIMARY KEY (plot_id, node_id),
+    KEY idx_pn_node (node_id),
+
+    CONSTRAINT fk_pn_plot
+        FOREIGN KEY (plot_id) REFERENCES plots (id) ON DELETE CASCADE,
+    CONSTRAINT fk_pn_node
+        FOREIGN KEY (node_id) REFERENCES nodes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS plot_notes (
+    plot_id BIGINT UNSIGNED NOT NULL,
+    note_id BIGINT UNSIGNED NOT NULL,
+
+    PRIMARY KEY (plot_id, note_id),
+    KEY idx_pnn_note (note_id),
+
+    CONSTRAINT fk_pnn_plot
+        FOREIGN KEY (plot_id) REFERENCES plots (id) ON DELETE CASCADE,
+    CONSTRAINT fk_pnn_note
+        FOREIGN KEY (note_id) REFERENCES notes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ─── Node Media ──────────────────────────────────────────────────────────────
+-- Image / link attachments on a node. Phase 2a.iii wires up the controller.
+
+CREATE TABLE IF NOT EXISTS node_media (
     id            BIGINT UNSIGNED      NOT NULL AUTO_INCREMENT,
-    annotation_id BIGINT UNSIGNED      NOT NULL,
+    node_id       BIGINT UNSIGNED      NOT NULL,
     media_type    ENUM('image','link') NOT NULL,
     url           VARCHAR(2048)        NOT NULL,
     caption       VARCHAR(512)                  DEFAULT NULL,
     created_at    TIMESTAMP            NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    KEY idx_media_annotation (annotation_id),
+    KEY idx_nodemedia_node (node_id),
 
-    CONSTRAINT fk_media_annotation
-        FOREIGN KEY (annotation_id) REFERENCES annotations (id) ON DELETE CASCADE
+    CONSTRAINT fk_nodemedia_node
+        FOREIGN KEY (node_id) REFERENCES nodes (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ─── Note Groups ──────────────────────────────────────────────────────────────
--- Named categories for organizing notes, displayed as tabs in the UI.
--- Must be declared before `notes` so the FK below can reference it.
+-- ─── Note Media ──────────────────────────────────────────────────────────────
+-- Image / link attachments on a note. Same shape as node_media. Phase 2a.iii.
 
-CREATE TABLE IF NOT EXISTS note_groups (
-    id          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
-    map_id      BIGINT UNSIGNED  NOT NULL,
-    name        VARCHAR(255)     NOT NULL,
-    description TEXT                      DEFAULT NULL,
-    color       VARCHAR(9)                DEFAULT NULL,
-    sort_order  INT              NOT NULL DEFAULT 0,
-    created_by  BIGINT UNSIGNED  NOT NULL,
-    created_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          ON UPDATE CURRENT_TIMESTAMP,
+CREATE TABLE IF NOT EXISTS note_media (
+    id            BIGINT UNSIGNED      NOT NULL AUTO_INCREMENT,
+    note_id       BIGINT UNSIGNED      NOT NULL,
+    media_type    ENUM('image','link') NOT NULL,
+    url           VARCHAR(2048)        NOT NULL,
+    caption       VARCHAR(512)                  DEFAULT NULL,
+    created_at    TIMESTAMP            NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     PRIMARY KEY (id),
-    UNIQUE KEY uq_notegroup_map_name (map_id, name),
-    KEY idx_notegroup_map (map_id),
+    KEY idx_notemedia_note (note_id),
 
-    CONSTRAINT fk_notegroup_map
-        FOREIGN KEY (map_id)     REFERENCES maps  (id) ON DELETE CASCADE,
-    CONSTRAINT fk_notegroup_creator
-        FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE RESTRICT
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ─── Notes ────────────────────────────────────────────────────────────────────
--- Lightweight location-pinned text notes, separate from GeoJSON annotations.
--- `color` overrides the group color and the default cyan when set.
-
-CREATE TABLE IF NOT EXISTS notes (
-    id          BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT,
-    map_id      BIGINT UNSIGNED  NOT NULL,
-    group_id    BIGINT UNSIGNED           DEFAULT NULL,
-    created_by  BIGINT UNSIGNED  NOT NULL,
-    lat         DECIMAL(10, 7)   NOT NULL,
-    lng         DECIMAL(10, 7)   NOT NULL,
-    title       VARCHAR(255)              DEFAULT NULL,
-    text        TEXT             NOT NULL,
-    pinned      BOOLEAN          NOT NULL DEFAULT FALSE,
-    color       VARCHAR(9)                DEFAULT NULL,
-    created_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at  TIMESTAMP        NOT NULL DEFAULT CURRENT_TIMESTAMP
-                                          ON UPDATE CURRENT_TIMESTAMP,
-
-    PRIMARY KEY (id),
-    KEY idx_notes_map     (map_id),
-    KEY idx_notes_group   (group_id),
-    KEY idx_notes_creator (created_by),
-    FULLTEXT idx_notes_text (title, text),
-
-    CONSTRAINT fk_notes_map
-        FOREIGN KEY (map_id)     REFERENCES maps         (id) ON DELETE CASCADE,
-    CONSTRAINT fk_notes_group
-        FOREIGN KEY (group_id)   REFERENCES note_groups  (id) ON DELETE SET NULL,
-    CONSTRAINT fk_notes_creator
-        FOREIGN KEY (created_by) REFERENCES users        (id) ON DELETE RESTRICT
+    CONSTRAINT fk_notemedia_note
+        FOREIGN KEY (note_id) REFERENCES notes (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

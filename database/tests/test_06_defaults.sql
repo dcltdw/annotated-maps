@@ -30,7 +30,8 @@ CALL assert_equals('tenant_members.role defaults to viewer', 'viewer', @role);
 
 -- ─── map_permissions defaults ─────────────────────────────────────────────────
 
-INSERT INTO maps (id, owner_id, tenant_id, title) VALUES (40, 40, 40, 'DefaultsMap');
+INSERT INTO maps (id, owner_id, tenant_id, title, coordinate_system)
+    VALUES (40, 40, 40, 'DefaultsMap', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 INSERT INTO map_permissions (map_id, user_id) VALUES (40, NULL);
 
 SELECT level INTO @lv FROM map_permissions WHERE map_id = 40 AND user_id IS NULL;
@@ -57,7 +58,8 @@ CREATE PROCEDURE test_null_tenant()
 BEGIN
     DECLARE CONTINUE HANDLER FOR 1048 BEGIN END;
     DECLARE CONTINUE HANDLER FOR 1364 BEGIN END;
-    INSERT INTO maps (owner_id, tenant_id, title) VALUES (40, NULL, 'NullTenant');
+    INSERT INTO maps (owner_id, tenant_id, title, coordinate_system)
+        VALUES (40, NULL, 'NullTenant', '{"type":"wgs84","center":{"lat":0,"lng":0},"zoom":3}');
 END$$
 DELIMITER ;
 
@@ -73,3 +75,32 @@ INSERT INTO sso_providers (org_id, config) VALUES (40, '{"issuer":"test"}');
 
 SELECT provider INTO @prov FROM sso_providers WHERE org_id = 40;
 CALL assert_equals('sso_providers.provider defaults to oidc', 'oidc', @prov);
+
+-- ─── maps.owner_xray defaults to FALSE ───────────────────────────────────────
+
+SELECT owner_xray INTO @ox FROM maps WHERE id = 40;
+CALL assert_equals('maps.owner_xray defaults to FALSE', '0', CAST(@ox AS CHAR));
+
+-- ─── nodes.visibility_override defaults to FALSE ─────────────────────────────
+
+INSERT INTO nodes (id, map_id, created_by, name) VALUES (40, 40, 40, 'DefaultNode');
+SELECT visibility_override INTO @vo FROM nodes WHERE id = 40;
+CALL assert_equals('nodes.visibility_override defaults to FALSE', '0', CAST(@vo AS CHAR));
+
+-- ─── notes.visibility_override defaults to FALSE ─────────────────────────────
+
+INSERT INTO notes (id, node_id, created_by, text) VALUES (40, 40, 40, 'Default note');
+SELECT visibility_override INTO @nvo FROM notes WHERE id = 40;
+CALL assert_equals('notes.visibility_override defaults to FALSE', '0', CAST(@nvo AS CHAR));
+
+-- ─── notes.pinned defaults to FALSE ──────────────────────────────────────────
+
+SELECT pinned INTO @pinned FROM notes WHERE id = 40;
+CALL assert_equals('notes.pinned defaults to FALSE', '0', CAST(@pinned AS CHAR));
+
+-- ─── visibility_groups.manages_visibility defaults to FALSE ─────────────────
+
+INSERT INTO visibility_groups (id, tenant_id, name, created_by)
+    VALUES (40, 40, 'TestGroup', 40);
+SELECT manages_visibility INTO @mv FROM visibility_groups WHERE id = 40;
+CALL assert_equals('visibility_groups.manages_visibility defaults to FALSE', '0', CAST(@mv AS CHAR));

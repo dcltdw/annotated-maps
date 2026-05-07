@@ -11,12 +11,14 @@ import { makeUser } from './helpers';
  *
  * What we're proving:
  *  1. Registration creates a fresh tenant per user (different /tenants/N/...)
- *  2. User B's map list does not surface user A's maps
- *  3. User B cannot reach user A's map page by direct URL — the same
- *     friendly "not found / no permission" copy fires that we see for
- *     non-existent maps in the same tenant
- *  4. Annotations and notes added by A on their map don't leak to B
- *     (B still can't open the map, so they see none of its content)
+ *  2. User B's map list does not surface user A's maps; B cannot reach A's
+ *     map page by direct URL.
+ *
+ * The previous "annotations and notes don't leak" test is gone — that flow
+ * relied on the leaflet-draw toolbar and the lat/lng-based notes UI, both
+ * removed during the rebuild. The equivalent for the new model (nodes +
+ * node-attached notes) lands in #104 once the tree panel + node detail
+ * UI are in place.
  */
 
 const MAPS_URL_RE   = /\/tenants\/(\d+)\/maps$/;
@@ -92,53 +94,8 @@ test.describe('Cross-tenant isolation', () => {
     }
   });
 
-  test("annotations and notes on user A's map don't leak to user B", async ({ browser }) => {
-    const ctxA = await browser.newContext();
-    const ctxB = await browser.newContext();
-    try {
-      const pageA = await ctxA.newPage();
-      const pageB = await ctxB.newPage();
-      await registerInContext(pageA, 'xt_content_a');
-      const { detailUrl } = await createMap(pageA, 'Map With Stuff');
-
-      // A drops a marker annotation.
-      let promptCalls = 0;
-      pageA.on('dialog', async (dialog) => {
-        promptCalls += 1;
-        if (promptCalls === 1) await dialog.accept('Hidden annotation');
-        else if (promptCalls === 2) await dialog.accept('Should not leak.');
-        else await dialog.dismiss();
-      });
-      await pageA.locator('.leaflet-draw-draw-marker').click();
-      await pageA.locator('.leaflet-container').click({ position: { x: 400, y: 300 } });
-      await expect(pageA.locator('.leaflet-marker-icon').first()).toBeVisible();
-
-      // A creates a note on the same map.
-      pageA.removeAllListeners('dialog');
-      await pageA.getByRole('button', { name: '+ Note' }).click();
-      await pageA.getByPlaceholder(/Note text/i).fill('Hidden note text.');
-      await pageA.getByRole('button', { name: /place on map/i }).click();
-      await pageA.locator('.leaflet-container').click({ position: { x: 500, y: 350 } });
-      await expect(pageA.getByText(/📍 -?\d+\.\d+, -?\d+\.\d+/)).toBeVisible();
-      await pageA.getByRole('button', { name: /^Save$/ }).click();
-      // Wait for the placement preview popup to clear; confirms note saved.
-      await expect(pageA.getByText('Note will be placed here')).toHaveCount(0, { timeout: 7000 });
-
-      // B's view: no maps, can't open A's map URL, no leaked content.
-      await registerInContext(pageB, 'xt_content_b');
-      await expect(pageB.getByText(/you don't have any maps yet/i)).toBeVisible();
-
-      await pageB.goto(detailUrl);
-      await expect(
-        pageB.getByText(/map not found or you do not have permission/i)
-      ).toBeVisible();
-
-      // Sanity — the leaked content strings really aren't anywhere on B's page.
-      await expect(pageB.getByText(/Hidden annotation/)).toHaveCount(0);
-      await expect(pageB.getByText(/Hidden note text/)).toHaveCount(0);
-    } finally {
-      await ctxA.close();
-      await ctxB.close();
-    }
-  });
+  // The old "annotations and notes don't leak" test (and its dependence on
+  // leaflet-draw + the lat/lng note UI) is gone — both are removed in the
+  // rebuild. The equivalent for the new node + node-attached-notes model
+  // lands in #104 alongside the tree panel + node detail UI.
 });

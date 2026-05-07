@@ -36,16 +36,48 @@ FAST_TESTS = [
     "test_01_auth.py",
     "test_02_filters.py",
     "test_03_maps.py",
-    "test_04_annotations.py",
     "test_05_tenants.py",
     "test_06_rate_limit_fast.py",
     "test_08_audit.py",
     "test_09_security.py",
-    "test_11_notes.py",
-    "test_12_annotation_edit_delete_move.py",
-    "test_13_note_groups.py",
+    "test_14_nodes.py",
     "test_15_cors.py",
+    "test_16_notes.py",
+    "test_17_media.py",
+    "test_18_visibility_groups.py",
+    "test_19_node_visibility.py",
+    "test_20_node_visibility_filter.py",
+    "test_21_note_visibility.py",
+    "test_22_plots.py",
+    "test_23_tree_navigation.py",
+    "test_24_node_move.py",
+    "test_25_node_copy.py",
+    "test_26_coordinate_systems.py",
 ]
+
+# test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
+# test_16_notes.py landed in #83 (Note CRUD restructured under nodes).
+# test_17_media.py landed in #84 (Media for nodes and notes).
+# test_18_visibility_groups.py landed in #85 (visibility-group CRUD only).
+# test_19_node_visibility.py landed in #86 (node visibility tagging).
+# test_20_node_visibility_filter.py landed in #99 (effective-visibility CTE
+#   + read-time filtering + owner_xray bypass on GET nodes / GET nodes/{id}).
+# test_21_note_visibility.py landed in #87 (note tagging + filtering;
+#   note → node → parent-chain inheritance).
+# test_22_plots.py landed in #88 (PlotController CRUD + membership +
+#   visibility filter on listMembers).
+# test_23_tree_navigation.py landed in #89 (children + subtree endpoints,
+#   recursive CTE descent, pagination, hidden-root 404, owner_xray).
+# test_24_node_move.py landed in #90 (move endpoint: same-map re-parent,
+#   cross-map, cross-tenant, cycle prevention, cascade cleanups, audit).
+# test_25_node_copy.py landed in #100 (copy endpoint: recursive subtree
+#   duplication; new ids; tags + plot memberships dropped; notes follow
+#   with reset created_by/created_at; cross-map / cross-tenant rules).
+# test_26_coordinate_systems.py landed in #91 (backend: shape validation
+#   for wgs84 / pixel / blank coordinate-system types on map create+update;
+#   frontend rendering deferred to #101).
+# Annotation/note-group tests are gone permanently — those concepts were
+# consolidated into nodes and visibility groups during the rebuild.
 
 NIGHTLY_EXTRA = ["test_07_rate_limit_slow.py"]
 EXTENDED_EXTRA = ["test_10_soak.py"]
@@ -53,17 +85,26 @@ EXTENDED_EXTRA = ["test_10_soak.py"]
 TEST_DESCRIPTIONS = {
     1: "Auth (registration, login, refresh, deactivation)",
     2: "Filters (JwtFilter, TenantFilter)",
-    3: "Maps (CRUD, scoping, pagination, permissions)",
-    4: "Annotations (CRUD, GeoJSON validation, media URLs)",
+    3: "Maps (CRUD, coordinateSystem JSON, ownerXray, scoping, pagination, permissions)",
     5: "Tenants (members, branding)",
     6: "Rate limit — fast (enforcement, Retry-After header)",
     7: "Rate limit — slow (300s window expiry) [nightly+]",
     8: "Audit log (event recording, IP presence)",
     9: "Security (cross-org isolation, headers)",
     10: "Rate limit — soak (10min continuous) [extended]",
-    11: "Notes (CRUD, cross-org isolation)",
-    12: "Annotation edit, delete, and move",
-    13: "Note groups (CRUD, assignment, filtering, permissions)",
+    14: "Nodes (CRUD, tree filtering, max-depth, cross-tenant)",
+    15: "CORS preflight",
+    16: "Notes (CRUD attached to nodes, pinned-first sort, cross-tenant)",
+    17: "Media on nodes and notes (CRUD, scheme validation, CASCADE)",
+    18: "Visibility groups (admin-only CRUD; member mgmt in #98)",
+    19: "Node visibility tagging (set/get override + groupIds on nodes)",
+    20: "Node visibility read filter (admin bypass, inheritance, owner_xray)",
+    21: "Note visibility (tagging + filter; note → node → parent-chain)",
+    22: "Plots (CRUD, membership, visibility filter on listMembers)",
+    23: "Tree navigation (children + subtree CTE descent, pagination)",
+    24: "Node move (re-parent, cross-map, cross-tenant, cycle, cascade)",
+    25: "Node copy (recursive subtree duplication, notes follow, tag drop)",
+    26: "Coordinate system shape validation (wgs84, pixel, blank)",
 }
 
 

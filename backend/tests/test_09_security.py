@@ -64,19 +64,9 @@ assert_status("security: cannot add cross-org member", 400, status)
 
 print("  All cross-org member add tests passed.")
 
-# ─── Cross-org annotation access ─────────────────────────────────────────────
-
-print("  --- Cross-org annotation isolation ---")
-
-_, body = http_post(f"/tenants/{TENANT_A}/maps/{MAP_A}/annotations", {
-    "type": "marker", "title": "Pin", "geoJson": {"type": "Point", "coordinates": [0, 0]}
-}, TOKEN_A)
-ANN_A = json_field(body, ["id"])
-
-status, _ = http_get(f"/tenants/{TENANT_A}/maps/{MAP_A}/annotations/{ANN_A}", TOKEN_B)
-assert_status("security: org B cannot read org A annotation", 403, status)
-
-print("  All cross-org annotation isolation tests passed.")
+# Cross-tenant access at the *node* level returns in #96 with NodeController.
+# For now we cover cross-tenant isolation at the map level (above) — same
+# TenantFilter chain protects the future node endpoints.
 
 # ─── Security headers ────────────────────────────────────────────────────────
 

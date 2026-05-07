@@ -35,7 +35,53 @@ CALL check_column('users', 'status',         'NO');
 CALL check_column('users', 'platform_role',  'NO');
 
 -- maps
-CALL check_column('maps', 'tenant_id',      'NO');
+CALL check_column('maps', 'tenant_id',         'NO');
+CALL check_column('maps', 'coordinate_system', 'NO');
+CALL check_column('maps', 'owner_xray',        'NO');
+
+-- nodes
+CALL check_column('nodes', 'id',                  'NO');
+CALL check_column('nodes', 'map_id',              'NO');
+CALL check_column('nodes', 'parent_id',           'YES');
+CALL check_column('nodes', 'name',                'NO');
+CALL check_column('nodes', 'geo_json',            'YES');
+CALL check_column('nodes', 'description',         'YES');
+CALL check_column('nodes', 'color',               'YES');
+CALL check_column('nodes', 'visibility_override', 'NO');
+CALL check_column('nodes', 'created_by',          'NO');
+
+-- notes (rebuilt — no lat/lng/group_id/map_id; attach via node_id)
+CALL check_column('notes', 'id',                  'NO');
+CALL check_column('notes', 'node_id',             'NO');
+CALL check_column('notes', 'created_by',          'NO');
+CALL check_column('notes', 'title',               'YES');
+CALL check_column('notes', 'text',                'NO');
+CALL check_column('notes', 'pinned',              'NO');
+CALL check_column('notes', 'color',               'YES');
+CALL check_column('notes', 'visibility_override', 'NO');
+
+-- visibility_groups + members
+CALL check_column('visibility_groups',         'tenant_id',          'NO');
+CALL check_column('visibility_groups',         'name',               'NO');
+CALL check_column('visibility_groups',         'manages_visibility', 'NO');
+CALL check_column('visibility_group_members',  'visibility_group_id','NO');
+CALL check_column('visibility_group_members',  'user_id',            'NO');
+
+-- plots
+CALL check_column('plots',      'tenant_id',  'NO');
+CALL check_column('plots',      'name',       'NO');
+CALL check_column('plot_nodes', 'plot_id',    'NO');
+CALL check_column('plot_nodes', 'node_id',    'NO');
+CALL check_column('plot_notes', 'plot_id',    'NO');
+CALL check_column('plot_notes', 'note_id',    'NO');
+
+-- node_media + note_media
+CALL check_column('node_media', 'node_id',    'NO');
+CALL check_column('node_media', 'media_type', 'NO');
+CALL check_column('node_media', 'url',        'NO');
+CALL check_column('note_media', 'note_id',    'NO');
+CALL check_column('note_media', 'media_type', 'NO');
+CALL check_column('note_media', 'url',        'NO');
 
 -- tenants
 CALL check_column('tenants', 'branding',    'YES');

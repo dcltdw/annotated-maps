@@ -1,240 +1,152 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
-import { NotesPanel } from '@/components/Notes/NotesPanel';
+import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
+import { NodeDetailPanel } from '@/components/Detail/NodeDetailPanel';
 import { useMap } from '@/hooks/useMap';
 import { useAuthStore } from '@/store/authStore';
-import { notesService, noteGroupsService } from '@/services/maps';
+import { mapsService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
-import type { Note, NoteGroup } from '@/types';
+
+// Map detail page. NodeTreePanel + MapView + NodeDetailPanel are all wired
+// up to a shared selectedNodeId state — clicking a node in any surface
+// highlights it everywhere; the detail panel re-renders to show its
+// metadata, parent breadcrumb, media, and inline notes CRUD.
+//
+// The owner_xray toggle in the header (#106) is owner-only: only the map
+// owner sees the control. Flipping it calls mapsService.updateMap;
+// MapView reacts to the resulting `map.ownerXray` change to render the
+// "Owner X-ray active" banner above the map for the owner.
 
 export function MapDetailPage() {
   const { mapId, tenantId } = useParams<{ mapId: string; tenantId: string }>();
   const navigate = useNavigate();
-  const { activeMap, loadMap, updateMap, deleteMap } = useMap();
+  // `?node=X` query param lets cross-page links (e.g. plot member rows
+  // on /tenants/:tid/plots) deep-link into a specific node. We honor it
+  // exactly once per map load — see the effect below — so subsequent
+  // user-driven node selections aren't fought by stale URL state.
+  const [searchParams] = useSearchParams();
+  const { activeMap, loadMap, updateMap } = useMap();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const tenants = useAuthStore((s) => s.tenants);
-  const storedTenantId = useAuthStore((s) => s.tenantId) ?? undefined;
-
-  const currentTenant = tenants.find((t) => String(t.id) === tenantId);
-  const isAdmin = currentTenant?.role === 'admin';
-
-  // Shared notes/groups state (used by both MapView markers and NotesPanel list)
-  const [notes, setNotes] = useState<Note[]>([]);
-  const [groups, setGroups] = useState<NoteGroup[]>([]);
-  const [notesError, setNotesError] = useState<string | null>(null);
-
-  // Map click handler for "Place on map" feature
-  const mapClickCallbackRef = useRef<((lat: number, lng: number) => void) | null>(null);
-  const [isPlacingNote, setIsPlacingNote] = useState(false);
-
-  // Edit-map modal state
-  const [showEdit, setShowEdit] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
-  const [editDescription, setEditDescription] = useState('');
-  const [savingEdit, setSavingEdit] = useState(false);
-  const [editError, setEditError] = useState<string | null>(null);
-
-  // Delete-map state (no modal — uses window.confirm like deleteNote /
-  // deleteAnnotation elsewhere in the app)
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
+  const [panTarget, setPanTarget] = useState<[number, number] | null>(null);
+  const [xraySaving, setXraySaving] = useState(false);
+  const [xrayError, setXrayError] = useState<string | null>(null);
+  const currentUserId = useAuthStore((s) => s.user?.id);
 
   useEffect(() => {
     if (!mapId) return;
+    setLoading(true);
     loadMap(Number(mapId))
       .catch(() => setError('Map not found or you do not have permission to view it.'))
       .finally(() => setLoading(false));
   }, [mapId, loadMap]);
 
-  // Load notes and groups
-  const loadNotesAndGroups = useCallback(async (groupFilter?: number) => {
-    if (!mapId) return;
-    try {
-      setNotesError(null);
-      const [g, n] = await Promise.all([
-        noteGroupsService.listGroups(Number(mapId), storedTenantId),
-        notesService.listNotes(Number(mapId), groupFilter, storedTenantId),
-      ]);
-      setGroups(g);
-      setNotes(n);
-    } catch (err) {
-      setNotesError(extractApiError(err, 'Failed to load notes and groups.'));
-    }
-  }, [mapId, storedTenantId]);
-
+  // Honor ?node=N once per map load. Re-running this on every searchParams
+  // change would clobber the user's clicks if they navigated within the
+  // same map — keying on mapId means it only fires when the page (re)mounts
+  // for a different map.
   useEffect(() => {
-    if (!loading && activeMap) {
-      loadNotesAndGroups();
+    if (!mapId) return;
+    const nodeParam = searchParams.get('node');
+    if (nodeParam) {
+      const n = Number(nodeParam);
+      if (Number.isFinite(n)) setSelectedNodeId(n);
     }
-  }, [loading, activeMap, loadNotesAndGroups]);
-
-  const handleNoteClick = (_note: Note) => {
-    // Future: pan map to note location
-  };
-
-  const handleRequestMapClick = useCallback((callback: (lat: number, lng: number) => void) => {
-    mapClickCallbackRef.current = callback;
-    setIsPlacingNote(true);
-  }, []);
-
-  const handleMapClickForNote = useCallback((lat: number, lng: number) => {
-    if (mapClickCallbackRef.current) {
-      mapClickCallbackRef.current(lat, lng);
-      mapClickCallbackRef.current = null;
-      setIsPlacingNote(false);
-    }
-  }, []);
-
-  const handleCancelPlace = useCallback(() => {
-    mapClickCallbackRef.current = null;
-    setIsPlacingNote(false);
-  }, []);
-
-  const openEditModal = () => {
-    if (!activeMap) return;
-    setEditTitle(activeMap.title);
-    setEditDescription(activeMap.description ?? '');
-    setEditError(null);
-    setShowEdit(true);
-  };
-
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeMap) return;
-    setSavingEdit(true);
-    setEditError(null);
-    try {
-      await updateMap(activeMap.id, {
-        title: editTitle,
-        description: editDescription,
-      });
-      setShowEdit(false);
-    } catch (err) {
-      setEditError(extractApiError(err, 'Failed to update map.'));
-    } finally {
-      setSavingEdit(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!activeMap) return;
-    if (!window.confirm(`Delete "${activeMap.title}"? This cannot be undone.`)) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await deleteMap(activeMap.id);
-      navigate(`/tenants/${tenantId}/maps`);
-    } catch (err) {
-      setDeleteError(extractApiError(err, 'Failed to delete map.'));
-      setDeleting(false);
-    }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapId]);
 
   if (loading) return <div className="page-loading">Loading map…</div>;
   if (error) return <div className="page-error">{error}</div>;
-  if (!activeMap) return null;
+  if (!activeMap) return <div className="page-error">No map loaded.</div>;
 
-  const canEdit = activeMap.permission === 'edit' || activeMap.permission === 'owner';
-  // Backend gates updateMap and deleteMap on owner_id = userId; non-owners
-  // get a 403 even with permission='edit'. So buttons are owner-only.
-  const isOwner = activeMap.permission === 'owner';
+  const isOwner = currentUserId !== undefined && currentUserId === activeMap.ownerId;
+
+  const handleToggleXray = async () => {
+    setXrayError(null);
+    setXraySaving(true);
+    try {
+      await updateMap(activeMap.id, { ownerXray: !activeMap.ownerXray });
+      // The hook re-fetches and updates `activeMap`, so MapView's banner
+      // and this control's label both refresh on the next render.
+    } catch (e) {
+      setXrayError(extractApiError(e, 'Failed to toggle owner x-ray.'));
+    } finally {
+      setXraySaving(false);
+    }
+  };
+
+  // Delete-from-detail-page (#160). Edit-from-detail isn't here — users
+  // can navigate to /tenants/{tid}/maps to edit. v1 minimum keeps this
+  // page focused on viewing/working with the map.
+  const handleDeleteMap = async () => {
+    if (!activeMap) return;
+    if (!window.confirm(`Delete map "${activeMap.title}"? This cannot be undone.`)) return;
+    try {
+      await mapsService.deleteMap(activeMap.id);
+      navigate(`/tenants/${tenantId}/maps`);
+    } catch (e) {
+      setXrayError(extractApiError(e, 'Failed to delete map.'));
+    }
+  };
 
   return (
-    <div className="map-page">
-      <div className="map-page-header">
-        <h2>{activeMap.title}</h2>
-        {activeMap.description && <p>{activeMap.description}</p>}
-        {(activeMap.permission === 'none') && (
-          <p className="permission-notice">View only — sign in for more access</p>
-        )}
-        {isOwner && (
-          <div className="map-page-actions">
+    <div className="page-container">
+      <div className="page-header">
+        <h1>{activeMap.title}</h1>
+        <div className="header-actions">
+          {isOwner && (
+            <label className="owner-xray-toggle" title="Owner X-ray lets the map owner see every location regardless of visibility tagging.">
+              <input
+                type="checkbox"
+                checked={activeMap.ownerXray}
+                onChange={handleToggleXray}
+                disabled={xraySaving}
+              />
+              {xraySaving ? 'Saving…' : 'Owner X-ray'}
+            </label>
+          )}
+          {isOwner && (
             <button
               type="button"
               className="btn btn-ghost"
-              onClick={openEditModal}
-              disabled={deleting}
+              onClick={handleDeleteMap}
+              title="Delete this map (and all its locations + notes)"
             >
-              Edit map
+              Delete map
             </button>
-            <button
-              type="button"
-              className="btn btn-danger"
-              onClick={handleDelete}
-              disabled={deleting}
-            >
-              {deleting ? 'Deleting…' : 'Delete map'}
-            </button>
-          </div>
-        )}
-      </div>
-      {deleteError && <div className="alert alert-error">{deleteError}</div>}
-      {notesError && <div className="alert alert-error">{notesError}</div>}
-
-      {showEdit && (
-        <div className="modal-overlay">
-          <div className="modal">
-            <h2>Edit Map</h2>
-            <form onSubmit={handleEditSubmit} className="auth-form">
-              {editError && <div className="alert alert-error">{editError}</div>}
-              <div className="form-group">
-                <label htmlFor="edit-map-title">Title</label>
-                <input
-                  id="edit-map-title"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  required
-                />
-              </div>
-              <div className="form-group">
-                <label htmlFor="edit-map-description">Description</label>
-                <textarea
-                  id="edit-map-description"
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  rows={3}
-                />
-              </div>
-              <div className="modal-actions">
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  onClick={() => setShowEdit(false)}
-                  disabled={savingEdit}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="btn btn-primary" disabled={savingEdit}>
-                  {savingEdit ? 'Saving…' : 'Save'}
-                </button>
-              </div>
-            </form>
-          </div>
+          )}
+          <Link to={`/tenants/${tenantId}/maps`} className="btn btn-ghost">
+            ← Back to maps
+          </Link>
         </div>
-      )}
-      <div className="map-page-content">
+      </div>
+      {xrayError && <div className="alert alert-error">{xrayError}</div>}
+      {activeMap.description && <p>{activeMap.description}</p>}
+      <div className="map-detail-layout">
+        <NodeTreePanel
+          mapId={activeMap.id}
+          coordinateSystem={activeMap.coordinateSystem}
+          selectedNodeId={selectedNodeId}
+          onSelectNode={setSelectedNodeId}
+          onPanToNode={(coords) => setPanTarget(coords)}
+          onLocationDeleted={() => setSelectedNodeId(null)}
+        />
         <MapView
           map={activeMap}
-          notes={notes}
-          noteGroups={groups}
-          isPlacingNote={isPlacingNote}
-          onMapClickForNote={handleMapClickForNote}
-          onCancelPlace={handleCancelPlace}
-          onNoteClick={handleNoteClick}
-        />
-        <NotesPanel
-          mapId={activeMap.id}
-          canEdit={canEdit}
-          isAdmin={isAdmin}
-          notes={notes}
-          groups={groups}
-          onNotesChanged={loadNotesAndGroups}
-          onNoteClick={handleNoteClick}
-          onRequestMapClick={handleRequestMapClick}
+          onNodeClick={setSelectedNodeId}
+          panTarget={panTarget}
         />
       </div>
+      <NodeDetailPanel
+        mapId={activeMap.id}
+        selectedNodeId={selectedNodeId}
+        onSelectNode={setSelectedNodeId}
+      />
+      <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
+        Back to maps
+      </button>
     </div>
   );
 }

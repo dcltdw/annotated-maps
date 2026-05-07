@@ -1,4 +1,13 @@
+import { execFileSync } from 'child_process';
+import path from 'path';
 import { randomUUID } from 'crypto';
+import { expect, type APIRequestContext, type Page } from '@playwright/test';
+
+// The Playwright `request` fixture inherits the spec's baseURL (5173), but
+// the backend lives on a different port. Hit it directly for the API
+// helpers below so we don't bounce through Vite's dev server.
+export const API_URL =
+  process.env.PLAYWRIGHT_API_URL ?? 'http://localhost:8080/api/v1';
 
 /**
  * Helpers shared across E2E specs.
@@ -43,4 +52,157 @@ export function makeUser(tag: string): {
     email:    `e2e_${tag}_${id}@e2e.test`,
     password: 'pw_for_e2e_test_only',
   };
+}
+
+// ─── API-driven session setup ────────────────────────────────────────────────
+// Specs that exercise UI which doesn't yet have its own create flow
+// (pixel/blank maps in #128, multi-level node trees in #104) drive setup
+// via direct backend API calls + localStorage seeding. The pattern was
+// originally inlined in coordinate-systems.spec.ts; lifted here once the
+// second spec needed it.
+
+export interface ApiUser {
+  token: string;
+  tenantId: number;
+  user: { id: number; username: string; email: string };
+}
+
+export async function registerViaApi(
+  request: APIRequestContext,
+  tag: string,
+): Promise<ApiUser> {
+  const u = makeUser(tag);
+  // /auth/register is rate-limited per-IP (no JWT yet to key on userId).
+  // In multi-worker CI all tests share one IP, so the suite can saturate
+  // the bucket near the tail — and the backend's own rate-limit test
+  // (test_06_rate_limit_fast.py) explicitly fills the bucket as part of
+  // verifying the limiter, leaving E2E to start with a saturated bucket.
+  //
+  // Backoff schedule: [2, 5, 10] seconds. With a 60s window and a 100-
+  // request limit, an entry expires every ~600ms. After 17s of total
+  // backoff (worst case), ~28 entries have aged out — comfortably enough
+  // for E2E's burst rate. Real outages still surface on the final 429
+  // via the existing toBeTruthy assertion.
+  const BACKOFFS_MS = [2000, 5000, 10000];
+  const post = () => request.post(`${API_URL}/auth/register`, {
+    data: { username: u.username, email: u.email, password: u.password },
+  });
+  let res = await post();
+  for (const delay of BACKOFFS_MS) {
+    if (res.status() !== 429) break;
+    await new Promise((r) => setTimeout(r, delay));
+    res = await post();
+  }
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  return { token: body.token, tenantId: body.tenantId, user: body.user };
+}
+
+export async function createMapViaApi(
+  request: APIRequestContext,
+  api: ApiUser,
+  title: string,
+  coordinateSystem: unknown,
+): Promise<{ id: number }> {
+  const res = await request.post(`${API_URL}/tenants/${api.tenantId}/maps`, {
+    headers: { Authorization: `Bearer ${api.token}` },
+    data: { title, coordinateSystem },
+  });
+  if (!res.ok()) {
+    throw new Error(`createMap failed: ${res.status()} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+interface CreateNodeBody {
+  name: string;
+  parentId?: number;
+  geoJson?: unknown;
+  description?: string;
+  color?: string;
+}
+
+export async function createNodeViaApi(
+  request: APIRequestContext,
+  api: ApiUser,
+  mapId: number,
+  body: CreateNodeBody,
+): Promise<{ id: number }> {
+  const res = await request.post(
+    `${API_URL}/tenants/${api.tenantId}/maps/${mapId}/nodes`,
+    { headers: { Authorization: `Bearer ${api.token}` }, data: body },
+  );
+  if (!res.ok()) {
+    throw new Error(`createNode failed: ${res.status()} ${await res.text()}`);
+  }
+  return res.json();
+}
+
+/**
+ * Seed the zustand-persisted auth storage so the SPA boots authenticated.
+ * Must be called *before* navigating to any route that requires auth, but
+ * *after* an initial `page.goto('/login')` (or any path on the right
+ * origin) so localStorage is writable.
+ *
+ * `activeTenant` overrides the in-store tenantId/tenants list — needed for
+ * cross-user visibility tests where user B browses user A's tenant. Without
+ * it, the store's tenantId stays as B's personal tenant and the services
+ * layer's `tenantBase` fallback hits the wrong tenant on API calls.
+ */
+export async function seedAuthInBrowser(
+  page: Page,
+  api: ApiUser,
+  activeTenant?: { id: number; role: 'admin' | 'editor' | 'viewer' },
+): Promise<void> {
+  await page.goto('/login');
+  await page.evaluate(
+    ({ api, activeTenant }) => {
+      const tenantId = activeTenant?.id ?? api.tenantId;
+      const role = activeTenant?.role ?? 'admin';
+      const persisted = {
+        state: {
+          token: api.token,
+          user: api.user,
+          orgId: null,
+          tenantId,
+          tenants: [{ id: tenantId, name: '', slug: '', role }],
+          branding: {},
+        },
+        version: 0,
+      };
+      localStorage.setItem('auth-storage', JSON.stringify(persisted));
+    },
+    { api, activeTenant },
+  );
+}
+
+// ─── Direct MySQL access (E2E setup only) ────────────────────────────────────
+// A few visibility-flow scenarios need fixture moves the personal-tenant API
+// can't naturally produce — e.g., putting two users in the same org so they
+// can be members of the same visibility group (the per-org check from #98
+// would otherwise reject cross-org members).
+//
+// Mirrors the `mysql_query` pattern from backend/tests/helpers.py: shell out
+// to `docker compose exec mysql mysql -e <query>`. Sync (execFileSync)
+// because Playwright tests don't need it to be async, and waiting in the
+// test body keeps the fixture flow readable. Path is resolved against the
+// repo root so the helper works regardless of cwd.
+
+// Playwright runs from `frontend/`; repo root is one up. Using process.cwd()
+// avoids the ESM-mode __dirname unavailability.
+const REPO_ROOT = path.resolve(process.cwd(), '..');
+
+export function mysqlQuery(query: string): string {
+  const password = process.env.MYSQL_ROOT_PASSWORD ?? 'rootpassword';
+  const out = execFileSync(
+    'docker',
+    [
+      'compose', '-f', `${REPO_ROOT}/docker-compose.yml`,
+      'exec', '-T', 'mysql',
+      'mysql', '-uroot', `-p${password}`, 'annotated_maps',
+      '-N', '-e', query,
+    ],
+    { encoding: 'utf8', timeout: 10_000 },
+  );
+  return out.trim();
 }

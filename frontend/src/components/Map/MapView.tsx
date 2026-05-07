@@ -1,231 +1,320 @@
-import { useEffect, useRef } from 'react';
-import { MapContainer, TileLayer, useMap as useLeafletMap } from 'react-leaflet';
+import { useEffect, useState } from 'react';
+import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, useMap as useLeafletMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
-import 'leaflet-draw/dist/leaflet.draw.css';
 import L from 'leaflet';
-import 'leaflet-draw';
-import { AnnotationLayer } from './AnnotationLayer';
-import { NoteMarkers } from './NoteMarkers';
-import { useMap } from '@/hooks/useMap';
-import type { MapRecord, AnnotationType, GeoJsonGeometry, Note, NoteGroup } from '@/types';
+import iconUrl from 'leaflet/dist/images/marker-icon.png';
+import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
+import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
+import { nodesService, nodeMediaService } from '@/services/maps';
+import { useAuthStore } from '@/store/authStore';
+import type {
+  MapRecord,
+  NodeRecord,
+  NodeMediaRecord,
+  GeoJsonGeometry,
+} from '@/types';
 
-// Fix default marker icon broken by webpack/vite bundling
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+// Fix for leaflet's default icon paths breaking under Vite's bundler.
+// Standard workaround — assigning the imported asset URLs onto the
+// internal `Default` prototype.
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
+  iconUrl,
+  iconRetinaUrl,
+  shadowUrl,
 });
 
-interface DrawControlsProps {
-  mapId: number;
-  canEdit: boolean;
+// ─── Geometry helpers ────────────────────────────────────────────────────────
+// GeoJSON uses [lng, lat] order; Leaflet wants [lat, lng]. Convert per
+// geometry type. The map's coordinateSystem.type tells us how to interpret
+// the numbers (lat/lng for wgs84, x/y pixels for pixel) — same conversion
+// rule applies because the swap is a property of the GeoJSON spec, not the
+// CRS. For pixel maps this PR doesn't render; that's deferred to #91.
+
+function pointLatLng(g: GeoJsonGeometry): [number, number] | null {
+  if (g.type !== 'Point') return null;
+  const c = g.coordinates as [number, number];
+  return [c[1], c[0]];
 }
 
-function DrawControls({ mapId, canEdit }: DrawControlsProps) {
-  const leafletMap = useLeafletMap();
-  const { createAnnotation, setIsDrawing } = useMap();
-  const drawnItemsRef = useRef<L.FeatureGroup>(new L.FeatureGroup());
+function lineLatLngs(g: GeoJsonGeometry): [number, number][] | null {
+  if (g.type !== 'LineString') return null;
+  const c = g.coordinates as [number, number][];
+  return c.map(([lng, lat]) => [lat, lng]);
+}
 
-  useEffect(() => {
-    if (!canEdit) return;
+function polygonLatLngs(g: GeoJsonGeometry): [number, number][][] | null {
+  if (g.type !== 'Polygon') return null;
+  const c = g.coordinates as [number, number][][];
+  return c.map((ring) => ring.map(([lng, lat]) => [lat, lng]));
+}
 
-    const drawnItems = drawnItemsRef.current;
-    leafletMap.addLayer(drawnItems);
+// ─── Node popup with media ───────────────────────────────────────────────────
 
-    const drawControl = new (L.Control as unknown as { Draw: new (options: object) => L.Control }).Draw({
-      position: 'topright',
-      draw: {
-        polyline: { shapeOptions: { color: '#2563eb', weight: 3 } },
-        polygon: { allowIntersection: false, shapeOptions: { color: '#2563eb', fillOpacity: 0.2 } },
-        rectangle: false,
-        circle: false,
-        circlemarker: false,
-        marker: { icon: new L.Icon.Default() },
-      },
-      edit: { featureGroup: drawnItems },
-    });
-    leafletMap.addControl(drawControl);
+interface NodePopupProps {
+  node: NodeRecord;
+  media: NodeMediaRecord[];
+}
 
-    const onDrawStart = () => setIsDrawing(true);
-    const onDrawStop = () => setIsDrawing(false);
+function NodePopup({ node, media }: NodePopupProps) {
+  return (
+    <div className="node-popup">
+      <h3>{node.name}</h3>
+      {node.description && <p>{node.description}</p>}
+      {media.length > 0 && (
+        <div className="node-popup-media">
+          {media
+            .filter((m) => m.mediaType === 'image')
+            .map((m) => (
+              <img
+                key={m.id}
+                src={m.url}
+                alt={m.caption || node.name}
+                className="node-popup-thumb"
+              />
+            ))}
+          {media.some((m) => m.mediaType === 'link') && (
+            <ul className="node-popup-links">
+              {media
+                .filter((m) => m.mediaType === 'link')
+                .map((m) => (
+                  <li key={m.id}>
+                    <a href={m.url} target="_blank" rel="noopener noreferrer">
+                      {m.caption || m.url}
+                    </a>
+                  </li>
+                ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
-    // ─── CREATE ──────────────────────────────────────────────────────────
+// ─── Per-node renderer ───────────────────────────────────────────────────────
 
-    const onCreated = async (e: L.LeafletEvent) => {
-      const event = e as L.DrawEvents.Created;
-      const layer = event.layer;
-      drawnItems.addLayer(layer);
+interface NodeLayerProps {
+  node: NodeRecord;
+  media: NodeMediaRecord[];
+  onClick: (nodeId: number) => void;
+}
 
-      let type: AnnotationType;
-      let geoJson: GeoJsonGeometry;
+function NodeLayer({ node, media, onClick }: NodeLayerProps) {
+  if (!node.geoJson) return null;
+  const handlers = { click: () => onClick(node.id) };
 
-      if (layer instanceof L.Marker) {
-        type = 'marker';
-        const latlng = layer.getLatLng();
-        geoJson = { type: 'Point', coordinates: [latlng.lng, latlng.lat] };
-      } else if (layer instanceof L.Polyline && !(layer instanceof L.Polygon)) {
-        type = 'polyline';
-        const latlngs = layer.getLatLngs() as L.LatLng[];
-        geoJson = { type: 'LineString', coordinates: latlngs.map((ll) => [ll.lng, ll.lat]) };
-      } else if (layer instanceof L.Polygon) {
-        type = 'polygon';
-        const latlngs = (layer.getLatLngs() as L.LatLng[][])[0];
-        const coords = latlngs.map((ll) => [ll.lng, ll.lat]);
-        coords.push(coords[0]); // close ring
-        geoJson = { type: 'Polygon', coordinates: [coords] };
-      } else {
-        return;
-      }
-
-      const title = window.prompt('Annotation title (required):');
-      if (!title) {
-        drawnItems.removeLayer(layer);
-        return;
-      }
-      const description = window.prompt('Description (optional):') ?? '';
-
-      try {
-        await createAnnotation({ mapId, type, title, description, geoJson });
-        drawnItems.removeLayer(layer); // AnnotationLayer will re-render from store
-      } catch {
-        drawnItems.removeLayer(layer);
-        // Show a temporary error banner on the map container
-        const container = leafletMap.getContainer();
-        const banner = document.createElement('div');
-        banner.className = 'map-error-banner';
-        banner.textContent = 'Failed to save annotation.';
-        container.appendChild(banner);
-        setTimeout(() => banner.remove(), 5000);
-      }
-    };
-
-    leafletMap.on(L.Draw.Event.DRAWSTART, onDrawStart);
-    leafletMap.on(L.Draw.Event.DRAWSTOP, onDrawStop);
-    leafletMap.on(L.Draw.Event.CREATED, onCreated);
-
-    return () => {
-      leafletMap.removeLayer(drawnItems);
-      leafletMap.removeControl(drawControl);
-      leafletMap.off(L.Draw.Event.DRAWSTART, onDrawStart);
-      leafletMap.off(L.Draw.Event.DRAWSTOP, onDrawStop);
-      leafletMap.off(L.Draw.Event.CREATED, onCreated);
-    };
-  }, [leafletMap, mapId, canEdit, createAnnotation, setIsDrawing]);
-
+  if (node.geoJson.type === 'Point') {
+    const ll = pointLatLng(node.geoJson);
+    if (!ll) return null;
+    return (
+      <Marker position={ll} eventHandlers={handlers}>
+        <Popup>
+          <NodePopup node={node} media={media} />
+        </Popup>
+      </Marker>
+    );
+  }
+  if (node.geoJson.type === 'LineString') {
+    const lls = lineLatLngs(node.geoJson);
+    if (!lls) return null;
+    return (
+      <Polyline
+        positions={lls}
+        pathOptions={{ color: node.color ?? '#3388ff' }}
+        eventHandlers={handlers}
+      >
+        <Popup>
+          <NodePopup node={node} media={media} />
+        </Popup>
+      </Polyline>
+    );
+  }
+  if (node.geoJson.type === 'Polygon') {
+    const lls = polygonLatLngs(node.geoJson);
+    if (!lls) return null;
+    return (
+      <Polygon
+        positions={lls}
+        pathOptions={{ color: node.color ?? '#3388ff' }}
+        eventHandlers={handlers}
+      >
+        <Popup>
+          <NodePopup node={node} media={media} />
+        </Popup>
+      </Polygon>
+    );
+  }
   return null;
 }
 
-// ─── Note placement mode ─────────────────────────────────────────────────────
-
-interface NotePlacementProps {
-  isActive: boolean;
-  onPlace: (lat: number, lng: number) => void;
-  onCancel: () => void;
-}
-
-function NotePlacement({ isActive, onPlace, onCancel }: NotePlacementProps) {
-  const leafletMap = useLeafletMap();
-
-  useEffect(() => {
-    if (!isActive) return;
-
-    const mapContainer = leafletMap.getContainer();
-    mapContainer.style.cursor = 'crosshair';
-    let placementMarker: L.CircleMarker | null = null;
-
-    const hint = document.createElement('div');
-    hint.className = 'move-hint';
-    hint.textContent = 'Click to place note (Esc to cancel)';
-    mapContainer.appendChild(hint);
-
-    const handleClick = (e: L.LeafletMouseEvent) => {
-      // Leave a temporary marker showing where the note will be placed
-      placementMarker = L.circleMarker([e.latlng.lat, e.latlng.lng], {
-        radius: 10,
-        fillColor: '#00FFFF',
-        color: '#fff',
-        weight: 2,
-        opacity: 1,
-        fillOpacity: 0.85,
-      }).addTo(leafletMap);
-      placementMarker.bindPopup('Note will be placed here').openPopup();
-
-      // Remove marker after 5 seconds (note form is still open)
-      setTimeout(() => {
-        if (placementMarker) {
-          leafletMap.removeLayer(placementMarker);
-          placementMarker = null;
-        }
-      }, 5000);
-
-      cleanup();
-      onPlace(e.latlng.lat, e.latlng.lng);
-    };
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        cleanup();
-        onCancel();
-      }
-    };
-
-    const cleanup = () => {
-      mapContainer.style.cursor = '';
-      hint.remove();
-      leafletMap.off('click', handleClick);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-
-    leafletMap.once('click', handleClick);
-    document.addEventListener('keydown', handleKeyDown);
-
-    return cleanup;
-  }, [isActive, leafletMap, onPlace, onCancel]);
-
-  return null;
-}
-
-// ─── MapView ─────────────────────────────────────────────────────────────────
+// ─── MapView (dispatches on coordinateSystem.type) ───────────────────────────
 
 interface MapViewProps {
   map: MapRecord;
-  notes?: Note[];
-  noteGroups?: NoteGroup[];
-  isPlacingNote?: boolean;
-  onMapClickForNote?: (lat: number, lng: number) => void;
-  onCancelPlace?: () => void;
-  onNoteClick?: (note: Note) => void;
+  /** Fired when a node layer is clicked on the map. */
+  onNodeClick?: (nodeId: number) => void;
+  /**
+   * When set, fly the map to these coordinates. Setting it again with the
+   * same values (new tuple identity) re-pans — clicking the same node
+   * twice in the tree should re-center the map both times.
+   */
+  panTarget?: [number, number] | null;
 }
 
-export function MapView({ map, notes, noteGroups, isPlacingNote, onMapClickForNote, onCancelPlace, onNoteClick }: MapViewProps) {
-  const canEdit = map.permission === 'edit' || map.permission === 'owner';
+// Mounted inside MapContainer so it has access to the leaflet map instance.
+// Reacts to panTarget changes by flying the view to the requested coords.
+function PanController({ target }: { target: [number, number] | null | undefined }) {
+  const leafletMap = useLeafletMap();
+  useEffect(() => {
+    if (target) {
+      leafletMap.flyTo(target, leafletMap.getZoom(), { duration: 0.4 });
+    }
+  }, [target, leafletMap]);
+  return null;
+}
 
+export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
+  const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const currentUserId = useAuthStore((s) => s.user?.id);
+  const isOwner = currentUserId !== undefined && currentUserId === map.ownerId;
+  const xrayActive = isOwner && map.ownerXray;
+
+  useEffect(() => {
+    let cancelled = false;
+    nodesService
+      .listNodes(map.id)
+      .then((ns) => {
+        if (cancelled) return;
+        setNodes(ns);
+        // Best-effort media fetch per node, in parallel. Failures don't
+        // block rendering; a node just shows an empty media list.
+        Promise.all(
+          ns.map((n) =>
+            nodeMediaService
+              .listMedia(map.id, n.id)
+              .then((m) => [n.id, m] as const)
+              .catch(() => [n.id, [] as NodeMediaRecord[]] as const)
+          )
+        ).then((pairs) => {
+          if (cancelled) return;
+          const byId: Record<number, NodeMediaRecord[]> = {};
+          for (const [id, m] of pairs) byId[id] = m;
+          setMediaByNode(byId);
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError('Failed to load nodes for this map.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [map.id]);
+
+  const handleClick = (nodeId: number) => {
+    onNodeClick?.(nodeId);
+  };
+
+  // All three renderers share the same node-layer rendering; the only
+  // difference is the MapContainer's CRS + base layer (or lack thereof).
+  // The GeoJSON [lng, lat] → Leaflet [lat, lng] swap in `pointLatLng` /
+  // `lineLatLngs` / `polygonLatLngs` is purely about GeoJSON's axis
+  // convention and applies regardless of CRS — for pixel maps the
+  // numbers mean (x, y) but the swap is still correct.
+
+  const cs = map.coordinateSystem;
+  const renderNodeLayers = () =>
+    nodes.map((n) => (
+      <NodeLayer
+        key={n.id}
+        node={n}
+        media={mediaByNode[n.id] ?? []}
+        onClick={handleClick}
+      />
+    ));
+
+  if (cs.type === 'pixel') {
+    // CRS.Simple maps coordinate (0, 0) to the top-left. The image
+    // overlay spans from (0, 0) to (height, width) — Leaflet expects
+    // bounds as [[y, x], [y, x]]. Viewport's (x, y) center maps the
+    // same way: pass [viewport.y, viewport.x].
+    const bounds: L.LatLngBoundsExpression = [
+      [0, 0],
+      [cs.height, cs.width],
+    ];
+    const center: [number, number] = [cs.viewport.y, cs.viewport.x];
+    return (
+      <div className="map-view">
+        {loadError && <div className="alert alert-error">{loadError}</div>}
+        {xrayActive && (
+          <div className="alert alert-xray" role="status">
+            🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+          </div>
+        )}
+        <MapContainer
+          crs={L.CRS.Simple}
+          center={center}
+          zoom={cs.viewport.zoom}
+          minZoom={-5}
+          className="map-view-leaflet"
+        >
+          <ImageOverlay url={cs.image_url} bounds={bounds} />
+          {renderNodeLayers()}
+          <PanController target={panTarget} />
+        </MapContainer>
+      </div>
+    );
+  }
+
+  if (cs.type === 'blank') {
+    // No base layer — just the canvas + nodes. Center on the middle of
+    // the extent so the user sees something at default zoom.
+    const center: [number, number] = [cs.extent.y / 2, cs.extent.x / 2];
+    const maxBounds: L.LatLngBoundsExpression = [
+      [0, 0],
+      [cs.extent.y, cs.extent.x],
+    ];
+    return (
+      <div className="map-view">
+        {loadError && <div className="alert alert-error">{loadError}</div>}
+        {xrayActive && (
+          <div className="alert alert-xray" role="status">
+            🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+          </div>
+        )}
+        <MapContainer
+          crs={L.CRS.Simple}
+          center={center}
+          zoom={0}
+          minZoom={-5}
+          maxBounds={maxBounds}
+          className="map-view-leaflet map-view-blank"
+        >
+          {renderNodeLayers()}
+          <PanController target={panTarget} />
+        </MapContainer>
+      </div>
+    );
+  }
+
+  // wgs84 — standard OSM tile layer
+  const center: [number, number] = [cs.center.lat, cs.center.lng];
   return (
-    <div className="map-wrapper">
-      <MapContainer
-        center={[map.centerLat, map.centerLng]}
-        zoom={map.zoom}
-        className="leaflet-map"
-        zoomControl={true}
-      >
+    <div className="map-view">
+      {loadError && <div className="alert alert-error">{loadError}</div>}
+      {xrayActive && (
+        <div className="alert alert-xray" role="status">
+          🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
+        </div>
+      )}
+      <MapContainer center={center} zoom={cs.zoom} className="map-view-leaflet">
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maxZoom={19}
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
-        <AnnotationLayer mapId={map.id} canEdit={canEdit} />
-        <DrawControls mapId={map.id} canEdit={canEdit} />
-        {notes && noteGroups && (
-          <NoteMarkers notes={notes} groups={noteGroups} onNoteClick={onNoteClick} />
-        )}
-        {isPlacingNote && onMapClickForNote && onCancelPlace && (
-          <NotePlacement
-            isActive={isPlacingNote}
-            onPlace={onMapClickForNote}
-            onCancel={onCancelPlace}
-          />
-        )}
+        {renderNodeLayers()}
+        <PanController target={panTarget} />
       </MapContainer>
     </div>
   );
