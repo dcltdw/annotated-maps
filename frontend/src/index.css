@@ -1019,3 +1019,48 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   border-radius: 4px;
 }
 .node-popup-links { margin: .25rem 0; padding-left: 1.25rem; }
+
+/* ─── Tenant admin (branding, members) ──────────────────────────────────────── */
+.tenant-admin-section {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  margin-bottom: 1rem;
+}
+.tenant-admin-section h2 { font-size: 1.1rem; margin-bottom: 1rem; }
+.tenant-admin-form { display: flex; flex-direction: column; gap: 1rem; }
+.tenant-admin-actions { display: flex; gap: .5rem; }
+.branding-color-row { display: flex; align-items: center; gap: .5rem; }
+.branding-color-row input[type="color"] {
+  width: 3rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.branding-color-hex {
+  font-family: monospace;
+  font-size: .85rem;
+  color: var(--color-text-muted);
+}
+.branding-preview {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .75rem;
+  background: var(--color-bg);
+  border-radius: var(--radius);
+  flex-wrap: wrap;
+}
+.branding-preview-label {
+  font-size: .85rem;
+  color: var(--color-text-muted);
+}
+.branding-preview-swatch {
+  padding: .25rem .75rem;
+  border-radius: var(--radius);
+  font-size: .85rem;
+  font-weight: 500;
+}
