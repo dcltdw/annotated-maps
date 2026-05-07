@@ -50,11 +50,17 @@ for the signature.
 
 Currently audited:
 
-- Auth: `register`, `login_success`, `login_failure`, `sso_login`
-- Membership: `member_add`, `member_remove`, `permission_change`
-- Content (added in #57): `map_update`, `map_delete`, `annotation_update`,
-  `annotation_delete`, `note_update`, `note_delete`, `notegroup_update`,
-  `notegroup_delete`, `branding_update`
+- Auth: `register`, `login_success`, `login_failure`, `sso_login`,
+  `sso_identity_collision`
+- Membership / permissions: `member_add`, `member_remove`,
+  `permission_change`, `branding_update`
+- Maps: `map_update`, `map_delete`
+- Nodes: `node_create`, `node_update`, `node_delete`,
+  `node_visibility_set`, `node_move`, `node_copy`
+- Notes: `note_update`, `note_delete`, `note_visibility_set`
+- Plots: `plot_create`, `plot_update`, `plot_delete`,
+  `plot_node_add`, `plot_node_remove`, `plot_note_add`,
+  `plot_note_remove`
 
 Add a new event when introducing any destructive or privilege-changing
 operation. Read paths (GET) are not audited.
@@ -122,7 +128,7 @@ instead of inline axios/AxiosError handling:
 import { extractApiError, getApiErrorCode } from '@/utils/errors';
 
 try {
-  await mapsService.createMap(data);
+  await mapsService.createMap(tenantId, data);
 } catch (err) {
   setError(extractApiError(err, 'Failed to create map.'));
 }
@@ -137,25 +143,41 @@ in component code — keep that knowledge in the `utils/errors.ts` helpers.
 
 ### Service layer request types
 
-The service layer uses dedicated TypeScript types for each request:
+The service layer uses dedicated TypeScript types for each request,
+defined alongside the Zod schemas in
+[`frontend/src/api/schemas.ts`](../frontend/src/api/schemas.ts):
 
 - `CreateMapRequest` / `UpdateMapRequest`
-- `CreateAnnotationRequest` / `UpdateAnnotationRequest`
+- `CreateNodeRequest` / `UpdateNodeRequest`
 - `CreateNoteRequest` / `UpdateNoteRequest`
-- `CreateNoteGroupRequest` / `UpdateNoteGroupRequest`
+- `CreatePlotRequest` / `UpdatePlotRequest`
+- `CreateVisibilityGroupRequest` / `UpdateVisibilityGroupRequest`
+- `CreateMediaRequest` / `UpdateMediaRequest` (shared between node and
+  note media)
 
-**Do not** use `Partial<CreateXRequest>` as an update type. The `Update*`
-variant exists to express fields that are genuinely optional on update
-(e.g., `color: string | null` for "clear this field") versus fields that
-are simply unset (`undefined`).
+The `Update*` variants are deliberate: they express fields that are
+genuinely optional on update (e.g., `color: string | null` for "clear
+this field") versus fields that are simply unset (`undefined`). Don't
+collapse them to `Partial<CreateXRequest>` — you'll lose that
+distinction.
+
+### Validating API responses with Zod
+
+Service-layer reads parse JSON through the Zod schemas in
+[`frontend/src/api/schemas.ts`](../frontend/src/api/schemas.ts) before
+returning to callers. The TypeScript type comes from `z.infer<>` on
+the same schema, so the runtime guarantee and the static type can't
+drift. New endpoints should add a schema to that file rather than
+hand-writing a TypeScript type — see #92 for the rationale.
 
 ### Component decomposition
 
 Feature panels that grow past ~300 lines should be decomposed into
 focused subcomponents that sit alongside the parent in the same folder.
-See [`frontend/src/components/Notes/`](../frontend/src/components/Notes/)
-for the pattern: `NotesPanel.tsx` coordinates, while `NoteCard.tsx`,
-`NoteForm.tsx`, and `GroupForm.tsx` handle the leaf UI.
+See [`frontend/src/components/Detail/`](../frontend/src/components/Detail/)
+and [`frontend/src/components/Tree/`](../frontend/src/components/Tree/)
+for the pattern: a coordinator component owns state and data fetching
+while focused leaves handle a single piece of UI.
 
 ### No `alert()` or silent catches
 
@@ -165,49 +187,19 @@ for the pattern: `NotesPanel.tsx` coordinates, while `NoteCard.tsx`,
 
 This is a convention, not a lint rule, so review PRs for it.
 
-### Errors from Leaflet popup handlers
+### Rendering user-controlled content safely
 
-Leaflet popup button handlers run outside React, so you can't call
-`setState` from them. Use the `showMapError(map, message)` helper in
-[`AnnotationLayer.tsx`](../frontend/src/components/Map/AnnotationLayer.tsx):
+User-controlled fields (node names, note titles, captions, descriptions)
+must never be interpolated into raw HTML strings. React's JSX escaping
+handles this for ordinary component children, but two paths still
+warrant care:
 
-```ts
-try {
-  await annotationsService.updateAnnotation(...);
-} catch {
-  showMapError(leafletMap, 'Failed to update annotation.');
-}
-```
-
-It appends a `.map-error-banner` div to the map container and auto-removes
-it after 5 seconds. The CSS lives in [`frontend/src/index.css`](../frontend/src/index.css).
-Only use this pattern for Leaflet event handlers — React components
-should use component-local error state with inline banner display.
-
-### Building Leaflet popup content — DOM nodes, not HTML strings
-
-**Never pass an HTML string built from user-controlled fields to
-`layer.bindPopup(...)`.** Leaflet renders strings as HTML, so
-`title: '<img src=x onerror=...>'` in an annotation executes for every
-viewer.
-
-Build popup content as DOM nodes using `document.createElement` and
-`textContent`, then pass the element to `bindPopup`. `textContent` is
-parsed as literal text, not HTML, so injection is impossible:
-
-```ts
-const popupEl = document.createElement('div');
-popupEl.className = 'annotation-popup';
-
-const h3 = document.createElement('h3');
-h3.textContent = annotation.title;  // ✓ safe even if title contains HTML
-popupEl.appendChild(h3);
-
-layer.bindPopup(popupEl);
-```
-
-For links and images, also validate the URL scheme (defense in depth
-against backend validation gaps):
+- Leaflet APIs that accept HTML strings (e.g., `layer.bindTooltip(html)`)
+  must be passed DOM nodes built with `document.createElement` +
+  `textContent`, never a `${user.field}` template literal.
+- Media URLs must be validated as `http`/`https` on the client even
+  though the backend also validates — defense in depth keeps a backend
+  validation regression from becoming an XSS payload:
 
 ```ts
 function isSafeMediaUrl(url: string): boolean {
@@ -219,10 +211,6 @@ function isSafeMediaUrl(url: string): boolean {
   }
 }
 ```
-
-See [`AnnotationLayer.tsx`](../frontend/src/components/Map/AnnotationLayer.tsx)
-and [`NoteMarkers.tsx`](../frontend/src/components/Map/NoteMarkers.tsx)
-for the pattern in context.
 
 ### JWT secret placeholder is fatal at startup
 
