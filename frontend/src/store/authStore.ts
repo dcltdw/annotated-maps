@@ -10,6 +10,7 @@ interface AuthActions {
     tenantId: number,
     tenants: TenantSummary[]
   ) => void;
+  setToken: (token: string) => void;
   setActiveTenant: (tenantId: number) => void;
   setBranding: (branding: TenantBranding) => void;
   logout: () => void;
@@ -32,6 +33,9 @@ export const useAuthStore = create<AuthState & AuthActions>()(
 
       setAuth: (user, token, orgId, tenantId, tenants) =>
         set({ user, token, orgId, tenantId, tenants, isAuthenticated: true }),
+
+      setToken: (token) =>
+        set({ token }),
 
       setActiveTenant: (tenantId) =>
         set({ tenantId, branding: {} }),
