@@ -51,6 +51,14 @@ agent instructions:
     range per §4b-1/§4b-2, plus trigger `weekend.yml` against the branch HEAD.
     Each audited branch has a dedicated tracking issue; comment the audit
     result there so the next audit knows where to start counting.
+11. **When opening multiple independent PRs autonomously in a single
+    session ("burst mode"), follow the burst checklist:** pre-burst dep
+    audit, run the *whole* affected spec suite locally before each PR
+    opens (not just the new spec — sibling tests can break on shared
+    selectors), status update every ~3 PRs to a tracking issue,
+    end-of-burst CI sweep (`gh pr checks` per PR), end-of-burst
+    `weekend.yml` against the trunk. Skip-rather-than-guess on mid-burst
+    scope ambiguity.
 
 ---
 
@@ -914,6 +922,118 @@ counting anchor. For long-running branches that already exist, the
 audit issue is the rebuild's existing tracking ticket; retroactive
 baseline = the most recent `Merge main into <branch>` commit.
 
+### 11. Burst mode — checklist for multi-PR autonomous sessions
+
+> **Rule:** When opening multiple independent PRs autonomously in a
+> single session ("burst mode"), follow the burst checklist below.
+> Skip the rule when only one PR is in flight; the structure exists to
+> defend against the failure modes that scale with concurrent PRs.
+
+**Why:** Two bursts so far (PR #178 nodes-rebuild closeout sweep, PRs
+#201–#206 Wave 3 + #168) have surfaced the same structural failure:
+a small CI failure caught only when the user notices, not when the PR
+opens. PR #191 saturated the rate-limit bucket and broke downstream
+E2E. PR #203 added a new `Sign in with SSO` button that matched the
+existing `name: /sign in/i` selector in two sibling specs. Both shipped
+silently because the agent ran the new spec locally, saw it pass, and
+moved on without checking whether sibling specs still passed — and
+without checking the PR's CI after opening.
+
+The same two bursts also surfaced patterns that *worked*: pre-burst
+dep audit (caught a #162/#163 co-location near-miss), status updates
+every ~3 PRs to a tracking issue, end-of-burst `weekend.yml` against
+the trunk. Codifying both the checklist and the skip rule makes the
+next burst repeatable.
+
+**How to apply:**
+
+**1. Pre-burst dep audit** (~5 min before starting). List every ticket
+in the burst. Identify A-blocks-B relationships (e.g., #195 reuses
+#164's modal — sequential). Drop the dependent ones from this burst
+and let them wait for a follow-up; re-order the rest by shape so the
+simplest land first as warm-ups. Both real bursts caught issues here:
+nodes-rebuild adjusted scope mid-burst when the dep wasn't audited;
+Wave 3 caught the #162/#163 co-location pre-burst and switched #162
+to a separate route.
+
+**2. Run the *whole* affected spec suite locally before each
+`gh pr create`** — not just the new spec. UI changes to existing
+surfaces frequently break sibling tests' selectors. The PR #203
+failure mode would have been caught by:
+
+```bash
+# For LoginForm changes, run every spec that interacts with /login:
+npx playwright test sso-initiate auth smoke
+```
+
+The agent's reflex is to run only the new spec ("test passed → done").
+Sibling specs that select on shared element names (the canonical case:
+`page.getByRole('button', { name: /sign in/i })`) silently break the
+moment a new same-named element appears in the same surface. Identify
+the affected specs by greping for the touched component name across
+`tests/e2e/`, then run them together.
+
+**3. Status updates every ~3 PRs to a tracking issue** (the audit-log
+issue or burst-tracking issue). Caption: PR# / closes / type / one-
+line note. Without this, the user has no visibility into mid-burst
+state when they check in. The post-burst report at the end is fine
+but doesn't help during the run.
+
+**4. End-of-burst CI sweep** (mandatory). After the last PR opens:
+
+```bash
+for pr in <list of burst PR numbers>; do
+  echo "=== PR #$pr ==="
+  gh pr checks $pr
+done
+```
+
+Wait for `integration` jobs to finish (each takes ~3–5 min). Triage
+failures: if multiple PRs fail with the same root cause (env, race,
+shared selector regression), fix once; if isolated, fix individually.
+Both bursts have had exactly one CI failure surface at this step
+(#191 last burst, #203 this burst). Skipping the sweep means the user
+has to do this triage when they return.
+
+**5. End-of-burst `weekend.yml` against the trunk:**
+
+```bash
+gh workflow run weekend.yml --ref main
+```
+
+Catches integration regressions the per-PR cached CI might miss
+(no-cache rebuild, extended tier including 5-minute soak, full E2E).
+Watch in the background; post the run URL as a follow-up comment on
+the burst-tracking issue when it lands.
+
+**6. Skip-rather-than-guess on mid-burst scope ambiguity.** If a
+ticket turns up scope ambiguity mid-implementation (UX call, design
+question, missing requirement), file a question on the issue and
+skip rather than guess. The user has explicitly opted in to this
+mode multiple times — preserve their right to make UX calls
+themselves.
+
+**Optional: per-PR fast-check** (~60s after `gh pr create`).
+`gh pr checks NN` reads the fast-running checks (lint / security /
+compile, all under ~3 min) before they finish. If those fail, the
+fix is mechanical (typo, missing import) and best done while the
+PR's context is still fresh. Skippable on doc-only bursts.
+
+**When NOT to use burst mode:**
+
+- Tickets with judgment-heavy UX decisions ("what should this modal
+  look like?") — interactive sessions handle this better.
+- Tickets with sequential dependencies — one of them blocks the
+  others, defeating the parallel-PR benefit.
+- Tickets that need user input mid-implementation (design clarification,
+  scope confirmation). The skip rule covers small instances; large
+  instances should not be in the burst at all.
+
+**Burst sizing rule of thumb:** ~25–30 min of focused work per PR;
+~6–10 PRs per burst before context pressure forces shortcuts (the last
+nodes-rebuild burst hit context pressure at the 6th PR, #175
+conventions reorg).
+
 ---
 
 ## Adapting these conventions to other projects
@@ -955,3 +1075,10 @@ When porting to another project:
   merge-commit merges. Adapt the workflow trigger and counting recipe to
   the target project's CI system and merge style. The cadence (every 10
   PRs) and the tracking-issue mechanic transfer directly.
+- **Rule 11 (burst mode)** uses GitHub-CLI commands (`gh pr checks`,
+  `gh workflow run weekend.yml`) but the cadence transfers directly:
+  the dep-audit, run-the-whole-affected-suite-locally, status-update-
+  every-3, end-of-burst CI sweep, and skip-rather-than-guess rules
+  are all CI-system-agnostic. Substitute the project's equivalents
+  for `gh pr checks` (e.g., `glab pipeline view`) and the long-test
+  workflow.

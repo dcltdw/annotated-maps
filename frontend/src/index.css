@@ -56,6 +56,22 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 .auth-card h1 { margin-bottom: 1.5rem; font-size: 1.5rem; }
 .auth-form { display: flex; flex-direction: column; gap: 1rem; }
 .auth-footer { margin-top: 1rem; font-size: .875rem; text-align: center; color: var(--color-text-muted); }
+.auth-sso-divider {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin: 1rem 0;
+  color: var(--color-text-muted);
+  font-size: .75rem;
+}
+.auth-sso-divider::before,
+.auth-sso-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border);
+}
+.auth-sso-form { gap: .5rem; margin-top: .5rem; }
 .auth-footer a { color: var(--color-primary); }
 .form-group { display: flex; flex-direction: column; gap: .375rem; }
 .form-group label { font-size: .875rem; font-weight: 500; }
@@ -700,6 +716,19 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
 }
 .note-card-titlebar { display: flex; align-items: center; gap: .25rem; flex: 1; min-width: 0; }
 .note-pin { font-size: .85rem; }
+.note-pin-toggle {
+  font-size: .85rem;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0 4px;
+  opacity: 0.35;
+  transition: opacity .12s;
+}
+.note-pin-toggle:hover { opacity: 0.7; }
+.note-pin-toggle:disabled { cursor: progress; }
+.note-pin-toggle-on { opacity: 1; }
+.note-pin-toggle-on:hover { opacity: 0.85; }
 .note-card-actions { display: flex; gap: .25rem; }
 .note-card-text { margin: .25rem 0; font-size: .85rem; white-space: pre-wrap; }
 .note-card-footer { font-size: .75rem; color: var(--color-text-muted, #666); margin-top: .25rem; }
