@@ -345,9 +345,29 @@ void NodeController::createNode(
             // Build INSERT SQL with NULLs inlined for absent optional
             // columns (parent_id, geo_json). Avoids the parameter-binding
             // type gymnastics that plain CASE expressions induced.
+            //
+            // Per-map cap (#217 / audit #46 L2): COUNT before INSERT and
+            // reject if at the limit. The per-tenant 1000-map cap
+            // doesn't bound a single hot map; this does.
             auto doInsert = [callback, req, mapId, userId, callerUsername,
                              name, description, color, hasGeo, geoJsonStr,
                              hasParent, parentId, tenantId]() {
+                auto dbCap = drogon::app().getDbClient();
+                dbCap->execSqlAsync(
+                    "SELECT COUNT(*) AS c FROM nodes WHERE map_id = ?",
+                    [callback, req, mapId, userId, callerUsername,
+                     name, description, color, hasGeo, geoJsonStr,
+                     hasParent, parentId, tenantId]
+                    (const drogon::orm::Result& rCap) {
+                        int existing = rCap[0]["c"].as<int>();
+                        if (existing >= MAX_NODES_PER_MAP) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "bad_request",
+                                "Map node limit reached (" +
+                                std::to_string(MAX_NODES_PER_MAP) + ")"));
+                            return;
+                        }
+                        (void)callerUsername;
                 auto db3 = drogon::app().getDbClient();
 
                 auto insertedCb = [callback, req, mapId, userId, tenantId]
@@ -411,6 +431,12 @@ void NodeController::createNode(
                     db3->execSqlAsync(sql, insertedCb, errCb,
                         mapId, userId, name, description, color);
                 }
+                    },  // end COUNT success callback
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Failed to count map nodes"));
+                    },
+                    mapId);
             };
 
             // Step 2: if parent given, verify same-map and depth.
@@ -1727,6 +1753,17 @@ void NodeController::copyNode(
                                 sources->push_back(std::move(s));
                             }
 
+                            // Per-map cap (#217 / audit #46 L2): copies
+                            // can multiply node counts quickly. Verify
+                            // destMap.count + sources.size() <= cap
+                            // before any INSERTs, so a partial copy can't
+                            // wedge a map past the limit. The continuation
+                            // (idMap setup + copy loop) is hoisted into a
+                            // lambda the cap-check invokes on success.
+                            auto continueCopy = [callback, req, tenantId, id, userId,
+                                                  destMapId, hasNewParent, newParentIsNull,
+                                                  newParentId, sources]() {
+
                             auto idMap   = std::make_shared<std::unordered_map<int,int>>();
                             auto rootCopyId = std::make_shared<int>(0);
 
@@ -1987,6 +2024,31 @@ void NodeController::copyNode(
                                 }
                             };
                             (*step)();
+
+                            };  // end continueCopy lambda
+
+                            // Run the cap-check; on success it invokes continueCopy.
+                            auto dbCap = drogon::app().getDbClient();
+                            dbCap->execSqlAsync(
+                                "SELECT COUNT(*) AS c FROM nodes WHERE map_id = ?",
+                                [callback, sources, continueCopy]
+                                (const drogon::orm::Result& rCap) {
+                                    int existing = rCap[0]["c"].as<int>();
+                                    int incoming = static_cast<int>(sources->size());
+                                    if (existing + incoming > MAX_NODES_PER_MAP) {
+                                        callback(errorResponse(drogon::k400BadRequest,
+                                            "bad_request",
+                                            "Copy would exceed map node limit (" +
+                                            std::to_string(MAX_NODES_PER_MAP) + ")"));
+                                        return;
+                                    }
+                                    continueCopy();
+                                },
+                                [callback](const drogon::orm::DrogonDbException&) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to count destination nodes"));
+                                },
+                                destMapId);
                         },
                         [callback](const drogon::orm::DrogonDbException&) {
                             callback(errorResponse(drogon::k500InternalServerError,
