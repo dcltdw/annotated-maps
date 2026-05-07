@@ -32,6 +32,11 @@ export function Navbar() {
               </Link>
             )}
             {tenantId && (
+              <Link to={`/tenants/${tenantId}/admin`}>
+                Admin
+              </Link>
+            )}
+            {tenantId && (
               <Link to={`/tenants/${tenantId}/members`}>
                 Members
               </Link>
