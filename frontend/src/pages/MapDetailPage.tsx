@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { MapView } from '@/components/Map/MapView';
+import { MapSharingModal } from '@/components/Map/MapSharingModal';
 import { NodeTreePanel } from '@/components/Tree/NodeTreePanel';
 import { NodeDetailPanel } from '@/components/Detail/NodeDetailPanel';
 import { useMap } from '@/hooks/useMap';
@@ -33,6 +34,7 @@ export function MapDetailPage() {
   const [panTarget, setPanTarget] = useState<[number, number] | null>(null);
   const [xraySaving, setXraySaving] = useState(false);
   const [xrayError, setXrayError] = useState<string | null>(null);
+  const [showSharing, setShowSharing] = useState(false);
   const currentUserId = useAuthStore((s) => s.user?.id);
 
   useEffect(() => {
@@ -111,6 +113,16 @@ export function MapDetailPage() {
             <button
               type="button"
               className="btn btn-ghost"
+              onClick={() => setShowSharing(true)}
+              title="Manage who can view and edit this map"
+            >
+              Share
+            </button>
+          )}
+          {isOwner && (
+            <button
+              type="button"
+              className="btn btn-ghost"
               onClick={handleDeleteMap}
               title="Delete this map (and all its locations + notes)"
             >
@@ -147,6 +159,12 @@ export function MapDetailPage() {
       <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
         Back to maps
       </button>
+      {showSharing && (
+        <MapSharingModal
+          mapId={activeMap.id}
+          onClose={() => setShowSharing(false)}
+        />
+      )}
     </div>
   );
 }

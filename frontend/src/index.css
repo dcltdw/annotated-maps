@@ -1019,3 +1019,30 @@ html, body { height: 100%; font-family: system-ui, -apple-system, sans-serif; co
   border-radius: 4px;
 }
 .node-popup-links { margin: .25rem 0; padding-left: 1.25rem; }
+
+/* ─── Map sharing modal (#161) ──────────────────────────────────────────────── */
+.sharing-section { margin: 1rem 0; }
+.sharing-section h3 { font-size: .95rem; margin-bottom: .5rem; color: var(--color-text-muted); }
+.sharing-public-toggle {
+  display: flex; align-items: center; gap: .5rem; font-size: .875rem;
+}
+.sharing-empty { color: var(--color-text-muted); font-size: .85rem; }
+.sharing-grant-list { list-style: none; display: flex; flex-direction: column; gap: .35rem; }
+.sharing-grant-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: .5rem;
+  padding: .35rem .5rem;
+  background: var(--color-bg);
+  border-radius: var(--radius);
+}
+.sharing-grant-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; }
+.sharing-add-form {
+  display: flex; gap: .5rem; align-items: center; margin-top: .75rem;
+  flex-wrap: wrap;
+}
+.sharing-add-form select, .sharing-add-form input {
+  padding: .35rem .5rem; border: 1px solid var(--color-border); border-radius: var(--radius);
+}
+.sharing-add-form select { flex: 1; min-width: 12rem; }
