@@ -166,4 +166,19 @@ status, _ = http_delete(f"/tenants/{OWNER_TID}/maps/{MAP_ID}/permissions/{COLLAB
 assert_status("delete user permission → 204", 204, status)
 
 
+print("  --- DELETE permission-target validation (#216) ---")
+# Audit #46 L1: removePermission used std::stoi unguarded on the path
+# segment. Non-numeric, non-"public" values threw and surfaced as 500.
+# Validate that the handler now returns a clean 400 instead.
+for bad in ["abc", "123abc", "-7", "0", ""]:
+    status, body = http_delete(
+        f"/tenants/{OWNER_TID}/maps/{MAP_ID}/permissions/{bad}", OWNER_TOK)
+    label = bad if bad else "<empty>"
+    # Empty string falls through Drogon's router as a missing path segment
+    # and becomes a 404 from the framework — accept either as "not 500".
+    assert_true(f"bad target '{label}' rejected (not 500)",
+                status in (400, 404),
+                f"expected 400/404 for {bad!r}, got {status}")
+
+
 sys.exit(0 if report() else 1)
