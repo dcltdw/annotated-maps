@@ -315,6 +315,7 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
   const [showVisibility, setShowVisibility] = useState(false);
   const [showPlots, setShowPlots] = useState(false);
   const [showMedia, setShowMedia] = useState(false);
+  const [togglingPin, setTogglingPin] = useState(false);
 
   const handleDelete = async () => {
     if (!window.confirm('Delete this note?')) return;
@@ -323,6 +324,19 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
       await onChange();
     } catch (e) {
       window.alert(extractApiError(e, 'Failed to delete note.'));
+    }
+  };
+
+  const handleTogglePin = async () => {
+    if (togglingPin) return;
+    setTogglingPin(true);
+    try {
+      await notesService.updateNote(mapId, note.id, { pinned: !note.pinned });
+      await onChange();
+    } catch (e) {
+      window.alert(extractApiError(e, 'Failed to update pin state.'));
+    } finally {
+      setTogglingPin(false);
     }
   };
 
@@ -347,7 +361,20 @@ function NoteCard({ mapId, note, onChange }: NoteCardProps) {
     >
       <header className="note-card-header">
         <div className="note-card-titlebar">
-          {note.pinned && <span className="note-pin" title="Pinned">📌</span>}
+          {note.canEdit ? (
+            <button
+              type="button"
+              className={`note-pin-toggle ${note.pinned ? 'note-pin-toggle-on' : ''}`}
+              onClick={handleTogglePin}
+              disabled={togglingPin}
+              aria-label={note.pinned ? 'Unpin note' : 'Pin note'}
+              title={note.pinned ? 'Unpin' : 'Pin'}
+            >
+              📌
+            </button>
+          ) : (
+            note.pinned && <span className="note-pin" title="Pinned">📌</span>
+          )}
           {note.title && <strong>{note.title}</strong>}
         </div>
         {note.canEdit && (
