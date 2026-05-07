@@ -200,9 +200,9 @@ post-merge TodoWrite list:
 
 Run `git branch -D <name>` (force, since git can't always confirm the
 merge happened — the remote is already gone, and the commits are in
-\`main\`/\`nodes-rebuild\` already if the PR merged). Skip if the
-branch is the current checkout — switch to \`main\` first. Skip the
-shared long-running branches (\`main\`, \`nodes-rebuild\`).
+\`main\` already if the PR merged). Skip if the branch is the current
+checkout — switch to \`main\` first. Skip the shared long-running
+branches (\`main\` plus any active phase branch).
 
 To bulk-prune at any point, the safe one-liner is:
 
@@ -223,8 +223,8 @@ IN_PROG_OPT="47fc9ee4"
 DONE_OPT="98236657"
 ```
 
-These IDs were stable as of `nodes-rebuild`. If they ever drift (project
-rename, etc.), re-derive via:
+These IDs were stable as of 2026-05 (post-`nodes-rebuild` merge). If they
+ever drift (project rename, etc.), re-derive via:
 
 ```bash
 gh api graphql -f query='
@@ -414,10 +414,12 @@ mid-state inconsistency is expected by design.
 - If the long-running branch has different CI gating semantics than `main`
   (e.g., informational only), state it explicitly.
 
-**Example:**
+**Example** (historical, from a backend-only PR into the `nodes-rebuild`
+phase branch — applies the same way to any future long-running branch
+where some CI is expected to fail mid-rebuild):
 
 ```markdown
-## Test expectations (CI on `nodes-rebuild`)
+## Test expectations (CI on `<long-running-branch>`)
 
 | Job | Expected | Why |
 |---|---|---|
@@ -460,7 +462,7 @@ about how the implementation actually unfolded.
   them in their actual position so the trail reflects reality, not the
   original plan.
 
-**Example:**
+**Example** (historical, taken verbatim from a `nodes-rebuild` ticket):
 
 ```markdown
 ## Work breakdown
@@ -472,7 +474,7 @@ about how the implementation actually unfolded.
 5. Build backend
 6. Add tagging + filtering integration tests
 7. Run tests + iterate
-8. Open PR into nodes-rebuild
+8. Open PR into the active phase branch
 ```
 
 #### 4e. Surface operational impact (restart / rebuild / migration needs)

@@ -92,9 +92,14 @@ After creation:
 
 1. Navigate to `/tenants/${TENANT_ID}/maps/${id}` in the browser
 2. The image should appear as the map backdrop
-3. Add a location via the API or (once #128's UI is wired) by clicking on the
-   image
+3. Add a location via the API or via the **+ Location** button in the
+   node tree panel (click-on-image placement is tracked in #153 and not
+   yet wired)
 4. Confirm the location renders at the expected pixel position
 
 If the image fails to load, check that `image_url` is reachable from the
 browser (CORS, auth, etc.) — the backend doesn't proxy the image.
+
+To rename, edit the description, or delete the map later, use the **⋯**
+menu on the map's card on the **My Maps** page (Edit modal / Delete confirm
+landed in #160).
