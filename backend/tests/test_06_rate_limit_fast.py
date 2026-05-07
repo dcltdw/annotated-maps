@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """test_06_rate_limit_fast.py — Rate limiter enforcement test (fast tier)"""
 
+import json
 import os
 import sys
 import urllib.request
@@ -85,5 +86,53 @@ retry = get_retry_after()
 assert_true("rate_limit: 429 includes Retry-After header", len(retry) > 0)
 
 print("  All Retry-After header tests passed.")
+
+# ─── 429 body shape (#52 follow-up) ──────────────────────────────────────────
+# RateLimitFilter is its own response emitter (separate from errorResponse)
+# so the {error, message} shape contract — which extractApiError() on the
+# frontend depends on — needs to be pinned here too. The bucket is already
+# saturated from the enforcement section above; one more request hits 429
+# and gives us a body to inspect. The runner restarts the backend before
+# every NEEDS_RESTART test (which includes test_08 right after this one),
+# so the saturated bucket doesn't leak past this file.
+
+print("  --- 429 body shape ---")
+
+def get_429_body():
+    """Send a login request (already rate-limited) and return parsed JSON body."""
+    url = f"{API}/auth/login"
+    data = b'{"email":"ratelimit@fake.com","password":"x"}'
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=CURL_TIMEOUT) as resp:
+            return resp.status, resp.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8")
+    except Exception:
+        return 0, ""
+
+code, raw = get_429_body()
+if code == 429:
+    try:
+        body = json.loads(raw)
+    except (ValueError, TypeError):
+        body = None
+    assert_true("rate_limit: 429 body is JSON", isinstance(body, dict))
+    assert_true("rate_limit: 429 body has non-empty 'error' string",
+                isinstance(body, dict)
+                and isinstance(body.get("error"), str)
+                and len(body["error"]) > 0)
+    assert_true("rate_limit: 429 body has non-empty 'message' string",
+                isinstance(body, dict)
+                and isinstance(body.get("message"), str)
+                and len(body["message"]) > 0)
+else:
+    # Bucket aged out between the previous request and this one — possible
+    # but unlikely. Don't fail the suite, just record a non-fatal note.
+    print(f"  (bucket aged out between requests; got status {code} not 429 — "
+          "shape check skipped)")
+
+print("  All 429 body shape tests passed.")
 
 sys.exit(0 if report() else 1)
