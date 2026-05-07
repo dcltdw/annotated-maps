@@ -59,6 +59,8 @@ python3 backend/tests/run-tests.py --only 1
 | `test_24_node_move.py` | fast | Node move endpoint (cycle prevention, depth checks) |
 | `test_25_node_copy.py` | fast | Node copy endpoint (subtree copy with rebinding) |
 | `test_26_coordinate_systems.py` | fast | Coordinate-system shape validation (wgs84/pixel/blank) |
+| `test_27_error_shape.py` | fast | `{error, message}` response-shape contract across canonical 4xx paths |
+| `test_28_permissions.py` | fast | Map-permission branches: level-enum round-trip, cross-org reject, public access, non-owner gate |
 
 ## How it works
 
