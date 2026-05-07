@@ -36,6 +36,11 @@ export function Navbar() {
                 Admin
               </Link>
             )}
+            {tenantId && (
+              <Link to={`/tenants/${tenantId}/members`}>
+                Members
+              </Link>
+            )}
             <span className="navbar-user">{user?.username}</span>
             <button onClick={handleLogout} className="btn btn-ghost">
               Sign Out
