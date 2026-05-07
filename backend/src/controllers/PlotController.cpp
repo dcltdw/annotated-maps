@@ -251,21 +251,35 @@ void PlotController::createPlot(
     db->execSqlAsync(
         "INSERT INTO plots (tenant_id, name, description, created_by) "
         "VALUES (?, ?, NULLIF(?, ''), ?)",
-        [callback, req, tenantId, userId, name, description]
+        [callback, req, tenantId, userId]
         (const drogon::orm::Result& r) {
             int newId = static_cast<int>(r.insertId());
-            Json::Value p;
-            p["id"]          = newId;
-            p["tenantId"]    = tenantId;
-            p["name"]        = name;
-            p["description"] = description;
-            p["createdBy"]   = userId;
             Json::Value detail;
             detail["plotId"] = newId;
             AuditLog::record("plot_create", req, userId, 0, tenantId, detail);
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(p);
-            resp->setStatusCode(drogon::k201Created);
-            callback(resp);
+            // #152: re-fetch the canonical row so POST returns the same
+            // shape as GET (matches frontend Zod schema; no follow-up GET
+            // needed in plotsService.createPlot).
+            auto db2 = drogon::app().getDbClient();
+            db2->execSqlAsync(
+                "SELECT id, tenant_id, name, description, created_by, "
+                "       created_at, updated_at "
+                "FROM plots WHERE id = ? AND tenant_id = ?",
+                [callback](const drogon::orm::Result& rGet) {
+                    if (rGet.empty()) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "internal_error", "Plot vanished after insert"));
+                        return;
+                    }
+                    auto resp = drogon::HttpResponse::newHttpJsonResponse(rowToPlot(rGet[0]));
+                    resp->setStatusCode(drogon::k201Created);
+                    callback(resp);
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to fetch created plot"));
+                },
+                newId, tenantId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
@@ -353,8 +367,25 @@ void PlotController::updatePlot(
                         }
                         Json::Value detail; detail["plotId"] = id;
                         AuditLog::record("plot_update", req, userId, 0, tenantId, detail);
-                        Json::Value v; v["id"] = id; v["updated"] = true;
-                        callback(drogon::HttpResponse::newHttpJsonResponse(v));
+                        // #152: return full record matching getPlot.
+                        auto db3 = drogon::app().getDbClient();
+                        db3->execSqlAsync(
+                            "SELECT id, tenant_id, name, description, created_by, "
+                            "       created_at, updated_at "
+                            "FROM plots WHERE id = ? AND tenant_id = ?",
+                            [callback](const drogon::orm::Result& rGet) {
+                                if (rGet.empty()) {
+                                    callback(errorResponse(drogon::k404NotFound,
+                                        "not_found", "Plot not found"));
+                                    return;
+                                }
+                                callback(drogon::HttpResponse::newHttpJsonResponse(rowToPlot(rGet[0])));
+                            },
+                            [callback](const drogon::orm::DrogonDbException&) {
+                                callback(errorResponse(drogon::k500InternalServerError,
+                                    "db_error", "Failed to fetch updated plot"));
+                            },
+                            id, tenantId);
                     },
                     [callback](const drogon::orm::DrogonDbException&) {
                         callback(errorResponse(drogon::k500InternalServerError,
@@ -365,8 +396,25 @@ void PlotController::updatePlot(
             }
             Json::Value detail; detail["plotId"] = id;
             AuditLog::record("plot_update", req, userId, 0, tenantId, detail);
-            Json::Value v; v["id"] = id; v["updated"] = true;
-            callback(drogon::HttpResponse::newHttpJsonResponse(v));
+            // #152: return full record matching getPlot.
+            auto db2 = drogon::app().getDbClient();
+            db2->execSqlAsync(
+                "SELECT id, tenant_id, name, description, created_by, "
+                "       created_at, updated_at "
+                "FROM plots WHERE id = ? AND tenant_id = ?",
+                [callback](const drogon::orm::Result& rGet) {
+                    if (rGet.empty()) {
+                        callback(errorResponse(drogon::k404NotFound,
+                            "not_found", "Plot not found"));
+                        return;
+                    }
+                    callback(drogon::HttpResponse::newHttpJsonResponse(rowToPlot(rGet[0])));
+                },
+                [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to fetch updated plot"));
+                },
+                id, tenantId);
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
