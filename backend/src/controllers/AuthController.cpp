@@ -106,139 +106,190 @@ void AuthController::registerUser(
         return;
     }
 
-    // Step 1: Create personal organization (slug = username)
+    // #230 / audit #46 H1: wrap the 6-step new-account flow (org +
+    // tenant + user + tenant_members + org_members + bootstrap) in a
+    // single transaction. Pre-fix, a failure mid-chain left an orphan
+    // org/tenant/user with no membership rows, requiring DB cleanup.
+    //
+    // Response handling: a `responded` flag gates callback so it's
+    // called exactly once. Inner error handlers call respond(...) with
+    // the appropriate status (preserving 409 differentiation for
+    // username/email duplicates), then trans->rollback(). The success
+    // path runs from setCommitCallback after commit confirms.
+    auto responded = std::make_shared<bool>(false);
+    auto respondOnce =
+        [callback, responded](const drogon::HttpResponsePtr& r) {
+            if (*responded) return;
+            *responded = true;
+            callback(r);
+        };
+    auto respondErr =
+        [respondOnce](const std::string& code, const std::string& msg,
+                      drogon::HttpStatusCode status) {
+            auto r = drogon::HttpResponse::newHttpJsonResponse(
+                errorJson(code, msg));
+            r->setStatusCode(status);
+            respondOnce(r);
+        };
+
     auto db = drogon::app().getDbClient();
-    db->execSqlAsync(
-        "INSERT INTO organizations (name, slug) VALUES (?,?)",
-        [callback, req, username, email, pwHash, this](const drogon::orm::Result& r) {
+    db->newTransactionAsync(
+        [callback, respondOnce, respondErr, req, username, email, pwHash, this]
+        (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+        if (!trans) {
+            respondErr("db_error", "Failed to begin transaction",
+                       drogon::k500InternalServerError);
+            return;
+        }
+
+        // Captured into the commit callback. Audit + JWT + JSON response
+        // all run after the transaction's writes are durable.
+        auto resultIds = std::make_shared<std::tuple<int,int,int>>(0,0,0);  // (orgId, tenantId, userId)
+
+        trans->setCommitCallback(
+            [respondOnce, req, username, email, resultIds, this]
+            (bool committed) {
+                if (!committed) {
+                    // Explicit error responses are sent inline from the
+                    // failing handler via respondErr; no-op here. (If
+                    // the trans rolled back without an explicit handler
+                    // firing, fall through to a generic 500.)
+                    auto fallback = drogon::HttpResponse::newHttpJsonResponse(
+                        errorJson("db_error", "Transaction failed to commit"));
+                    fallback->setStatusCode(drogon::k500InternalServerError);
+                    respondOnce(fallback);
+                    return;
+                }
+                int orgId    = std::get<0>(*resultIds);
+                int tenantId = std::get<1>(*resultIds);
+                int newId    = std::get<2>(*resultIds);
+                AuditLog::record("register", req, newId);
+                std::string token = issueToken(newId, username, orgId);
+
+                Json::Value tenant;
+                tenant["id"]   = tenantId;
+                tenant["name"] = "Personal";
+                tenant["slug"] = "personal";
+                tenant["role"] = "admin";
+
+                Json::Value tenants(Json::arrayValue);
+                tenants.append(tenant);
+
+                Json::Value resp;
+                resp["user"]["id"]       = newId;
+                resp["user"]["username"] = username;
+                resp["user"]["email"]    = email;
+                resp["token"]            = token;
+                resp["orgId"]            = orgId;
+                resp["tenantId"]         = tenantId;
+                resp["tenants"]          = tenants;
+
+                auto httpResp =
+                    drogon::HttpResponse::newHttpJsonResponse(resp);
+                httpResp->setStatusCode(drogon::k201Created);
+                respondOnce(httpResp);
+            });
+
+        // Step 1: Create personal organization (slug = username)
+        trans->execSqlAsync(
+            "INSERT INTO organizations (name, slug) VALUES (?,?)",
+            [trans, username, email, pwHash, respondErr, resultIds]
+            (const drogon::orm::Result& r) {
             int orgId = static_cast<int>(r.insertId());
+            std::get<0>(*resultIds) = orgId;
 
             // Step 2: Create personal tenant
-            auto db2 = drogon::app().getDbClient();
-            db2->execSqlAsync(
+            trans->execSqlAsync(
                 "INSERT INTO tenants (org_id, name, slug) VALUES (?,?,?)",
-                [callback, req, username, email, pwHash, orgId, this]
+                [trans, username, email, pwHash, orgId, respondErr, resultIds]
                 (const drogon::orm::Result& r2) {
-                    int tenantId = static_cast<int>(r2.insertId());
+                int tenantId = static_cast<int>(r2.insertId());
+                std::get<1>(*resultIds) = tenantId;
 
-                    // Step 3: Insert user with org_id
-                    auto db3 = drogon::app().getDbClient();
-                    db3->execSqlAsync(
-                        "INSERT INTO users (username, email, password_hash, org_id) "
-                        "VALUES (?,?,?,?)",
-                        [callback, req, username, email, orgId, tenantId, this]
-                        (const drogon::orm::Result& r3) {
-                            int newId = static_cast<int>(r3.insertId());
+                // Step 3: Insert user with org_id
+                trans->execSqlAsync(
+                    "INSERT INTO users (username, email, password_hash, org_id) "
+                    "VALUES (?,?,?,?)",
+                    [trans, orgId, tenantId, respondErr, resultIds]
+                    (const drogon::orm::Result& r3) {
+                    int newId = static_cast<int>(r3.insertId());
+                    std::get<2>(*resultIds) = newId;
 
-                            // Step 4: Add to tenant as admin
-                            auto db4 = drogon::app().getDbClient();
-                            db4->execSqlAsync(
-                                "INSERT INTO tenant_members (tenant_id, user_id, role) "
-                                "VALUES (?,?,?)",
-                                [callback, req, newId, username, email, orgId, tenantId, this]
-                                (const drogon::orm::Result&) {
-                                    // Step 5: Add to org as owner
-                                    auto db5 = drogon::app().getDbClient();
-                                    db5->execSqlAsync(
-                                        "INSERT INTO org_members (org_id, user_id, role) "
-                                        "VALUES (?,?,?)",
-                                        [callback, req, newId, username, email, orgId, tenantId, this]
-                                        (const drogon::orm::Result&) {
-                                    // Step 6: Bootstrap default visibility-group state for
-                                    // the new tenant via TenantBootstrap::seedDefaults
-                                    // (#218 / audit #46 L3). Other tenant-provisioning
-                                    // paths should call the same helper.
-                                    TenantBootstrap::seedDefaults(
-                                        tenantId, newId,
-                                        [callback, req, newId, username, email, orgId, tenantId, this]() {
-                                    AuditLog::record("register", req, newId);
-                                    std::string token = issueToken(newId, username, orgId);
-
-                                    Json::Value tenant;
-                                    tenant["id"]   = tenantId;
-                                    tenant["name"] = "Personal";
-                                    tenant["slug"] = "personal";
-                                    tenant["role"] = "admin";
-
-                                    Json::Value tenants(Json::arrayValue);
-                                    tenants.append(tenant);
-
-                                    Json::Value resp;
-                                    resp["user"]["id"]       = newId;
-                                    resp["user"]["username"] = username;
-                                    resp["user"]["email"]    = email;
-                                    resp["token"]            = token;
-                                    resp["orgId"]            = orgId;
-                                    resp["tenantId"]         = tenantId;
-                                    resp["tenants"]          = tenants;
-
-                                    auto httpResp =
-                                        drogon::HttpResponse::newHttpJsonResponse(resp);
-                                    httpResp->setStatusCode(drogon::k201Created);
-                                    callback(httpResp);
-                                        },
-                                        [callback](const std::string& msg) {
-                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                                errorJson("db_error", msg));
-                                            resp->setStatusCode(drogon::k500InternalServerError);
-                                            callback(resp);
-                                        });
-                                        },
-                                        [callback](const drogon::orm::DrogonDbException&) {
-                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                                errorJson("db_error", "Failed to assign org membership"));
-                                            resp->setStatusCode(drogon::k500InternalServerError);
-                                            callback(resp);
-                                        },
-                                        orgId, newId, "owner");
-                                },
-                                [callback](const drogon::orm::DrogonDbException&) {
-                                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                        errorJson("db_error", "Failed to assign tenant membership"));
-                                    resp->setStatusCode(drogon::k500InternalServerError);
-                                    callback(resp);
-                                },
-                                tenantId, newId, "admin");
+                    // Step 4: Add to tenant as admin
+                    trans->execSqlAsync(
+                        "INSERT INTO tenant_members (tenant_id, user_id, role) "
+                        "VALUES (?,?,?)",
+                        [trans, newId, orgId, tenantId, respondErr]
+                        (const drogon::orm::Result&) {
+                        // Step 5: Add to org as owner
+                        trans->execSqlAsync(
+                            "INSERT INTO org_members (org_id, user_id, role) "
+                            "VALUES (?,?,?)",
+                            [trans, newId, tenantId, respondErr]
+                            (const drogon::orm::Result&) {
+                            // Step 6: Bootstrap default visibility-group state
+                            // (#218 / audit #46 L3) — uses the trans-aware
+                            // overload so it commits atomically with the rest.
+                            TenantBootstrap::seedDefaults(
+                                trans, tenantId, newId,
+                                []() { /* commit fires response */ },
+                                [trans, respondErr](const std::string& msg) {
+                                    respondErr("db_error", msg, drogon::k500InternalServerError);
+                                    trans->rollback();
+                                });
+                            },
+                            [trans, respondErr](const drogon::orm::DrogonDbException&) {
+                                respondErr("db_error", "Failed to assign org membership",
+                                       drogon::k500InternalServerError);
+                                trans->rollback();
+                            },
+                            orgId, newId, "owner");
                         },
-                        [callback](const drogon::orm::DrogonDbException& e) {
-                            std::string err = e.base().what();
-                            bool dup = err.find("Duplicate") != std::string::npos;
-                            std::string code = "db_error";
-                            if (dup) {
-                                if (err.find("uq_users_email") != std::string::npos)
-                                    code = "email_taken";
-                                else if (err.find("uq_users_username") != std::string::npos)
-                                    code = "username_taken";
-                                else
-                                    code = "conflict";
-                            }
-                            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                                errorJson(code, "Registration failed"));
-                            resp->setStatusCode(dup ? drogon::k409Conflict
-                                                    : drogon::k500InternalServerError);
-                            callback(resp);
+                        [trans, respondErr](const drogon::orm::DrogonDbException&) {
+                            respondErr("db_error", "Failed to assign tenant membership",
+                                   drogon::k500InternalServerError);
+                            trans->rollback();
                         },
-                        username, email, pwHash, orgId);
+                        tenantId, newId, "admin");
+                    },
+                    [trans, respondErr](const drogon::orm::DrogonDbException& e) {
+                        std::string err = e.base().what();
+                        bool dup = err.find("Duplicate") != std::string::npos;
+                        std::string code = "db_error";
+                        if (dup) {
+                            if (err.find("uq_users_email") != std::string::npos)
+                                code = "email_taken";
+                            else if (err.find("uq_users_username") != std::string::npos)
+                                code = "username_taken";
+                            else
+                                code = "conflict";
+                        }
+                        respondErr(code, "Registration failed",
+                               dup ? drogon::k409Conflict
+                                   : drogon::k500InternalServerError);
+                        trans->rollback();
+                    },
+                    username, email, pwHash, orgId);
                 },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                        errorJson("db_error", "Failed to create personal tenant"));
-                    resp->setStatusCode(drogon::k500InternalServerError);
-                    callback(resp);
+                [trans, respondErr](const drogon::orm::DrogonDbException&) {
+                    respondErr("db_error", "Failed to create personal tenant",
+                           drogon::k500InternalServerError);
+                    trans->rollback();
                 },
                 orgId, "Personal", "personal");
-        },
-        [callback](const drogon::orm::DrogonDbException& e) {
-            std::string err = e.base().what();
-            bool dup = err.find("Duplicate") != std::string::npos;
-            auto resp = drogon::HttpResponse::newHttpJsonResponse(
-                errorJson(dup ? "username_taken" : "db_error",
-                          "Registration failed"));
-            resp->setStatusCode(dup ? drogon::k409Conflict
-                                    : drogon::k500InternalServerError);
-            callback(resp);
-        },
-        username, username);
+            },
+            [trans, respondErr](const drogon::orm::DrogonDbException& e) {
+                std::string err = e.base().what();
+                bool dup = err.find("Duplicate") != std::string::npos;
+                respondErr(dup ? "username_taken" : "db_error",
+                       "Registration failed",
+                       dup ? drogon::k409Conflict
+                           : drogon::k500InternalServerError);
+                trans->rollback();
+            },
+            username, username);
+    });
 }
 
 // ─── POST /api/v1/auth/login ──────────────────────────────────────────────────
