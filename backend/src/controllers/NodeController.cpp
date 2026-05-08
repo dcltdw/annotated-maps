@@ -345,9 +345,29 @@ void NodeController::createNode(
             // Build INSERT SQL with NULLs inlined for absent optional
             // columns (parent_id, geo_json). Avoids the parameter-binding
             // type gymnastics that plain CASE expressions induced.
+            //
+            // Per-map cap (#217 / audit #46 L2): COUNT before INSERT and
+            // reject if at the limit. The per-tenant 1000-map cap
+            // doesn't bound a single hot map; this does.
             auto doInsert = [callback, req, mapId, userId, callerUsername,
                              name, description, color, hasGeo, geoJsonStr,
                              hasParent, parentId, tenantId]() {
+                auto dbCap = drogon::app().getDbClient();
+                dbCap->execSqlAsync(
+                    "SELECT COUNT(*) AS c FROM nodes WHERE map_id = ?",
+                    [callback, req, mapId, userId, callerUsername,
+                     name, description, color, hasGeo, geoJsonStr,
+                     hasParent, parentId, tenantId]
+                    (const drogon::orm::Result& rCap) {
+                        int existing = rCap[0]["c"].as<int>();
+                        if (existing >= MAX_NODES_PER_MAP) {
+                            callback(errorResponse(drogon::k400BadRequest,
+                                "bad_request",
+                                "Map node limit reached (" +
+                                std::to_string(MAX_NODES_PER_MAP) + ")"));
+                            return;
+                        }
+                        (void)callerUsername;
                 auto db3 = drogon::app().getDbClient();
 
                 auto insertedCb = [callback, req, mapId, userId, tenantId]
@@ -411,6 +431,12 @@ void NodeController::createNode(
                     db3->execSqlAsync(sql, insertedCb, errCb,
                         mapId, userId, name, description, color);
                 }
+                    },  // end COUNT success callback
+                    [callback](const drogon::orm::DrogonDbException&) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Failed to count map nodes"));
+                    },
+                    mapId);
             };
 
             // Step 2: if parent given, verify same-map and depth.
@@ -814,55 +840,93 @@ void NodeController::setVisibility(
             callback(resp);
         };
 
-        // Step 4: replace tags. DELETE then (optionally) multi-row INSERT.
-        auto applyTags = [callback, id, hasGroupIds, groupIds, joinIds, finish]() {
-            if (!hasGroupIds) { finish(); return; }
-
-            auto dbT = drogon::app().getDbClient();
-            dbT->execSqlAsync(
-                "DELETE FROM node_visibility WHERE node_id = ?",
-                [callback, id, groupIds, joinIds, finish]
-                (const drogon::orm::Result&) {
-                    if (groupIds.empty()) { finish(); return; }
-
-                    // Multi-row INSERT, ids inlined (see joinIds note above).
-                    std::string vals;
-                    bool first = true;
-                    for (int g : groupIds) {
-                        if (!first) vals += ",";
-                        vals += "(" + std::to_string(id) + "," + std::to_string(g) + ")";
-                        first = false;
-                    }
-                    auto dbI = drogon::app().getDbClient();
-                    dbI->execSqlAsync(
-                        "INSERT INTO node_visibility "
-                        "  (node_id, visibility_group_id) VALUES " + vals,
-                        [finish](const drogon::orm::Result&) { finish(); },
-                        [callback](const drogon::orm::DrogonDbException&) {
-                            callback(errorResponse(drogon::k500InternalServerError,
-                                "db_error", "Failed to insert tags"));
-                        });
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to clear existing tags"));
-                },
-                id);
-        };
-
-        // Step 3: optionally update override flag, then call applyTags.
+        // Step 3+4 (#212 / audit #46 H1): override UPDATE + tag DELETE +
+        // tag INSERT all run inside a single transaction. Pre-fix, the
+        // DELETE-then-INSERT could leave the node *untagged* (visible to
+        // everyone in the tenant) on partial failure — briefly removing
+        // a security control. The transaction commits when the last
+        // TransactionPtr ref drops; we attach setCommitCallback so the
+        // HTTP 204 only fires AFTER commit confirms (otherwise a follow-
+        // up GET can race the commit and read pre-write state).
         auto applyOverrideThenTags =
-            [callback, id, hasOverride, overrideVal, applyTags]() {
-            if (!hasOverride) { applyTags(); return; }
-            auto dbO = drogon::app().getDbClient();
-            dbO->execSqlAsync(
-                "UPDATE nodes SET visibility_override = ? WHERE id = ?",
-                [applyTags](const drogon::orm::Result&) { applyTags(); },
-                [callback](const drogon::orm::DrogonDbException&) {
+            [callback, id, hasOverride, overrideVal, hasGroupIds, groupIds,
+             joinIds, finish]() {
+
+            auto db = drogon::app().getDbClient();
+            db->newTransactionAsync(
+                [callback, id, hasOverride, overrideVal, hasGroupIds, groupIds,
+                 joinIds, finish]
+                (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+                if (!trans) {
                     callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to set override"));
-                },
-                overrideVal, id);
+                        "db_error", "Failed to begin transaction"));
+                    return;
+                }
+
+                // Defer the HTTP response until commit confirms. Drogon
+                // calls this callback exactly once when the transaction
+                // commits (success=true) or rolls back (false).
+                trans->setCommitCallback([callback, finish](bool committed) {
+                    if (!committed) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Transaction failed to commit"));
+                        return;
+                    }
+                    finish();
+                });
+
+                // chainDone marks the in-trans work as complete. The
+                // shared_ptr<Transaction> captures inside the callbacks
+                // then start dropping; when the last drops, Drogon
+                // commits and fires setCommitCallback above.
+                auto chainDone = []() { /* no-op; commit fires response */ };
+
+                auto applyTagsTx = [trans, callback, id, hasGroupIds, groupIds,
+                                    chainDone]() {
+                    if (!hasGroupIds) { chainDone(); return; }
+
+                    trans->execSqlAsync(
+                        "DELETE FROM node_visibility WHERE node_id = ?",
+                        [trans, callback, id, groupIds, chainDone]
+                        (const drogon::orm::Result&) {
+                            if (groupIds.empty()) { chainDone(); return; }
+
+                            std::string vals;
+                            bool first = true;
+                            for (int g : groupIds) {
+                                if (!first) vals += ",";
+                                vals += "(" + std::to_string(id) + "," +
+                                        std::to_string(g) + ")";
+                                first = false;
+                            }
+                            trans->execSqlAsync(
+                                "INSERT INTO node_visibility "
+                                "  (node_id, visibility_group_id) VALUES " + vals,
+                                [chainDone](const drogon::orm::Result&) {
+                                    chainDone();
+                                },
+                                [trans](const drogon::orm::DrogonDbException&) {
+                                    trans->rollback();
+                                });
+                        },
+                        [trans](const drogon::orm::DrogonDbException&) {
+                            trans->rollback();
+                        },
+                        id);
+                };
+
+                if (!hasOverride) { applyTagsTx(); return; }
+
+                trans->execSqlAsync(
+                    "UPDATE nodes SET visibility_override = ? WHERE id = ?",
+                    [applyTagsTx](const drogon::orm::Result&) { applyTagsTx(); },
+                    [trans](const drogon::orm::DrogonDbException&) {
+                        trans->rollback();
+                    },
+                    overrideVal, id);
+            });
+            (void)joinIds;  // captured for symmetry with the read phase
         };
 
         // Step 2: verify the node exists on this map+tenant.
@@ -1412,60 +1476,114 @@ void NodeController::moveNode(
                             };
 
                             if (!isCrossMap) {
-                                // Same-map re-parent: just update the parent.
+                                // Same-map re-parent: single UPDATE; no
+                                // transaction needed — atomic on its own.
                                 updateSourceParent();
                                 return;
                             }
 
-                            // Cross-map: chained sequence.
-                            //   1. UPDATE map_id on all descendants
+                            // Cross-map (#225 / audit #46 H1): the 3-or-4
+                            // step sequence below was previously chained
+                            // independent execSqlAsync calls. A failure
+                            // mid-chain left descendants on the old map
+                            // while the source pointed to the new one
+                            // (or visibility tags wiped without map move).
+                            // Now wrapped in a single transaction; the
+                            // HTTP response is deferred via setCommitCallback
+                            // so callers don't read pre-write state.
+                            //
+                            // Sequence inside the transaction:
+                            //   1. UPDATE nodes.map_id on descendants
                             //   2. DELETE node_visibility for descendants
                             //   3. (cross-tenant only) DELETE plot_nodes
-                            //   4. updateSourceParent
-                            auto clearPlotIfCrossTenant = [callback, idList,
-                                                            isCrossTenant,
-                                                            updateSourceParent]() {
-                                if (!isCrossTenant) {
-                                    updateSourceParent();
+                            //   4. UPDATE source's parent_id
+                            auto db = drogon::app().getDbClient();
+                            db->newTransactionAsync(
+                                [callback, finish, id, idList, destMapId,
+                                 isCrossTenant, hasNewParent, newParentIsNull,
+                                 newParentId]
+                                (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+                                if (!trans) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to begin transaction"));
                                     return;
                                 }
-                                auto dbC = drogon::app().getDbClient();
-                                dbC->execSqlAsync(
-                                    "DELETE FROM plot_nodes WHERE node_id IN (" + idList + ")",
-                                    [updateSourceParent](const drogon::orm::Result&) {
-                                        updateSourceParent();
-                                    },
-                                    [callback](const drogon::orm::DrogonDbException&) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "db_error", "Failed to clear plot memberships"));
-                                    });
-                            };
 
-                            auto dropVisibility = [callback, idList,
-                                                    clearPlotIfCrossTenant]() {
-                                auto dbV = drogon::app().getDbClient();
-                                dbV->execSqlAsync(
-                                    "DELETE FROM node_visibility WHERE node_id IN (" + idList + ")",
-                                    [clearPlotIfCrossTenant](const drogon::orm::Result&) {
-                                        clearPlotIfCrossTenant();
-                                    },
-                                    [callback](const drogon::orm::DrogonDbException&) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "db_error", "Failed to clear visibility tags"));
+                                trans->setCommitCallback(
+                                    [callback, finish](bool committed) {
+                                        if (!committed) {
+                                            callback(errorResponse(drogon::k500InternalServerError,
+                                                "db_error", "Transaction failed to commit"));
+                                            return;
+                                        }
+                                        finish();
                                     });
-                            };
 
-                            auto dbU = drogon::app().getDbClient();
-                            dbU->execSqlAsync(
-                                "UPDATE nodes SET map_id = ? WHERE id IN (" + idList + ")",
-                                [dropVisibility](const drogon::orm::Result&) {
-                                    dropVisibility();
-                                },
-                                [callback](const drogon::orm::DrogonDbException&) {
-                                    callback(errorResponse(drogon::k500InternalServerError,
-                                        "db_error", "Failed to update map_id on descendants"));
-                                },
-                                destMapId);
+                                auto updateSourceParentTx =
+                                    [trans, id, hasNewParent, newParentIsNull,
+                                     newParentId]() {
+                                    if (hasNewParent && newParentIsNull) {
+                                        trans->execSqlAsync(
+                                            "UPDATE nodes SET parent_id = NULL WHERE id = ?",
+                                            [](const drogon::orm::Result&) {},
+                                            [trans](const drogon::orm::DrogonDbException&) {
+                                                trans->rollback();
+                                            },
+                                            id);
+                                    } else if (hasNewParent) {
+                                        trans->execSqlAsync(
+                                            "UPDATE nodes SET parent_id = ? WHERE id = ?",
+                                            [](const drogon::orm::Result&) {},
+                                            [trans](const drogon::orm::DrogonDbException&) {
+                                                trans->rollback();
+                                            },
+                                            newParentId, id);
+                                    }
+                                    // No newParent given: cross-map move
+                                    // without parent change — skip step 4.
+                                };
+
+                                auto clearPlotIfCrossTenantTx =
+                                    [trans, idList, isCrossTenant,
+                                     updateSourceParentTx]() {
+                                    if (!isCrossTenant) {
+                                        updateSourceParentTx();
+                                        return;
+                                    }
+                                    trans->execSqlAsync(
+                                        "DELETE FROM plot_nodes WHERE node_id IN (" + idList + ")",
+                                        [updateSourceParentTx](const drogon::orm::Result&) {
+                                            updateSourceParentTx();
+                                        },
+                                        [trans](const drogon::orm::DrogonDbException&) {
+                                            trans->rollback();
+                                        });
+                                };
+
+                                auto dropVisibilityTx =
+                                    [trans, idList, clearPlotIfCrossTenantTx]() {
+                                    trans->execSqlAsync(
+                                        "DELETE FROM node_visibility WHERE node_id IN (" + idList + ")",
+                                        [clearPlotIfCrossTenantTx](const drogon::orm::Result&) {
+                                            clearPlotIfCrossTenantTx();
+                                        },
+                                        [trans](const drogon::orm::DrogonDbException&) {
+                                            trans->rollback();
+                                        });
+                                };
+
+                                trans->execSqlAsync(
+                                    "UPDATE nodes SET map_id = ? WHERE id IN (" + idList + ")",
+                                    [dropVisibilityTx](const drogon::orm::Result&) {
+                                        dropVisibilityTx();
+                                    },
+                                    [trans](const drogon::orm::DrogonDbException&) {
+                                        trans->rollback();
+                                    },
+                                    destMapId);
+                            });
+                            (void)updateSourceParent;  // unused on cross-map path
                         },
                         [callback](const drogon::orm::DrogonDbException&) {
                             callback(errorResponse(drogon::k500InternalServerError,
@@ -1727,27 +1845,95 @@ void NodeController::copyNode(
                                 sources->push_back(std::move(s));
                             }
 
+                            // Per-map cap (#217 / audit #46 L2): copies
+                            // can multiply node counts quickly. Verify
+                            // destMap.count + sources.size() <= cap
+                            // before any INSERTs, so a partial copy can't
+                            // wedge a map past the limit. The continuation
+                            // (idMap setup + copy loop) is hoisted into a
+                            // lambda the cap-check invokes on success.
+                            auto continueCopy = [callback, req, tenantId, id, userId,
+                                                  destMapId, hasNewParent, newParentIsNull,
+                                                  newParentId, sources]() {
+
+                            // #229 / audit #46 H1: wrap the descendant-INSERT
+                            // loop + note-fetch + note-INSERT loop in a single
+                            // Drogon transaction. Pre-fix, a failure mid-loop
+                            // left an orphan partial subtree under the new
+                            // parent. Post-fix: any failure inside the chain
+                            // calls trans->rollback() and the entire copy is
+                            // discarded atomically.
+                            //
+                            // The cap check above (#217) stays outside —
+                            // read-only validation, no rollback needed.
+                            //
+                            // setCommitCallback defers the HTTP 201 + audit
+                            // log until commit confirms (otherwise the
+                            // response races Drogon's auto-commit).
+                            auto db = drogon::app().getDbClient();
+                            db->newTransactionAsync(
+                                [callback, req, tenantId, id, userId, destMapId,
+                                 hasNewParent, newParentIsNull, newParentId, sources]
+                                (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+                            if (!trans) {
+                                callback(errorResponse(drogon::k500InternalServerError,
+                                    "db_error", "Failed to begin transaction"));
+                                return;
+                            }
+
                             auto idMap   = std::make_shared<std::unordered_map<int,int>>();
                             auto rootCopyId = std::make_shared<int>(0);
 
+                            auto finishAll = [callback, req, tenantId, id, userId,
+                                              destMapId, hasNewParent, newParentIsNull,
+                                              newParentId, rootCopyId, sources]() {
+                                Json::Value detail;
+                                detail["sourceId"]        = id;
+                                detail["destParentId"]    = (hasNewParent && !newParentIsNull)
+                                                              ? Json::Value(newParentId)
+                                                              : Json::Value();
+                                detail["destMapId"]       = destMapId;
+                                detail["descendantCount"] = static_cast<int>(sources->size());
+                                detail["newRootId"]       = *rootCopyId;
+                                AuditLog::record("node_copy", req,
+                                    userId, 0, tenantId, detail);
+
+                                Json::Value v;
+                                v["id"]              = *rootCopyId;
+                                v["mapId"]           = destMapId;
+                                v["parentId"]        = (hasNewParent && !newParentIsNull)
+                                                         ? Json::Value(newParentId)
+                                                         : Json::Value();
+                                v["descendantCount"] = static_cast<int>(sources->size());
+                                auto resp = drogon::HttpResponse::newHttpJsonResponse(v);
+                                resp->setStatusCode(drogon::k201Created);
+                                callback(resp);
+                            };
+
+                            trans->setCommitCallback(
+                                [callback, finishAll](bool committed) {
+                                    if (!committed) {
+                                        callback(errorResponse(drogon::k500InternalServerError,
+                                            "db_error", "Transaction failed to commit"));
+                                        return;
+                                    }
+                                    finishAll();
+                                });
+
                             // After all node copies are inserted, walk the
                             // notes attached to the source set + duplicate
-                            // them with translated node_id.
+                            // them with translated node_id. Note: when the
+                            // last note INSERT completes, all trans captures
+                            // drop, commit fires, and setCommitCallback runs
+                            // finishAll. No explicit finishAll() call here.
                             auto copyNotes = std::make_shared<std::function<void()>>();
-                            *copyNotes = [callback, req, tenantId, id, userId,
-                                          destMapId, hasNewParent, newParentIsNull,
-                                          newParentId, idMap, rootCopyId, sources,
-                                          copyNotes]() {
+                            *copyNotes = [trans, callback, userId, idMap, sources]() {
                                 if (sources->empty()) {
-                                    // shouldn't happen since source is in
-                                    // the set, but be defensive.
-                                    callback(errorResponse(drogon::k500InternalServerError,
-                                        "internal_error", "Empty source set on copy"));
+                                    trans->rollback();
                                     return;
                                 }
 
-                                // Build the source-id list for the notes
-                                // fetch (literal-spliced ints).
                                 std::string idList;
                                 for (size_t i = 0; i < sources->size(); ++i) {
                                     if (i > 0) idList += ",";
@@ -1759,11 +1945,8 @@ void NodeController::copyNode(
                                     "FROM notes WHERE node_id IN (" + idList + ") "
                                     "ORDER BY id ASC";
 
-                                auto dbN = drogon::app().getDbClient();
-                                dbN->execSqlAsync(notesSql,
-                                    [callback, req, tenantId, id, userId,
-                                     destMapId, hasNewParent, newParentIsNull,
-                                     newParentId, rootCopyId, sources, idMap]
+                                trans->execSqlAsync(notesSql,
+                                    [trans, callback, userId, idMap]
                                     (const drogon::orm::Result& rN) {
 
                                         struct SrcNote {
@@ -1791,57 +1974,38 @@ void NodeController::copyNode(
                                             notes->push_back(std::move(n));
                                         }
 
-                                        auto finishAll = [callback, req, tenantId,
-                                                           id, userId, destMapId,
-                                                           hasNewParent, newParentIsNull,
-                                                           newParentId, rootCopyId,
-                                                           sources]() {
-                                            Json::Value detail;
-                                            detail["sourceId"]        = id;
-                                            detail["destParentId"]    = (hasNewParent && !newParentIsNull)
-                                                                          ? Json::Value(newParentId)
-                                                                          : Json::Value();
-                                            detail["destMapId"]       = destMapId;
-                                            detail["descendantCount"] = static_cast<int>(sources->size());
-                                            detail["newRootId"]       = *rootCopyId;
-                                            AuditLog::record("node_copy", req,
-                                                userId, 0, tenantId, detail);
-
-                                            Json::Value v;
-                                            v["id"]              = *rootCopyId;
-                                            v["mapId"]           = destMapId;
-                                            v["parentId"]        = (hasNewParent && !newParentIsNull)
-                                                                     ? Json::Value(newParentId)
-                                                                     : Json::Value();
-                                            v["descendantCount"] = static_cast<int>(sources->size());
-                                            auto resp = drogon::HttpResponse::newHttpJsonResponse(v);
-                                            resp->setStatusCode(drogon::k201Created);
-                                            callback(resp);
-                                        };
-
-                                        // Recursive lambda over notes,
-                                        // serial INSERTs.
+                                        // Recursive note INSERT loop. When
+                                        // idx exhausts, the lambda chain
+                                        // ends; trans captures drop; commit
+                                        // fires and finishAll runs.
                                         auto noteIdx = std::make_shared<size_t>(0);
                                         auto step = std::make_shared<std::function<void()>>();
-                                        *step = [callback, userId, idMap, notes,
-                                                 noteIdx, step, finishAll]() {
+                                        *step = [trans, userId, idMap, notes, noteIdx, step]() {
                                             if (*noteIdx >= notes->size()) {
-                                                finishAll();
+                                                // Break the shared_ptr<function>↔function
+                                                // self-capture cycle so trans can drop and
+                                                // commit can fire. Without this, recursion
+                                                // ends but the function holds a copy of its
+                                                // own step shared_ptr indefinitely.
+                                                *step = nullptr;
                                                 return;
                                             }
                                             const auto& src = (*notes)[*noteIdx];
-                                            int newNodeId = idMap->at(src.oldNodeId);
+                                            auto it = idMap->find(src.oldNodeId);
+                                            if (it == idMap->end()) {
+                                                trans->rollback();
+                                                return;
+                                            }
+                                            int newNodeId = it->second;
                                             (*noteIdx)++;
 
-                                            auto dbI = drogon::app().getDbClient();
-                                            dbI->execSqlAsync(
+                                            trans->execSqlAsync(
                                                 "INSERT INTO notes "
                                                 "  (node_id, created_by, title, text, pinned, color) "
                                                 "VALUES (?, ?, NULLIF(?, ''), ?, ?, NULLIF(?, ''))",
                                                 [step](const drogon::orm::Result&) { (*step)(); },
-                                                [callback](const drogon::orm::DrogonDbException&) {
-                                                    callback(errorResponse(drogon::k500InternalServerError,
-                                                        "db_error", "Failed to copy note"));
+                                                [trans](const drogon::orm::DrogonDbException&) {
+                                                    trans->rollback();
                                                 },
                                                 newNodeId, userId,
                                                 src.title, src.text,
@@ -1849,35 +2013,34 @@ void NodeController::copyNode(
                                         };
                                         (*step)();
                                     },
-                                    [callback](const drogon::orm::DrogonDbException&) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "db_error", "Failed to fetch source notes"));
+                                    [trans](const drogon::orm::DrogonDbException&) {
+                                        trans->rollback();
                                     });
                             };
 
                             // Recursive lambda over node sources, serial
-                            // INSERTs. Each insertId becomes the new id and
-                            // is recorded in idMap for parent translation.
+                            // INSERTs inside the transaction. Each insertId
+                            // becomes the new id and is recorded in idMap
+                            // for parent translation. When idx exhausts,
+                            // copyNotes runs (still inside the transaction).
                             auto idx = std::make_shared<size_t>(0);
                             auto step = std::make_shared<std::function<void()>>();
-                            *step = [callback, sources, idMap, rootCopyId, idx,
+                            *step = [trans, sources, idMap, rootCopyId, idx,
                                      destMapId, userId, id, hasNewParent,
                                      newParentIsNull, newParentId, step,
                                      copyNotes]() {
                                 if (*idx >= sources->size()) {
                                     (*copyNotes)();
+                                    // Break the self-capture cycle (see note in
+                                    // the note step lambda below) so trans can
+                                    // drop once copyNotes completes its async
+                                    // chain.
+                                    *step = nullptr;
                                     return;
                                 }
                                 const auto& src = (*sources)[*idx];
                                 (*idx)++;
 
-                                // Resolve the new parent_id for this copy:
-                                //   - If src is the root of the source
-                                //     subtree, parent_id = body's
-                                //     newParentId (or NULL).
-                                //   - Else, parent_id = idMap[src.parentId]
-                                //     (the new id of its already-copied
-                                //     parent).
                                 bool parentIsNull = false;
                                 int  newParent    = 0;
                                 if (src.id == id) {
@@ -1887,21 +2050,14 @@ void NodeController::copyNode(
                                         newParent = newParentId;
                                     }
                                 } else {
-                                    // Should be in the map (parents inserted
-                                    // before children due to ORDER BY depth).
                                     auto it = idMap->find(src.parentId);
                                     if (it == idMap->end()) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "internal_error",
-                                            "Copy traversal lost a parent reference"));
+                                        trans->rollback();
                                         return;
                                     }
                                     newParent = it->second;
                                 }
 
-                                // Build the INSERT with NULLs inlined for
-                                // optional columns. Same approach as
-                                // createNode (#96).
                                 std::string sqlIns =
                                     "INSERT INTO nodes "
                                     "  (map_id, parent_id, created_by, name, "
@@ -1913,7 +2069,6 @@ void NodeController::copyNode(
                                 sqlIns += src.descIsNull ? "NULL, " : "?, ";
                                 sqlIns += src.colorIsNull ? "NULL)"   : "?)";
 
-                                auto dbI = drogon::app().getDbClient();
                                 auto onIns = [src, idMap, rootCopyId, id, step]
                                     (const drogon::orm::Result& rI) {
                                     int newId = static_cast<int>(rI.insertId());
@@ -1921,10 +2076,9 @@ void NodeController::copyNode(
                                     if (src.id == id) *rootCopyId = newId;
                                     (*step)();
                                 };
-                                auto onErr = [callback]
+                                auto onErr = [trans]
                                     (const drogon::orm::DrogonDbException&) {
-                                    callback(errorResponse(drogon::k500InternalServerError,
-                                        "db_error", "Failed to copy node"));
+                                    trans->rollback();
                                 };
 
                                 // Param ordering follows the conditional
@@ -1934,59 +2088,85 @@ void NodeController::copyNode(
                                 // dim — so we just inline by case.
                                 if (parentIsNull) {
                                     if (src.geoIsNull && src.descIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name);
                                     } else if (src.geoIsNull && src.descIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.color);
                                     } else if (src.geoIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.description);
                                     } else if (src.descIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.geoJson);
                                     } else if (src.geoIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.description, src.color);
                                     } else if (src.descIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.geoJson, src.color);
                                     } else if (src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.geoJson, src.description);
                                     } else {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, userId, src.name, src.geoJson, src.description, src.color);
                                     }
                                 } else {
                                     if (src.geoIsNull && src.descIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name);
                                     } else if (src.geoIsNull && src.descIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.color);
                                     } else if (src.geoIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.description);
                                     } else if (src.descIsNull && src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.geoJson);
                                     } else if (src.geoIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.description, src.color);
                                     } else if (src.descIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.geoJson, src.color);
                                     } else if (src.colorIsNull) {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.geoJson, src.description);
                                     } else {
-                                        dbI->execSqlAsync(sqlIns, onIns, onErr,
+                                        trans->execSqlAsync(sqlIns, onIns, onErr,
                                             destMapId, newParent, userId, src.name, src.geoJson, src.description, src.color);
                                     }
                                 }
                             };
                             (*step)();
+
+                            });  // end newTransactionAsync lambda
+                            };  // end continueCopy lambda
+
+                            // Run the cap-check; on success it invokes continueCopy.
+                            auto dbCap = drogon::app().getDbClient();
+                            dbCap->execSqlAsync(
+                                "SELECT COUNT(*) AS c FROM nodes WHERE map_id = ?",
+                                [callback, sources, continueCopy]
+                                (const drogon::orm::Result& rCap) {
+                                    int existing = rCap[0]["c"].as<int>();
+                                    int incoming = static_cast<int>(sources->size());
+                                    if (existing + incoming > MAX_NODES_PER_MAP) {
+                                        callback(errorResponse(drogon::k400BadRequest,
+                                            "bad_request",
+                                            "Copy would exceed map node limit (" +
+                                            std::to_string(MAX_NODES_PER_MAP) + ")"));
+                                        return;
+                                    }
+                                    continueCopy();
+                                },
+                                [callback](const drogon::orm::DrogonDbException&) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to count destination nodes"));
+                                },
+                                destMapId);
                         },
                         [callback](const drogon::orm::DrogonDbException&) {
                             callback(errorResponse(drogon::k500InternalServerError,

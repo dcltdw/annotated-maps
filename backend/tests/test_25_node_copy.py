@@ -356,4 +356,41 @@ assert_status("validate: copy under self is allowed", 201, status)
 
 print("  All validation tests passed.")
 
+# ─── Per-map node count cap on copy (#217) ───────────────────────────────────
+# Audit #46 L2: copyNode COUNTs the destination map and refuses copies
+# whose subtree size would push the destination over MAX_NODES_PER_MAP.
+# Bulk-fill the destination near the limit, attempt a 2-node copy, then
+# verify the same source copies cleanly into a fresh empty map.
+
+print("  --- Per-map node count cap on copy (#217) ---")
+
+COPY_SRC_MAP  = mkmap(TENANT_A, TOKEN_A, "Cap copy source")
+COPY_SRC_BASE = f"/tenants/{TENANT_A}/maps/{COPY_SRC_MAP}/nodes"
+COPY_SRC_ROOT = mknode(COPY_SRC_BASE, TOKEN_A, "SrcRoot")
+mknode(COPY_SRC_BASE, TOKEN_A, "SrcChild", COPY_SRC_ROOT)
+
+COPY_DST_MAP = mkmap(TENANT_A, TOKEN_A, "Cap copy dest near-full")
+mysql_query(
+    f"INSERT INTO nodes (map_id, name, created_by) "
+    f"SELECT {COPY_DST_MAP}, CONCAT('bulk_', seq), {USER_A_ID} "
+    f"FROM (SELECT @row := @row + 1 AS seq "
+    f"      FROM information_schema.columns t1, information_schema.columns t2, "
+    f"           (SELECT @row := 0) r LIMIT 4999) seq;")
+
+# 2-node subtree into a 4,999-row destination would push to 5,001 > cap.
+status, body = http_post(f"{COPY_SRC_BASE}/{COPY_SRC_ROOT}/copy",
+                         {"newMapId": COPY_DST_MAP}, TOKEN_A)
+assert_status("cap-copy: 2-node into 4999-full rejected", 400, status)
+assert_true("cap-copy: error mentions limit",
+            isinstance(body, dict) and "limit" in body.get("message", "").lower(),
+            f"got {body!r}")
+
+# Same source into an empty map works.
+COPY_DST_OK = mkmap(TENANT_A, TOKEN_A, "Cap copy dest empty")
+status, _ = http_post(f"{COPY_SRC_BASE}/{COPY_SRC_ROOT}/copy",
+                      {"newMapId": COPY_DST_OK}, TOKEN_A)
+assert_status("cap-copy: 2-node into empty map succeeds", 201, status)
+
+print("  All copy node-count-cap tests passed.")
+
 sys.exit(0 if report() else 1)

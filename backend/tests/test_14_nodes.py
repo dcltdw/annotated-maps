@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from helpers import (
     reset_counters, report, assert_status, assert_json_field, assert_json_exists,
     assert_true, http_post, http_get, http_put, http_delete,
-    register_user, json_field,
+    register_user, json_field, mysql_query,
 )
 
 reset_counters()
@@ -20,7 +20,8 @@ print("=== Node Tests ===")
 TOKEN_A = register_user(f"t14_a_{RUN_ID}", f"t14_a_{RUN_ID}@test.com", "testpass123")
 _, body_a = http_post("/auth/login",
     {"email": f"t14_a_{RUN_ID}@test.com", "password": "testpass123"})
-TENANT_A = json_field(body_a, ["tenantId"])
+TENANT_A   = json_field(body_a, ["tenantId"])
+USER_A_ID  = json_field(body_a, ["user", "id"])
 
 TOKEN_B = register_user(f"t14_b_{RUN_ID}", f"t14_b_{RUN_ID}@test.com", "testpass123")
 _, body_b = http_post("/auth/login",
@@ -220,5 +221,45 @@ status, _ = http_post(BASE, {"name": "TooDeep", "parentId": chain[-1]}, TOKEN_A)
 assert_status("max depth: inserting beyond limit returns 400", 400, status)
 
 print("  All max-depth tests passed.")
+
+# ─── Per-map node count cap (#217) ───────────────────────────────────────────
+# Audit #46 L2: createNode COUNTs existing nodes and rejects with 400
+# when at MAX_NODES_PER_MAP (5,000). Filling 5,000 via HTTP is slow;
+# bulk-fill via SQL up to one-below-limit, then exercise the boundary
+# via the API.
+
+print("  --- Per-map node count cap (#217) ---")
+
+_, body = http_post(f"/tenants/{TENANT_A}/maps", {
+    "title": f"Cap test {RUN_ID}",
+    "coordinateSystem": {"type": "wgs84", "center": {"lat": 0, "lng": 0}, "zoom": 3},
+}, TOKEN_A)
+CAP_MAP = json_field(body, ["id"])
+CAP_BASE = f"/tenants/{TENANT_A}/maps/{CAP_MAP}/nodes"
+
+# Bulk-fill 4,999 placeholder nodes via direct SQL.
+mysql_query(
+    f"INSERT INTO nodes (map_id, name, created_by) "
+    f"SELECT {CAP_MAP}, CONCAT('bulk_', seq), {USER_A_ID} "
+    f"FROM (SELECT @row := @row + 1 AS seq "
+    f"      FROM information_schema.columns t1, information_schema.columns t2, "
+    f"           (SELECT @row := 0) r LIMIT 4999) seq;")
+
+count_str = mysql_query(f"SELECT COUNT(*) FROM nodes WHERE map_id = {CAP_MAP};")
+assert_true("cap-fill seeded 4999 nodes",  count_str == "4999",
+            f"got count={count_str!r}")
+
+# 5,000th create succeeds (existing 4,999 < 5,000 cap).
+status, _ = http_post(CAP_BASE, {"name": "AtCap"}, TOKEN_A)
+assert_status("cap: create at limit-1 succeeds (becomes 5000th)", 201, status)
+
+# 5,001st create rejected.
+status, body = http_post(CAP_BASE, {"name": "OverCap"}, TOKEN_A)
+assert_status("cap: create over limit returns 400", 400, status)
+assert_true("cap: error mentions limit",
+            isinstance(body, dict) and "limit" in body.get("message", "").lower(),
+            f"got {body!r}")
+
+print("  All node-count-cap tests passed.")
 
 sys.exit(0 if report() else 1)
