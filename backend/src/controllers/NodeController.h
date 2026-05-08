@@ -173,3 +173,12 @@ public:
 // nesting limit. Deleting a deeply nested root would otherwise hit
 // "cascade nesting too deep" once descendants exceed that boundary.
 inline constexpr int MAX_NODE_DEPTH = 15;
+
+// Per-map node count cap (#217 / audit #46 L2). Bounds an editor
+// from creating an unbounded fan-out under one map and slowing
+// listNodes/getSubtree for everyone with map access. The per-tenant
+// 1000-map cap already bounds total fan-out across maps; this caps
+// any single hot map. 5000 is the rough order of "largest reasonable
+// real-world tree" — revisit if production telemetry surfaces a slow
+// map outlier under the limit, or if legitimate workflows hit it.
+inline constexpr int MAX_NODES_PER_MAP = 5000;

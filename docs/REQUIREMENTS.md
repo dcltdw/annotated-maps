@@ -184,6 +184,10 @@ selected from `coordinateSystem.type` at view time.
 
 - Per-tenant map limit: 1,000 maps. Enforced on map creation.
 - Map-tree depth limit: 16. Enforced on node create and node move.
+- Per-map node count limit: 5,000 nodes. Enforced on node create and
+  node copy (a copy that would push the destination over the limit is
+  rejected before any inserts). Bounds DOS surface on a single hot map
+  that the per-tenant map cap doesn't cover.
 - Map list pagination: `pageSize` is clamped to 1–100. Invalid values
   default to 20.
 - Node subtree responses are cursor-paginated to bound payload size.
