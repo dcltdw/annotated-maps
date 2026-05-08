@@ -214,6 +214,40 @@ docker compose exec mysql mysql -uroot -prootpassword annotated_maps
 
 ---
 
+## 6a. Provisioning tenants out-of-band
+
+Most tenants are created automatically — the registration flow
+(`POST /auth/register`) provisions a personal org+tenant for the new
+user, and the seed script in §3 creates the demo orgs/tenants for
+local development.
+
+If you ever provision a tenant by hand (DB seed for an integration
+fixture, an admin tool that hasn't been written yet, a future
+SSO-org-bootstrap flow), the tenant **must** also have its default
+"Visibility Managers" group seeded. Without it, only tenant admins can
+manage visibility groups — non-admins can never be granted manager
+status because there's no `manages_visibility = TRUE` group to add
+them to.
+
+The backend exposes `TenantBootstrap::seedDefaults(tenantId,
+ownerUserId, onSuccess, onError)` in `backend/src/TenantBootstrap.h`
+for this purpose; new code paths that create tenants should call it
+right after the `tenant_members` insert. If you must do the equivalent
+work in raw SQL (e.g., a migration backfill), the two-statement
+template is:
+
+```sql
+INSERT INTO visibility_groups (tenant_id, name, manages_visibility, created_by)
+VALUES (<tenantId>, 'Visibility Managers', TRUE, <ownerUserId>);
+
+INSERT INTO visibility_group_members (visibility_group_id, user_id)
+VALUES (LAST_INSERT_ID(), <ownerUserId>);
+```
+
+Tracked under audit follow-up #218 (security audit #46 L3).
+
+---
+
 ## 7. Resource usage
 
 | Resource | Approximate usage |
