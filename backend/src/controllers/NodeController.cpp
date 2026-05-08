@@ -840,55 +840,93 @@ void NodeController::setVisibility(
             callback(resp);
         };
 
-        // Step 4: replace tags. DELETE then (optionally) multi-row INSERT.
-        auto applyTags = [callback, id, hasGroupIds, groupIds, joinIds, finish]() {
-            if (!hasGroupIds) { finish(); return; }
-
-            auto dbT = drogon::app().getDbClient();
-            dbT->execSqlAsync(
-                "DELETE FROM node_visibility WHERE node_id = ?",
-                [callback, id, groupIds, joinIds, finish]
-                (const drogon::orm::Result&) {
-                    if (groupIds.empty()) { finish(); return; }
-
-                    // Multi-row INSERT, ids inlined (see joinIds note above).
-                    std::string vals;
-                    bool first = true;
-                    for (int g : groupIds) {
-                        if (!first) vals += ",";
-                        vals += "(" + std::to_string(id) + "," + std::to_string(g) + ")";
-                        first = false;
-                    }
-                    auto dbI = drogon::app().getDbClient();
-                    dbI->execSqlAsync(
-                        "INSERT INTO node_visibility "
-                        "  (node_id, visibility_group_id) VALUES " + vals,
-                        [finish](const drogon::orm::Result&) { finish(); },
-                        [callback](const drogon::orm::DrogonDbException&) {
-                            callback(errorResponse(drogon::k500InternalServerError,
-                                "db_error", "Failed to insert tags"));
-                        });
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to clear existing tags"));
-                },
-                id);
-        };
-
-        // Step 3: optionally update override flag, then call applyTags.
+        // Step 3+4 (#212 / audit #46 H1): override UPDATE + tag DELETE +
+        // tag INSERT all run inside a single transaction. Pre-fix, the
+        // DELETE-then-INSERT could leave the node *untagged* (visible to
+        // everyone in the tenant) on partial failure — briefly removing
+        // a security control. The transaction commits when the last
+        // TransactionPtr ref drops; we attach setCommitCallback so the
+        // HTTP 204 only fires AFTER commit confirms (otherwise a follow-
+        // up GET can race the commit and read pre-write state).
         auto applyOverrideThenTags =
-            [callback, id, hasOverride, overrideVal, applyTags]() {
-            if (!hasOverride) { applyTags(); return; }
-            auto dbO = drogon::app().getDbClient();
-            dbO->execSqlAsync(
-                "UPDATE nodes SET visibility_override = ? WHERE id = ?",
-                [applyTags](const drogon::orm::Result&) { applyTags(); },
-                [callback](const drogon::orm::DrogonDbException&) {
+            [callback, id, hasOverride, overrideVal, hasGroupIds, groupIds,
+             joinIds, finish]() {
+
+            auto db = drogon::app().getDbClient();
+            db->newTransactionAsync(
+                [callback, id, hasOverride, overrideVal, hasGroupIds, groupIds,
+                 joinIds, finish]
+                (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+                if (!trans) {
                     callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to set override"));
-                },
-                overrideVal, id);
+                        "db_error", "Failed to begin transaction"));
+                    return;
+                }
+
+                // Defer the HTTP response until commit confirms. Drogon
+                // calls this callback exactly once when the transaction
+                // commits (success=true) or rolls back (false).
+                trans->setCommitCallback([callback, finish](bool committed) {
+                    if (!committed) {
+                        callback(errorResponse(drogon::k500InternalServerError,
+                            "db_error", "Transaction failed to commit"));
+                        return;
+                    }
+                    finish();
+                });
+
+                // chainDone marks the in-trans work as complete. The
+                // shared_ptr<Transaction> captures inside the callbacks
+                // then start dropping; when the last drops, Drogon
+                // commits and fires setCommitCallback above.
+                auto chainDone = []() { /* no-op; commit fires response */ };
+
+                auto applyTagsTx = [trans, callback, id, hasGroupIds, groupIds,
+                                    chainDone]() {
+                    if (!hasGroupIds) { chainDone(); return; }
+
+                    trans->execSqlAsync(
+                        "DELETE FROM node_visibility WHERE node_id = ?",
+                        [trans, callback, id, groupIds, chainDone]
+                        (const drogon::orm::Result&) {
+                            if (groupIds.empty()) { chainDone(); return; }
+
+                            std::string vals;
+                            bool first = true;
+                            for (int g : groupIds) {
+                                if (!first) vals += ",";
+                                vals += "(" + std::to_string(id) + "," +
+                                        std::to_string(g) + ")";
+                                first = false;
+                            }
+                            trans->execSqlAsync(
+                                "INSERT INTO node_visibility "
+                                "  (node_id, visibility_group_id) VALUES " + vals,
+                                [chainDone](const drogon::orm::Result&) {
+                                    chainDone();
+                                },
+                                [trans](const drogon::orm::DrogonDbException&) {
+                                    trans->rollback();
+                                });
+                        },
+                        [trans](const drogon::orm::DrogonDbException&) {
+                            trans->rollback();
+                        },
+                        id);
+                };
+
+                if (!hasOverride) { applyTagsTx(); return; }
+
+                trans->execSqlAsync(
+                    "UPDATE nodes SET visibility_override = ? WHERE id = ?",
+                    [applyTagsTx](const drogon::orm::Result&) { applyTagsTx(); },
+                    [trans](const drogon::orm::DrogonDbException&) {
+                        trans->rollback();
+                    },
+                    overrideVal, id);
+            });
+            (void)joinIds;  // captured for symmetry with the read phase
         };
 
         // Step 2: verify the node exists on this map+tenant.
