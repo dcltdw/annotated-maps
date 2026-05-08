@@ -1476,60 +1476,114 @@ void NodeController::moveNode(
                             };
 
                             if (!isCrossMap) {
-                                // Same-map re-parent: just update the parent.
+                                // Same-map re-parent: single UPDATE; no
+                                // transaction needed — atomic on its own.
                                 updateSourceParent();
                                 return;
                             }
 
-                            // Cross-map: chained sequence.
-                            //   1. UPDATE map_id on all descendants
+                            // Cross-map (#225 / audit #46 H1): the 3-or-4
+                            // step sequence below was previously chained
+                            // independent execSqlAsync calls. A failure
+                            // mid-chain left descendants on the old map
+                            // while the source pointed to the new one
+                            // (or visibility tags wiped without map move).
+                            // Now wrapped in a single transaction; the
+                            // HTTP response is deferred via setCommitCallback
+                            // so callers don't read pre-write state.
+                            //
+                            // Sequence inside the transaction:
+                            //   1. UPDATE nodes.map_id on descendants
                             //   2. DELETE node_visibility for descendants
                             //   3. (cross-tenant only) DELETE plot_nodes
-                            //   4. updateSourceParent
-                            auto clearPlotIfCrossTenant = [callback, idList,
-                                                            isCrossTenant,
-                                                            updateSourceParent]() {
-                                if (!isCrossTenant) {
-                                    updateSourceParent();
+                            //   4. UPDATE source's parent_id
+                            auto db = drogon::app().getDbClient();
+                            db->newTransactionAsync(
+                                [callback, finish, id, idList, destMapId,
+                                 isCrossTenant, hasNewParent, newParentIsNull,
+                                 newParentId]
+                                (const std::shared_ptr<drogon::orm::Transaction>& trans) {
+
+                                if (!trans) {
+                                    callback(errorResponse(drogon::k500InternalServerError,
+                                        "db_error", "Failed to begin transaction"));
                                     return;
                                 }
-                                auto dbC = drogon::app().getDbClient();
-                                dbC->execSqlAsync(
-                                    "DELETE FROM plot_nodes WHERE node_id IN (" + idList + ")",
-                                    [updateSourceParent](const drogon::orm::Result&) {
-                                        updateSourceParent();
-                                    },
-                                    [callback](const drogon::orm::DrogonDbException&) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "db_error", "Failed to clear plot memberships"));
-                                    });
-                            };
 
-                            auto dropVisibility = [callback, idList,
-                                                    clearPlotIfCrossTenant]() {
-                                auto dbV = drogon::app().getDbClient();
-                                dbV->execSqlAsync(
-                                    "DELETE FROM node_visibility WHERE node_id IN (" + idList + ")",
-                                    [clearPlotIfCrossTenant](const drogon::orm::Result&) {
-                                        clearPlotIfCrossTenant();
-                                    },
-                                    [callback](const drogon::orm::DrogonDbException&) {
-                                        callback(errorResponse(drogon::k500InternalServerError,
-                                            "db_error", "Failed to clear visibility tags"));
+                                trans->setCommitCallback(
+                                    [callback, finish](bool committed) {
+                                        if (!committed) {
+                                            callback(errorResponse(drogon::k500InternalServerError,
+                                                "db_error", "Transaction failed to commit"));
+                                            return;
+                                        }
+                                        finish();
                                     });
-                            };
 
-                            auto dbU = drogon::app().getDbClient();
-                            dbU->execSqlAsync(
-                                "UPDATE nodes SET map_id = ? WHERE id IN (" + idList + ")",
-                                [dropVisibility](const drogon::orm::Result&) {
-                                    dropVisibility();
-                                },
-                                [callback](const drogon::orm::DrogonDbException&) {
-                                    callback(errorResponse(drogon::k500InternalServerError,
-                                        "db_error", "Failed to update map_id on descendants"));
-                                },
-                                destMapId);
+                                auto updateSourceParentTx =
+                                    [trans, id, hasNewParent, newParentIsNull,
+                                     newParentId]() {
+                                    if (hasNewParent && newParentIsNull) {
+                                        trans->execSqlAsync(
+                                            "UPDATE nodes SET parent_id = NULL WHERE id = ?",
+                                            [](const drogon::orm::Result&) {},
+                                            [trans](const drogon::orm::DrogonDbException&) {
+                                                trans->rollback();
+                                            },
+                                            id);
+                                    } else if (hasNewParent) {
+                                        trans->execSqlAsync(
+                                            "UPDATE nodes SET parent_id = ? WHERE id = ?",
+                                            [](const drogon::orm::Result&) {},
+                                            [trans](const drogon::orm::DrogonDbException&) {
+                                                trans->rollback();
+                                            },
+                                            newParentId, id);
+                                    }
+                                    // No newParent given: cross-map move
+                                    // without parent change — skip step 4.
+                                };
+
+                                auto clearPlotIfCrossTenantTx =
+                                    [trans, idList, isCrossTenant,
+                                     updateSourceParentTx]() {
+                                    if (!isCrossTenant) {
+                                        updateSourceParentTx();
+                                        return;
+                                    }
+                                    trans->execSqlAsync(
+                                        "DELETE FROM plot_nodes WHERE node_id IN (" + idList + ")",
+                                        [updateSourceParentTx](const drogon::orm::Result&) {
+                                            updateSourceParentTx();
+                                        },
+                                        [trans](const drogon::orm::DrogonDbException&) {
+                                            trans->rollback();
+                                        });
+                                };
+
+                                auto dropVisibilityTx =
+                                    [trans, idList, clearPlotIfCrossTenantTx]() {
+                                    trans->execSqlAsync(
+                                        "DELETE FROM node_visibility WHERE node_id IN (" + idList + ")",
+                                        [clearPlotIfCrossTenantTx](const drogon::orm::Result&) {
+                                            clearPlotIfCrossTenantTx();
+                                        },
+                                        [trans](const drogon::orm::DrogonDbException&) {
+                                            trans->rollback();
+                                        });
+                                };
+
+                                trans->execSqlAsync(
+                                    "UPDATE nodes SET map_id = ? WHERE id IN (" + idList + ")",
+                                    [dropVisibilityTx](const drogon::orm::Result&) {
+                                        dropVisibilityTx();
+                                    },
+                                    [trans](const drogon::orm::DrogonDbException&) {
+                                        trans->rollback();
+                                    },
+                                    destMapId);
+                            });
+                            (void)updateSourceParent;  // unused on cross-map path
                         },
                         [callback](const drogon::orm::DrogonDbException&) {
                             callback(errorResponse(drogon::k500InternalServerError,
