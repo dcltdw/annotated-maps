@@ -21,6 +21,43 @@
 
 namespace TenantBootstrap {
 
+// Transaction-aware overload (#230 / audit #46 H1). When provided, the
+// two INSERTs run inside the caller's transaction so they commit (or
+// roll back) atomically with the caller's other writes. Otherwise the
+// bootstrap would commit even if the surrounding registerUser flow
+// rolled back, leaking an orphan visibility group.
+inline void seedDefaults(
+    const std::shared_ptr<drogon::orm::Transaction>& trans,
+    int tenantId,
+    int ownerUserId,
+    std::function<void()> onSuccess,
+    std::function<void(const std::string&)> onError) {
+
+    trans->execSqlAsync(
+        "INSERT INTO visibility_groups "
+        "  (tenant_id, name, manages_visibility, created_by) "
+        "VALUES (?, 'Visibility Managers', TRUE, ?)",
+        [trans, ownerUserId, onSuccess, onError]
+        (const drogon::orm::Result& rvg) {
+            int vgId = static_cast<int>(rvg.insertId());
+            trans->execSqlAsync(
+                "INSERT INTO visibility_group_members "
+                "  (visibility_group_id, user_id) VALUES (?, ?)",
+                [onSuccess](const drogon::orm::Result&) { onSuccess(); },
+                [onError](const drogon::orm::DrogonDbException&) {
+                    onError("Failed to add to default visibility group");
+                },
+                vgId, ownerUserId);
+        },
+        [onError](const drogon::orm::DrogonDbException&) {
+            onError("Failed to bootstrap default visibility group");
+        },
+        tenantId, ownerUserId);
+}
+
+// Standalone overload — uses a fresh DbClient and commits independently.
+// Reserved for non-transactional tenant-provisioning paths (DB seeds,
+// admin tools, future code that doesn't already hold a transaction).
 inline void seedDefaults(
     int tenantId,
     int ownerUserId,
