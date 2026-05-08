@@ -38,6 +38,9 @@ agent instructions:
    opening every PR** in a public repository.
 7. **For long-running branches, extending the CI workflow to trigger on
    the branch is action #1**, before any feature ticket starts.
+   Subtype — **wave branches**: name them `wave-N-<short-slug>` and
+   `pr-tests.yml`'s `wave-*` glob picks them up automatically (no
+   workflow patch needed).
 8. **This document is the master record; agent-memory entries are thin
    replicas pointing back here.** When a rule changes, edit the doc; the
    memory pointer's frontmatter is updated to match.
@@ -684,9 +687,15 @@ it tells you to think about up front, not retroactively.
 
 **How to apply:**
 
-When asked to create a long-running branch, the *first* deliverable is a
-tiny PR that extends the project's CI workflow (e.g., `.github/workflows/pr-tests.yml`)
-to:
+For the **wave-branch** subtype (a tightly-scoped multi-PR effort that
+will merge back to main as a unit — the most common case in this repo),
+follow the wave naming convention in §7a; `pr-tests.yml`'s `wave-*` glob
+trigger picks the branch up automatically and no workflow patch is needed.
+
+For **other** long-running branches (one-off rebuilds, phase branches
+that won't fit the `wave-N-<slug>` pattern), the *first* deliverable is
+a tiny PR that extends the project's CI workflow (e.g.,
+`.github/workflows/pr-tests.yml`) to:
 
 1. Add the branch to the `pull_request: branches: [...]` list.
 2. Add a `push: branches: [...]` trigger so post-merge state is also verified.
@@ -701,11 +710,64 @@ For the long-running branch, decide upfront whether CI is **enforced**
 rebuild branches where mid-state failures are expected, informational is
 usually right; `main` remains the enforced gate.
 
-Sequence for any future long-running branch:
+Sequence for any future ad-hoc long-running branch:
 
 1. Create branch.
 2. CI workflow extension PR (mirror onto both `main` and the branch).
 3. *Then* the first feature ticket.
+
+### 7a. Wave branches — `wave-N-<slug>` naming convention
+
+> **Rule:** When the work is a tightly-scoped multi-PR effort that will
+> merge back to main as a unit (the typical "wave" pattern in this repo),
+> name the branch `wave-N-<short-slug>` so `pr-tests.yml`'s `wave-*` glob
+> trigger picks it up automatically — no workflow patch round-trip
+> required.
+
+**Why:** The previous version of this rule (§7) required a workflow-edit
+PR before any wave work could start. The pattern fired correctly, but the
+edit was identical every time except for the branch name, and it cost a
+round-trip. Adding a `wave-*` glob to `pr-tests.yml` (PR #228) made the
+naming convention sufficient on its own. Wave branches now JustWork
+without per-wave plumbing; only ad-hoc one-off long-running branches
+(things that won't fit `wave-N-<slug>`) still need §7's manual extension.
+
+**How to apply:**
+
+Naming pattern: `wave-N-<short-slug>` where:
+
+- `N` is the wave number (matches the project board's "Wave" custom field
+  — Wave 2 → `wave-2-...`, Wave 3 → `wave-3-...`).
+- `<short-slug>` is a kebab-case description of the wave's theme. Pick
+  the same shape used for issue titles: a few words, no punctuation
+  beyond hyphens, no trailing slash.
+
+Examples:
+
+- `wave-2-audit-followups`
+- `wave-3-edges-epic`
+- `wave-4-search`
+
+`pr-tests.yml` already triggers on `branches: [main, 'wave-*']`, so PRs
+into any matching branch fire the full lint + security + compile +
+integration suite automatically. No workflow patch needed.
+
+Sequence for a new wave:
+
+1. Create the wave branch off `main`: `git checkout -b wave-N-<slug>`.
+2. Open feature PRs against the wave branch (`gh pr create --base wave-N-<slug>`).
+   Existing in-flight PRs against main can be re-targeted with
+   `gh pr edit <num> --base wave-N-<slug>`.
+3. Run `weekend.yml` against the wave branch once the wave's PRs have all
+   merged into it: `gh workflow run weekend.yml --ref wave-N-<slug>`.
+   This is the integration-verification step that justifies the wave
+   pattern in the first place.
+4. Open the final merge PR `wave-N-<slug>` → `main` once weekend.yml is
+   green.
+
+If `weekend.yml` fails on the wave branch, fix on the wave branch (open
+a new PR into it) and re-run; this is the whole point — main stays at
+last-known-stable until the wave is integration-verified.
 
 ---
 

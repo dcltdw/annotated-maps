@@ -2,7 +2,12 @@ name: PR Tests
 
 on:
   pull_request:
-    branches: [main]
+    # Trigger on PRs into main and into any wave-* branch. The wave-*
+    # glob matches the wave-N-<slug> naming convention (see
+    # docs/AI-COLLABORATION-CONVENTIONS.md "Wave branches"); the glob
+    # removes the per-wave workflow-edit round-trip the long-running-
+    # branch rule used to require.
+    branches: [main, 'wave-*']
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
