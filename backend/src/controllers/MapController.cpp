@@ -1,8 +1,10 @@
 #include "MapController.h"
 #include "AuditLog.h"
 #include "ErrorResponse.h"
+#include <charconv>
 #include <drogon/drogon.h>
 #include <sstream>
+#include <system_error>
 
 static int callerUserId(const drogon::HttpRequestPtr& req) {
     try { return req->getAttributes()->get<int>("userId"); }
@@ -681,12 +683,31 @@ void MapController::removePermission(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int id, const std::string& target) {
 
+    // Validate `target` up-front. Path is bound as std::string by the
+    // router, so anything goes; reject early with 400 instead of letting
+    // std::stoi throw and surface as a 500. Accept "public" or a
+    // positive integer userId; nothing else.
+    int targetId = 0;
+    if (target != "public") {
+        auto first = target.data();
+        auto last  = first + target.size();
+        auto [ptr, ec] = std::from_chars(first, last, targetId);
+        if (ec != std::errc{} || ptr != last || targetId <= 0) {
+            auto resp = drogon::HttpResponse::newHttpJsonResponse(
+                errorJson("bad_request",
+                    "Permission target must be 'public' or a positive user id"));
+            resp->setStatusCode(drogon::k400BadRequest);
+            callback(resp);
+            return;
+        }
+    }
+
     int callerId = callerUserId(req);
     auto db      = drogon::app().getDbClient();
 
     db->execSqlAsync(
         "SELECT id FROM maps WHERE id=? AND tenant_id=? AND owner_id=?",
-        [callback, id, target](const drogon::orm::Result& r) {
+        [callback, id, target, targetId](const drogon::orm::Result& r) {
             if (r.empty()) {
                 auto resp = drogon::HttpResponse::newHttpJsonResponse(
                     errorJson("forbidden", "Only the map owner can remove permissions"));
@@ -711,7 +732,6 @@ void MapController::removePermission(
                     },
                     id);
             } else {
-                int targetId = std::stoi(target);
                 db2->execSqlAsync(
                     "DELETE FROM map_permissions WHERE map_id=? AND user_id=?",
                     [callback](const drogon::orm::Result&) {
