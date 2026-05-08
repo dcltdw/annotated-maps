@@ -87,6 +87,45 @@ assert_status("addMember: invalid role returns 400", 400, status)
 
 print("  All member add tests passed.")
 
+# ─── Self-demote guard (#214) ────────────────────────────────────────────────
+
+print("  --- Self-demote guard (#214) ---")
+
+# Last-admin self-demote must be rejected. ADMIN is currently the only
+# admin in the tenant (COLLEAGUE was added as editor above).
+status, _ = http_post(f"/tenants/{TENANT_ID}/members",
+                      {"userId": ADMIN_ID, "role": "viewer"}, TOKEN_ADMIN)
+assert_status("addMember: last-admin self-demote returns 400", 400, status)
+
+# Self-promote-to-admin (no-op) is a self-targeted write but role IS admin
+# — must still succeed (it's an idempotent re-affirmation, not a demote).
+status, _ = http_post(f"/tenants/{TENANT_ID}/members",
+                      {"userId": ADMIN_ID, "role": "admin"}, TOKEN_ADMIN)
+assert_status("addMember: self admin re-affirm returns 201", 201, status)
+
+# With a second admin present, self-demote IS allowed. Promote COLLEAGUE
+# to admin first, then demote self, then restore self to admin so the
+# remaining tests in this file still see admin role.
+status, _ = http_post(f"/tenants/{TENANT_ID}/members",
+                      {"userId": int(COLLEAGUE_ID), "role": "admin"}, TOKEN_ADMIN)
+assert_status("addMember: promote colleague to admin returns 201", 201, status)
+
+status, _ = http_post(f"/tenants/{TENANT_ID}/members",
+                      {"userId": ADMIN_ID, "role": "viewer"}, TOKEN_ADMIN)
+assert_status("addMember: self-demote with co-admin returns 201", 201, status)
+
+# Restore admin role via direct DB (the API can't re-promote a non-admin
+# back to admin without a separate role-change endpoint).
+mysql_query(f"UPDATE tenant_members SET role='admin' "
+            f"WHERE tenant_id={TENANT_ID} AND user_id={ADMIN_ID};")
+
+# Demote colleague back to editor for the remove test below.
+status, _ = http_post(f"/tenants/{TENANT_ID}/members",
+                      {"userId": int(COLLEAGUE_ID), "role": "editor"}, TOKEN_ADMIN)
+assert_status("addMember: demote colleague back to editor returns 201", 201, status)
+
+print("  All self-demote tests passed.")
+
 print("  --- Member list/remove ---")
 
 status, _ = http_get(f"/tenants/{TENANT_ID}/members", TOKEN_ADMIN)
