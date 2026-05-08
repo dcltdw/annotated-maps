@@ -324,6 +324,108 @@ mysql_query(f"UPDATE maps SET owner_id={USER_A_ID} WHERE id={MAP_ID};")
 
 print("  All visibility-filter tests passed.")
 
+# ─── Map-permission gate on listMembers (#213) ───────────────────────────────
+#
+# Audit #46 M1: regular listNodes gates by map_permissions, but
+# listMembers used to skip that JOIN. Tenant members without
+# per-map access could see node/note metadata for plot members
+# from maps they couldn't otherwise read.
+#
+# Setup: a second map owned by A with no permission grant for B,
+# a node with override+Players (a group B IS a member of), and
+# the node attached to a plot. Pre-fix: B would see it via the
+# plot's visibility filter alone. Post-fix: B is rejected because
+# the map-permission gate runs first and B has no row.
+
+print("  --- Map-permission gate on listMembers (#213) ---")
+
+# A creates a second map with no map_permissions row for B.
+_, body = http_post(f"/tenants/{TENANT_A}/maps", {
+    "title": "Private Map (#213)",
+    "coordinateSystem": {"type": "wgs84", "center": {"lat": 0, "lng": 0}, "zoom": 3},
+}, TOKEN_A)
+PRIVATE_MAP = json_field(body, ["id"])
+
+# Node with Players visibility — would otherwise be visible to B.
+PRIVATE_NODES_BASE = f"/tenants/{TENANT_A}/maps/{PRIVATE_MAP}/nodes"
+_, body = http_post(PRIVATE_NODES_BASE, {"name": "PrivateNode"}, TOKEN_A)
+PRIVATE_NODE = json_field(body, ["id"])
+http_post(f"{PRIVATE_NODES_BASE}/{PRIVATE_NODE}/visibility",
+          {"override": True, "groupIds": [G_PLAYERS]}, TOKEN_A)
+
+# Note on the private node, also Players-tagged.
+_, body = http_post(f"{PRIVATE_NODES_BASE}/{PRIVATE_NODE}/notes",
+                    {"title": "PrivateNote", "text": "x"}, TOKEN_A)
+PRIVATE_NOTE = json_field(body, ["id"])
+http_post(
+    f"/tenants/{TENANT_A}/maps/{PRIVATE_MAP}/notes/{PRIVATE_NOTE}/visibility",
+    {"override": True, "groupIds": [G_PLAYERS]}, TOKEN_A)
+
+# Attach private members to PLOT_2; also add PLAYERS_NODE (from MAP_ID
+# where B has view permission) so we can verify the fix is *selective* —
+# it filters PRIVATE_NODE but NOT PLAYERS_NODE for the same caller.
+http_post(f"{PLOTS_BASE}/{PLOT_2}/nodes", {"nodeId": PRIVATE_NODE}, TOKEN_A)
+http_post(f"{PLOTS_BASE}/{PLOT_2}/notes", {"noteId": PRIVATE_NOTE}, TOKEN_A)
+http_post(f"{PLOTS_BASE}/{PLOT_2}/nodes", {"nodeId": PLAYERS_NODE}, TOKEN_A)
+
+# Admin still sees everything in the plot, including private-map members.
+status, body = http_get(f"{PLOTS_BASE}/{PLOT_2}/members", TOKEN_A)
+assert_status("admin: listMembers 200", 200, status)
+node_ids = {n["id"] for n in body["nodes"]}
+note_ids = {n["id"] for n in body["notes"]}
+assert_true("admin: sees PrivateNode in plot",  PRIVATE_NODE in node_ids)
+assert_true("admin: sees PrivateNote in plot",  PRIVATE_NOTE in note_ids)
+
+# B (tenant viewer, has Players group, but NO map_permissions on PRIVATE_MAP):
+# pre-fix would see PrivateNode/PrivateNote via plot visibility filter;
+# post-fix the map-permission gate rejects them.
+status, body = http_get(f"{PLOTS_BASE}/{PLOT_2}/members", TOKEN_B)
+assert_status("B: listMembers 200", 200, status)
+node_ids = {n["id"] for n in body["nodes"]}
+note_ids = {n["id"] for n in body["notes"]}
+assert_true("B: PrivateNode hidden (no map permission)",
+            PRIVATE_NODE not in node_ids)
+assert_true("B: PrivateNote hidden (no map permission)",
+            PRIVATE_NOTE not in note_ids)
+
+# Sanity: B still sees PLAYERS_NODE via PLOT_2 (it's on MAP_ID where B has view).
+assert_true("B: still sees PLAYERS_NODE on permitted map",
+            PLAYERS_NODE in node_ids)
+
+# Granting B view on PRIVATE_MAP must restore visibility.
+mysql_query(
+    f"INSERT INTO map_permissions (map_id, user_id, level) "
+    f"VALUES ({PRIVATE_MAP}, {USER_B_ID}, 'view');")
+status, body = http_get(f"{PLOTS_BASE}/{PLOT_2}/members", TOKEN_B)
+node_ids = {n["id"] for n in body["nodes"]}
+note_ids = {n["id"] for n in body["notes"]}
+assert_true("B: PrivateNode visible after permission grant",
+            PRIVATE_NODE in node_ids)
+assert_true("B: PrivateNote visible after permission grant",
+            PRIVATE_NOTE in note_ids)
+
+# Public-map permission also satisfies the gate. Revoke B's per-user
+# row, add a public row instead, and re-check.
+mysql_query(
+    f"DELETE FROM map_permissions "
+    f"WHERE map_id={PRIVATE_MAP} AND user_id={USER_B_ID};")
+mysql_query(
+    f"INSERT INTO map_permissions (map_id, user_id, level) "
+    f"VALUES ({PRIVATE_MAP}, NULL, 'view');")
+status, body = http_get(f"{PLOTS_BASE}/{PLOT_2}/members", TOKEN_B)
+node_ids = {n["id"] for n in body["nodes"]}
+assert_true("B: PrivateNode visible via public map permission",
+            PRIVATE_NODE in node_ids)
+
+# Cleanup: detach private members AND PLAYERS_NODE so the rest of the
+# file's expectations on PLOT_2 are unchanged (the next section adds
+# PLAYERS_NODE itself and asserts membership state).
+http_delete(f"{PLOTS_BASE}/{PLOT_2}/nodes/{PRIVATE_NODE}", TOKEN_A)
+http_delete(f"{PLOTS_BASE}/{PLOT_2}/notes/{PRIVATE_NOTE}", TOKEN_A)
+http_delete(f"{PLOTS_BASE}/{PLOT_2}/nodes/{PLAYERS_NODE}", TOKEN_A)
+
+print("  All map-permission-gate tests passed.")
+
 # ─── Reverse membership: GET /maps/{mid}/nodes/{nid}/plots (#139) ────────────
 #
 # State entering this section: PLOT_1 contains {PLAYERS_NODE, GM_NODE} as
