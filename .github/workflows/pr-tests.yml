@@ -312,7 +312,12 @@ jobs:
               }
             }
             for (const line of e2eLog.split('\n')) {
-              const m = line.match(/\[chromium\]\s+›\s+(.+)/);
+              // Anchor on Playwright's failure glyph (✘). The list reporter
+              // prints all per-test lines with "[chromium] ›" — passes (✓),
+              // fails (✘), and skips (-) — so a substring match would
+              // capture every test, not just failures, and emit a phantom
+              // Failures block on green runs (#251).
+              const m = line.match(/✘\s+\d+\s+\[chromium\]\s+›\s+(.+)/);
               if (m) failures.push('E2E: ' + m[1].trim());
             }
 
