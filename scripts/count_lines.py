@@ -1,54 +1,36 @@
 #!/usr/local/bin/python3
+import subprocess
 from pathlib import Path
 
-DESIRED_SUFFIXES = [
-    '.yml',
-    '.md',
-    '.py',
-    '.txt',
-    '.json',
-    # backend
-    '.cpp',
-    '.h',
-    # frontend
-    '.ts',
-    '.html',
-    '.tsx',
-    '.css',
-    # database
-    '.sql',
-]
-
-IGNORE_DIRECTORIES = [
-    '.',
-    '..',
-    '.git',
-    '.gitignore',
-    'node_modules',
-    'build',
-    'dist',
-    '.vite',
-    '__pycache__',
-]
-
-IGNORE_FILES = [
-    'package-lock.json',
+# Files that ARE tracked but shouldn't count toward "lines of code,
+# configuration, and documentation." Pure dependency manifests / lockfiles
+# get excluded; everything else tracked in git counts.
+IGNORE_FILES = {
     'package.json',
-]
+    'package-lock.json',
+}
 
 
 def examine_directory(path):
+    results = subprocess.run(
+        ['git', 'ls-files'],
+        capture_output=True,
+        text=True,
+        cwd=str(path),
+    ).stdout.split('\n')
     count = 0
-    for filename in path.iterdir():
-        if filename.is_dir():
-            if filename.name not in IGNORE_DIRECTORIES:
-                count += examine_directory(filename)
-        elif filename.suffix in DESIRED_SUFFIXES and filename.name not in IGNORE_FILES:
-            data = filename.read_text()
-            count += len(data.split('\n'))
-            if (count == 0):
-                raise RuntimeException(f'{data=}')
-    return count            
+    for fname in results:
+        if fname == '':
+            continue
+        filename = path / fname
+        if filename.name in IGNORE_FILES:
+            continue
+        # errors='replace' so a future binary commit (favicon, screenshot)
+        # doesn't crash the count — those rows still get counted as 1+
+        # lines but won't blow up.
+        data = filename.read_text(errors='replace')
+        count += len(data.splitlines())
+    return count
 
 
 def main():
