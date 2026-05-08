@@ -252,6 +252,73 @@ gh api graphql -f query='
 When porting to another project, replace these IDs with the equivalents from
 your own GraphQL query.
 
+#### 2a. Project-board operations — destructive-mutation traps
+
+Two failure modes from a 2026-05-08 incident, captured here so the next
+agent doesn't re-discover them the hard way:
+
+**Trap 1: `updateProjectV2Field` regenerates *all* option IDs.** The mutation:
+
+```graphql
+updateProjectV2Field(input: {
+  fieldId: "..."
+  singleSelectOptions: [
+    { name: "Wave 1", color: GRAY, description: "" }
+    { name: "Wave 2", color: GRAY, description: "" }
+    ...
+    { name: "Wave 6", color: GRAY, description: "" }   # the new one
+  ]
+})
+```
+
+…regenerates the `id` of *every* option in the list, even when names
+are unchanged. Every previously-tagged item then references a stale
+option ID and shows as untagged on the board. Issues themselves are
+unaffected; only the project field-value linkage breaks. Recovery
+requires re-tagging every item from session memory or git history,
+which is a slog and lossy if the original tags weren't captured
+elsewhere.
+
+The undocumented quirk: there's no `updateProjectV2Field` variant that
+*appends* an option without rewriting the list. The safe path:
+
+- **Use the GitHub web UI** (Project settings → field → "Add option"). The web UI preserves existing IDs.
+- The CLI / GraphQL path doesn't have an additive equivalent (verified 2026-05-08).
+- If the GraphQL path is unavoidable (e.g., automated provisioning), pre-snapshot all item-tag bindings (`gh project item-list ... --jq '.items[] | "\(.content.number)|\(.fieldValues...)"'`) before the mutation, then re-apply tags from the snapshot afterward.
+
+**Trap 2: GraphQL is rate-limited at 5000/hour with a tighter
+secondary per-minute limit.** Every `gh project item-list`,
+`item-edit`, and `gh issue create` call hits the GraphQL quota. A
+burst of ~25 mutations during a recovery attempt triggered the
+secondary limit; the primary was 4/5000 remaining when checked.
+Reset window for that incident was **42 minutes**.
+
+How to stay under:
+
+- **Snapshot, then iterate.** Do one `gh project item-list` to dump
+  all item IDs into a local file, then loop edits — never re-query
+  inside the loop.
+- **Throttle destructive bursts.** If doing more than ~50 mutations
+  in a sitting, add `sleep 2` between item-edits. Each `sleep 2`
+  costs nothing; each rate-limit recovery costs ~42 minutes.
+- **Don't combine** a wave-tag refactor (or any mass re-tagging)
+  with other destructive board work in the same hour.
+- **Check before bursting:** `gh api rate_limit --jq '.resources.graphql'`
+  shows remaining + reset epoch; aim for ≥ (intended_mutations + 100) headroom.
+
+When rate-limited mid-burst, the safest move is to stop, log what
+was done, and return after the reset — cascading retries against a
+limited quota turn a 42-minute wait into a multi-hour one.
+
+**Workarounds that don't use GraphQL.** During a rate-limit window
+the following still work because they hit the REST API:
+
+- `gh issue close` / `gh issue reopen`
+- `gh issue edit --body / --title` (label edits route through GraphQL — beware)
+- `gh api -X POST repos/{owner}/{repo}/issues -f title=... -f body=...` (REST issue create — bypasses `gh issue create`'s GraphQL path; project membership has to be added later)
+- All git operations
+- All doc edits
+
 ### 3. Add every new issue to the default project
 
 > **Rule:** Whenever creating a new issue, add it to the project's default
