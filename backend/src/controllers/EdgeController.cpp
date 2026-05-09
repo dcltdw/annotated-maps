@@ -1,14 +1,18 @@
 #include "EdgeController.h"
 #include "AuditLog.h"
 #include "ErrorResponse.h"
+#include "NodeController.h"  // MAX_NODE_DEPTH for the resolve CTE
 #include <drogon/drogon.h>
 
-// Phase 1 of the edges epic (#148). Schema + unfiltered CRUD; the
-// visibility filter (edge visible iff BOTH endpoints visible) lands in
-// #197 as a follow-up. Edges connect two nodes within a single map and
-// are scoped to that map's permissions for read + write.
+// Edges connect two nodes within a single map for relational use cases.
 //
-// Read authorization: caller must have view-level access to the map.
+// Read authorization is two-layered (#197):
+//   1. Map permission: caller must have view-level access to the map.
+//   2. Edge visibility: an edge is visible iff BOTH endpoints are
+//      visible to the caller under the per-node #99 effective-visibility
+//      rules. Tenant admins bypass layer 2; map owners with
+//      owner_xray = TRUE also bypass.
+//
 // Write authorization: caller must have edit-level access to the map
 // (or be the owner) AND tenant role admin or editor.
 //
@@ -23,12 +27,53 @@ int callerUserId(const drogon::HttpRequestPtr& req) {
     catch (...) { return 0; }
 }
 
+bool isTenantAdmin(const drogon::HttpRequestPtr& req) {
+    try {
+        return req->getAttributes()->get<std::string>("tenantRole") == "admin";
+    } catch (...) { return false; }
+}
+
 bool isTenantEditorOrAdmin(const drogon::HttpRequestPtr& req) {
     try {
         const auto role = req->getAttributes()->get<std::string>("tenantRole");
         return role == "admin" || role == "editor";
     } catch (...) { return false; }
 }
+
+// Effective-visibility CTE — same shape as NodeController's, restated
+// locally so EdgeController doesn't take a private dependency on the
+// other controller's anonymous-namespace constants.
+//
+// Binds: (mapId, userId).
+const std::string VISIBILITY_RESOLVE_CTE =
+    "WITH RECURSIVE resolve AS ("
+    "  SELECT n.id AS start_id, n.id AS cur_id, n.parent_id, "
+    "         n.visibility_override, 0 AS depth "
+    "  FROM nodes n WHERE n.map_id = ? "
+    "  UNION ALL "
+    "  SELECT r.start_id, p.id, p.parent_id, p.visibility_override, r.depth + 1 "
+    "  FROM resolve r JOIN nodes p ON p.id = r.parent_id "
+    "  WHERE r.visibility_override = FALSE AND r.depth < " +
+        std::to_string(MAX_NODE_DEPTH) +
+    "), visible_starts AS ( "
+    "  SELECT DISTINCT r.start_id FROM resolve r "
+    "  JOIN node_visibility nv "
+    "       ON nv.node_id = r.cur_id AND r.visibility_override = TRUE "
+    "  JOIN visibility_group_members vgm "
+    "       ON vgm.visibility_group_id = nv.visibility_group_id "
+    "  WHERE vgm.user_id = ? "
+    ") ";
+
+// Edge-visibility predicate — both endpoints must be visible OR the
+// caller is the map owner with owner_xray=TRUE.
+// Binds: (userId).
+//
+// JOIN expectations: caller must have JOINed `maps m ON m.id = e.map_id`
+// for the owner_id / owner_xray check.
+const std::string EDGE_VISIBILITY_PREDICATE =
+    " AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+    "      OR (e.source_node_id IN (SELECT start_id FROM visible_starts) "
+    "          AND e.dest_node_id IN (SELECT start_id FROM visible_starts))) ";
 
 Json::Value rowToEdge(const drogon::orm::Row& row) {
     Json::Value e;
@@ -64,12 +109,12 @@ void EdgeController::listEdges(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int mapId) {
 
-    int userId = callerUserId(req);
+    int userId  = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
 
     // First verify the caller has view access on the map; on success,
-    // fetch the edges. Splitting the read makes 403/empty-array
-    // distinguishable (map missing or hidden → 403; map visible but no
-    // edges → 200 []).
+    // fetch the edges. Admins skip the visibility CTE; non-admins get
+    // the both-endpoints-visible filter applied.
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT m.id FROM maps m "
@@ -80,27 +125,47 @@ void EdgeController::listEdges(
         "  AND (m.owner_id = ? "
         "       OR mp.level IN ('view','comment','edit','moderate','admin') "
         "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId](const drogon::orm::Result& rAccess) {
+        [callback, mapId, userId, isAdmin](const drogon::orm::Result& rAccess) {
             if (rAccess.empty()) {
                 callback(errorResponse(drogon::k403Forbidden,
                     "forbidden", "Map not found or insufficient permissions"));
                 return;
             }
+
             auto db2 = drogon::app().getDbClient();
-            db2->execSqlAsync(
-                "SELECT " + EDGE_COLUMNS +
-                " FROM node_edges WHERE map_id = ? "
-                " ORDER BY created_at ASC, id ASC",
-                [callback](const drogon::orm::Result& r) {
-                    Json::Value arr(Json::arrayValue);
-                    for (const auto& row : r) arr.append(rowToEdge(row));
-                    callback(drogon::HttpResponse::newHttpJsonResponse(arr));
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to fetch edges"));
-                },
-                mapId);
+            auto onRows = [callback](const drogon::orm::Result& r) {
+                Json::Value arr(Json::arrayValue);
+                for (const auto& row : r) arr.append(rowToEdge(row));
+                callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+            };
+            auto onErr = [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Failed to fetch edges"));
+            };
+
+            if (isAdmin) {
+                db2->execSqlAsync(
+                    "SELECT " + EDGE_COLUMNS +
+                    " FROM node_edges WHERE map_id = ? "
+                    " ORDER BY created_at ASC, id ASC",
+                    onRows, onErr,
+                    mapId);
+            } else {
+                std::string sql = VISIBILITY_RESOLVE_CTE +
+                    "SELECT " +
+                    "  e.id, e.map_id, e.source_node_id, e.dest_node_id, "
+                    "  e.directed, e.color, e.label, e.description, "
+                    "  e.created_by, e.created_at, e.updated_at "
+                    "FROM node_edges e "
+                    "JOIN maps m ON m.id = e.map_id "
+                    "WHERE e.map_id = ? " +
+                    EDGE_VISIBILITY_PREDICATE +
+                    " ORDER BY e.created_at ASC, e.id ASC";
+                db2->execSqlAsync(sql, onRows, onErr,
+                    mapId, userId,            // CTE
+                    mapId,                    // WHERE e.map_id
+                    userId);                  // xray (m.owner_id = ?)
+            }
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
@@ -249,12 +314,13 @@ void EdgeController::getEdge(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int mapId, int id) {
 
-    int userId = callerUserId(req);
+    int userId  = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
 
     // Verify view access on the map first; on success, fetch the edge.
-    // Returns 404 (not 403) if the edge doesn't exist on this map — the
-    // caller proved they could see the map, so distinguishing missing
-    // from hidden is fine here.
+    // For non-admins, the edge fetch additionally enforces the
+    // both-endpoints-visible filter — a hidden edge returns 404, never
+    // 403, to avoid leaking edge existence (per #197 acceptance).
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT m.id FROM maps m "
@@ -265,29 +331,46 @@ void EdgeController::getEdge(
         "  AND (m.owner_id = ? "
         "       OR mp.level IN ('view','comment','edit','moderate','admin') "
         "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, id](const drogon::orm::Result& rAcc) {
+        [callback, mapId, id, userId, isAdmin](const drogon::orm::Result& rAcc) {
             if (rAcc.empty()) {
                 callback(errorResponse(drogon::k403Forbidden,
                     "forbidden", "Map not found or insufficient permissions"));
                 return;
             }
             auto db2 = drogon::app().getDbClient();
-            db2->execSqlAsync(
-                "SELECT " + EDGE_COLUMNS +
-                " FROM node_edges WHERE id = ? AND map_id = ?",
-                [callback](const drogon::orm::Result& r) {
-                    if (r.empty()) {
-                        callback(errorResponse(drogon::k404NotFound,
-                            "not_found", "Edge not found"));
-                        return;
-                    }
-                    callback(drogon::HttpResponse::newHttpJsonResponse(rowToEdge(r[0])));
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Failed to fetch edge"));
-                },
-                id, mapId);
+            auto onRow = [callback](const drogon::orm::Result& r) {
+                if (r.empty()) {
+                    callback(errorResponse(drogon::k404NotFound,
+                        "not_found", "Edge not found"));
+                    return;
+                }
+                callback(drogon::HttpResponse::newHttpJsonResponse(rowToEdge(r[0])));
+            };
+            auto onErr = [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Failed to fetch edge"));
+            };
+
+            if (isAdmin) {
+                db2->execSqlAsync(
+                    "SELECT " + EDGE_COLUMNS +
+                    " FROM node_edges WHERE id = ? AND map_id = ?",
+                    onRow, onErr, id, mapId);
+            } else {
+                std::string sql = VISIBILITY_RESOLVE_CTE +
+                    "SELECT " +
+                    "  e.id, e.map_id, e.source_node_id, e.dest_node_id, "
+                    "  e.directed, e.color, e.label, e.description, "
+                    "  e.created_by, e.created_at, e.updated_at "
+                    "FROM node_edges e "
+                    "JOIN maps m ON m.id = e.map_id "
+                    "WHERE e.id = ? AND e.map_id = ? " +
+                    EDGE_VISIBILITY_PREDICATE;
+                db2->execSqlAsync(sql, onRow, onErr,
+                    mapId, userId,            // CTE
+                    id, mapId,                // WHERE e.id, e.map_id
+                    userId);                  // xray
+            }
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,
@@ -569,10 +652,17 @@ void EdgeController::listEdgesForNode(
     std::function<void(const drogon::HttpResponsePtr&)>&& callback,
     int tenantId, int mapId, int nodeId) {
 
-    int userId = callerUserId(req);
+    int userId  = callerUserId(req);
+    bool isAdmin = isTenantAdmin(req);
 
-    // Same map-view check as listEdges. Visibility filter on the *other*
-    // endpoint comes in #197.
+    // Map view check, then node-on-map existence check, then edge fetch.
+    // For non-admins the edge fetch enforces both-endpoints-visible —
+    // the starting node MUST be in `visible_starts` (otherwise the
+    // `source_node_id IN ...` half of the predicate fails for any edge
+    // touching it), so a hidden starting node yields an empty array
+    // post-filter. To match NodeController's "hidden node looks
+    // missing" pattern, also gate visibility of the starting node
+    // up-front and 404 on hidden.
     auto db = drogon::app().getDbClient();
     db->execSqlAsync(
         "SELECT m.id FROM maps m "
@@ -583,45 +673,89 @@ void EdgeController::listEdgesForNode(
         "  AND (m.owner_id = ? "
         "       OR mp.level IN ('view','comment','edit','moderate','admin') "
         "       OR mp_pub.level IN ('view','comment','edit','moderate','admin'))",
-        [callback, mapId, nodeId](const drogon::orm::Result& rAcc) {
+        [callback, mapId, nodeId, userId, isAdmin](const drogon::orm::Result& rAcc) {
             if (rAcc.empty()) {
                 callback(errorResponse(drogon::k403Forbidden,
                     "forbidden", "Map not found or insufficient permissions"));
                 return;
             }
-            // Verify the node is on this map (cheap; avoids returning
-            // an empty array when the caller passed a bogus nodeId).
+            // Verify the node is on this map (cheap; for admins this
+            // doubles as the only visibility check needed). For
+            // non-admins, also confirm the node itself is visible —
+            // hidden node returns 404 (matches NodeController pattern).
             auto dbN = drogon::app().getDbClient();
-            dbN->execSqlAsync(
-                "SELECT 1 FROM nodes WHERE id = ? AND map_id = ?",
-                [callback, mapId, nodeId](const drogon::orm::Result& rN) {
-                    if (rN.empty()) {
-                        callback(errorResponse(drogon::k404NotFound,
-                            "not_found", "Node not found on this map"));
-                        return;
-                    }
-                    auto db2 = drogon::app().getDbClient();
+            std::string nodeCheckSql;
+            if (isAdmin) {
+                nodeCheckSql = "SELECT 1 FROM nodes WHERE id = ? AND map_id = ?";
+            } else {
+                // Recursive CTE walks the parent chain for visibility.
+                // 1 if visible (xray bypass OR in visible_starts), 0 otherwise.
+                nodeCheckSql = VISIBILITY_RESOLVE_CTE +
+                    "SELECT 1 FROM nodes n "
+                    "JOIN maps m ON m.id = n.map_id "
+                    "WHERE n.id = ? AND n.map_id = ? "
+                    "  AND ((m.owner_id = ? AND m.owner_xray = TRUE) "
+                    "       OR n.id IN (SELECT start_id FROM visible_starts))";
+            }
+
+            auto onNodeChecked = [callback, mapId, nodeId, userId, isAdmin]
+                (const drogon::orm::Result& rN) {
+                if (rN.empty()) {
+                    callback(errorResponse(drogon::k404NotFound,
+                        "not_found", "Node not found on this map"));
+                    return;
+                }
+                auto db2 = drogon::app().getDbClient();
+                auto onRows = [callback](const drogon::orm::Result& r) {
+                    Json::Value arr(Json::arrayValue);
+                    for (const auto& row : r) arr.append(rowToEdge(row));
+                    callback(drogon::HttpResponse::newHttpJsonResponse(arr));
+                };
+                auto onErr = [callback](const drogon::orm::DrogonDbException&) {
+                    callback(errorResponse(drogon::k500InternalServerError,
+                        "db_error", "Failed to fetch edges"));
+                };
+
+                if (isAdmin) {
                     db2->execSqlAsync(
                         "SELECT " + EDGE_COLUMNS +
                         " FROM node_edges "
                         "WHERE map_id = ? AND (source_node_id = ? OR dest_node_id = ?) "
                         "ORDER BY created_at ASC, id ASC",
-                        [callback](const drogon::orm::Result& r) {
-                            Json::Value arr(Json::arrayValue);
-                            for (const auto& row : r) arr.append(rowToEdge(row));
-                            callback(drogon::HttpResponse::newHttpJsonResponse(arr));
-                        },
-                        [callback](const drogon::orm::DrogonDbException&) {
-                            callback(errorResponse(drogon::k500InternalServerError,
-                                "db_error", "Failed to fetch edges"));
-                        },
+                        onRows, onErr,
                         mapId, nodeId, nodeId);
-                },
-                [callback](const drogon::orm::DrogonDbException&) {
-                    callback(errorResponse(drogon::k500InternalServerError,
-                        "db_error", "Database error"));
-                },
-                nodeId, mapId);
+                } else {
+                    std::string sql = VISIBILITY_RESOLVE_CTE +
+                        "SELECT " +
+                        "  e.id, e.map_id, e.source_node_id, e.dest_node_id, "
+                        "  e.directed, e.color, e.label, e.description, "
+                        "  e.created_by, e.created_at, e.updated_at "
+                        "FROM node_edges e "
+                        "JOIN maps m ON m.id = e.map_id "
+                        "WHERE e.map_id = ? "
+                        "  AND (e.source_node_id = ? OR e.dest_node_id = ?) " +
+                        EDGE_VISIBILITY_PREDICATE +
+                        " ORDER BY e.created_at ASC, e.id ASC";
+                    db2->execSqlAsync(sql, onRows, onErr,
+                        mapId, userId,                  // CTE
+                        mapId, nodeId, nodeId,           // WHERE e.map_id, source/dest
+                        userId);                         // xray
+                }
+            };
+            auto onNodeErr = [callback](const drogon::orm::DrogonDbException&) {
+                callback(errorResponse(drogon::k500InternalServerError,
+                    "db_error", "Database error"));
+            };
+
+            if (isAdmin) {
+                dbN->execSqlAsync(nodeCheckSql, onNodeChecked, onNodeErr,
+                    nodeId, mapId);
+            } else {
+                dbN->execSqlAsync(nodeCheckSql, onNodeChecked, onNodeErr,
+                    mapId, userId,    // CTE
+                    nodeId, mapId,    // WHERE n.id, n.map_id
+                    userId);          // xray
+            }
         },
         [callback](const drogon::orm::DrogonDbException&) {
             callback(errorResponse(drogon::k500InternalServerError,

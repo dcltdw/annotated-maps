@@ -259,13 +259,19 @@ status, _ = http_post(EDGES_BASE,
     {"sourceNodeId": NODE_X, "destNodeId": NODE_Y}, TOKEN_C)
 assert_status("auth: cross-tenant create 403", 403, status)
 
-# B is a viewer of TENANT_A with view perm on MAP_ID — can read
+# B is a viewer of TENANT_A with view perm on MAP_ID — read endpoint
+# returns 200 (the visibility filter applies — see Visibility filter
+# section below for the per-edge expectations). EDGE_1 / EDGE_2's
+# endpoints (NODE_X / NODE_Y / NODE_Z) are untagged in this section,
+# which under the existing visibility model means admin-only — so B
+# gets back an empty list and a 404 on direct get.
 status, body = http_get(EDGES_BASE, TOKEN_B)
 assert_status("auth: viewer can list 200", 200, status)
-assert_true("auth: viewer sees both edges", len(body) == 2)
+assert_true("auth: viewer sees no untagged-endpoint edges (vis filter)",
+            isinstance(body, list) and len(body) == 0)
 
-status, body = http_get(f"{EDGES_BASE}/{EDGE_1}", TOKEN_B)
-assert_status("auth: viewer can get 200", 200, status)
+status, _ = http_get(f"{EDGES_BASE}/{EDGE_1}", TOKEN_B)
+assert_status("auth: viewer get untagged-endpoint edge 404 (hidden, not 403)", 404, status)
 
 # Viewer cannot write — tenant role 'viewer' fails the editor/admin gate
 status, _ = http_post(EDGES_BASE,
@@ -314,5 +320,131 @@ assert_true("cascade: edge gone after map delete",  remaining == "0",
             f"got remaining={remaining!r}")
 
 print("  All cascade tests passed.")
+
+# ─── Visibility filter (#197) ───────────────────────────────────────────────
+# An edge is visible iff BOTH endpoints are visible to the caller.
+# Owner-xray and tenant-admin bypass.
+
+print("  --- Visibility filter (#197) ---")
+
+# Fresh map for the visibility tests (the earlier MAP_ID has all edges
+# from the CRUD section + a new node count near the end). Easier reasoning
+# with a clean slate.
+_, body = http_post(f"/tenants/{TENANT_A}/maps", {
+    "title": "Edge Visibility Map",
+    "coordinateSystem": {"type": "wgs84", "center": {"lat": 0, "lng": 0}, "zoom": 3},
+}, TOKEN_A)
+VMAP = json_field(body, ["id"])
+mysql_query(
+    f"INSERT INTO map_permissions (map_id, user_id, level) "
+    f"VALUES ({VMAP}, {USER_B_ID}, 'view');")
+
+VBASE     = f"/tenants/{TENANT_A}/maps/{VMAP}/nodes"
+VEDGES    = f"/tenants/{TENANT_A}/maps/{VMAP}/edges"
+
+# Two visibility groups; B is in Players.
+VGB = f"/tenants/{TENANT_A}/visibility-groups"
+_, body = http_post(VGB, {"name": "EdgePlayers"}, TOKEN_A)
+VG_PLAYERS = json_field(body, ["id"])
+_, body = http_post(VGB, {"name": "EdgeGMs"}, TOKEN_A)
+VG_GMS = json_field(body, ["id"])
+http_post(f"{VGB}/{VG_PLAYERS}/members", {"userId": USER_B_ID}, TOKEN_A)
+
+# Per the existing visibility model (test_20 fixture comment): untagged
+# nodes are admin-only — there is no "publicly visible" default for
+# non-admins. To make a node visible to a non-admin, tag it with a group
+# they belong to. So the fixtures use:
+#   VPNODE_A, VPNODE_B: Players-tagged → visible to B (Players member)
+#   VGNODE:             GMs-tagged     → hidden from B (not in GMs)
+#   VUNTAGGED:          no tags        → admin-only (hidden from B)
+
+VPNODE_A = mknode(VBASE, "PlayersA")
+http_post(f"{VBASE}/{VPNODE_A}/visibility",
+          {"override": True, "groupIds": [VG_PLAYERS]}, TOKEN_A)
+VPNODE_B = mknode(VBASE, "PlayersB")
+http_post(f"{VBASE}/{VPNODE_B}/visibility",
+          {"override": True, "groupIds": [VG_PLAYERS]}, TOKEN_A)
+VGNODE = mknode(VBASE, "GMsOnly")
+http_post(f"{VBASE}/{VGNODE}/visibility",
+          {"override": True, "groupIds": [VG_GMS]}, TOKEN_A)
+VUNTAGGED = mknode(VBASE, "Untagged")  # admin-only
+
+# Edges:
+#   E_PVIS:   PlayersA ↔ PlayersB  → both visible to B → visible
+#   E_MIXED:  PlayersA ↔ GMsOnly   → B sees A but not GMsOnly → hidden
+#   E_GHIDDEN:GMsOnly  ↔ Untagged  → B sees neither → hidden
+#   E_UNTAG:  PlayersA ↔ Untagged  → B sees A but not Untagged → hidden
+def mkedge(s, d):
+    _, b = http_post(VEDGES, {"sourceNodeId": s, "destNodeId": d}, TOKEN_A)
+    return json_field(b, ["id"])
+E_PVIS    = mkedge(VPNODE_A, VPNODE_B)
+E_MIXED   = mkedge(VPNODE_A, VGNODE)
+E_GHIDDEN = mkedge(VGNODE,   VUNTAGGED)
+E_UNTAG   = mkedge(VPNODE_A, VUNTAGGED)
+
+# Admin (A) sees all 4
+status, body = http_get(VEDGES, TOKEN_A)
+assert_status("vis: admin list 200", 200, status)
+ids = {e["id"] for e in body}
+assert_true("vis: admin sees all 4 edges",
+            ids == {E_PVIS, E_MIXED, E_GHIDDEN, E_UNTAG})
+
+# B (Players member, no GMs) sees only edges where BOTH endpoints visible
+status, body = http_get(VEDGES, TOKEN_B)
+assert_status("vis: B list 200", 200, status)
+ids = {e["id"] for e in body}
+assert_true("vis: B sees only E_PVIS",
+            ids == {E_PVIS},
+            f"got {ids}")
+
+# B getting visible edge → 200; getting any hidden → 404 (never 403)
+status, _ = http_get(f"{VEDGES}/{E_PVIS}", TOKEN_B)
+assert_status("vis: B get visible edge 200", 200, status)
+status, _ = http_get(f"{VEDGES}/{E_MIXED}", TOKEN_B)
+assert_status("vis: B get mixed-vis edge 404 (hidden, not 403)", 404, status)
+status, _ = http_get(f"{VEDGES}/{E_GHIDDEN}", TOKEN_B)
+assert_status("vis: B get fully-hidden edge 404", 404, status)
+status, _ = http_get(f"{VEDGES}/{E_UNTAG}", TOKEN_B)
+assert_status("vis: B get untagged-endpoint edge 404", 404, status)
+
+# listEdgesForNode from a visible-to-B node — only edges where the OTHER
+# endpoint is also visible
+status, body = http_get(f"{VBASE}/{VPNODE_A}/edges", TOKEN_B)
+assert_status("vis: listForNode visible-source 200", 200, status)
+ids = {e["id"] for e in body}
+assert_true("vis: listForNode VPNODE_A → only E_PVIS",
+            ids == {E_PVIS},
+            f"got {ids}")
+
+# listEdgesForNode from a HIDDEN node → 404 (hidden node looks missing)
+status, _ = http_get(f"{VBASE}/{VGNODE}/edges", TOKEN_B)
+assert_status("vis: listForNode hidden node 404", 404, status)
+status, _ = http_get(f"{VBASE}/{VUNTAGGED}/edges", TOKEN_B)
+assert_status("vis: listForNode untagged node 404 (admin-only)", 404, status)
+
+# Owner-xray bypass: temporarily hand the map to B with xray=TRUE.
+# B should now see ALL 4 edges regardless of tags.
+mysql_query(f"UPDATE maps SET owner_id={USER_B_ID}, owner_xray=TRUE "
+            f"WHERE id={VMAP};")
+status, body = http_get(VEDGES, TOKEN_B)
+ids = {e["id"] for e in body}
+assert_true("vis: xray=TRUE B sees all 4 edges",
+            ids == {E_PVIS, E_MIXED, E_GHIDDEN, E_UNTAG},
+            f"got {ids}")
+
+# xray=FALSE → back to filtered
+mysql_query(f"UPDATE maps SET owner_xray=FALSE WHERE id={VMAP};")
+status, body = http_get(VEDGES, TOKEN_B)
+ids = {e["id"] for e in body}
+assert_true("vis: xray=FALSE B back to filtered set",
+            ids == {E_PVIS})
+
+# Restore A as owner
+mysql_query(f"UPDATE maps SET owner_id={USER_A_ID} WHERE id={VMAP};")
+
+# Restore A as owner
+mysql_query(f"UPDATE maps SET owner_id={USER_A_ID} WHERE id={VMAP};")
+
+print("  All visibility-filter tests passed.")
 
 sys.exit(0 if report() else 1)
