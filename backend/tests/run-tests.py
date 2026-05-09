@@ -55,6 +55,7 @@ FAST_TESTS = [
     "test_26_coordinate_systems.py",
     "test_27_error_shape.py",
     "test_28_permissions.py",
+    "test_29_edges.py",
 ]
 
 # test_14_nodes.py landed in #96 (NodeController CRUD + tree + max-depth).
