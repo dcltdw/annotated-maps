@@ -164,8 +164,6 @@ export type NoteList = z.infer<typeof NoteListSchema>;
 // ─── Edges (#148, Wave 4) ────────────────────────────────────────────────────
 // Graph layer alongside the per-map node tree. Connects two nodes for
 // relational use cases (trade routes, ferry connections, quest deps).
-// Read-side schema only in #198; write methods + their request schemas
-// land in #199.
 
 export const EdgeRecordSchema = z.object({
   id: z.number().int(),
@@ -184,6 +182,24 @@ export type EdgeRecord = z.infer<typeof EdgeRecordSchema>;
 
 export const EdgeListSchema = z.array(EdgeRecordSchema);
 export type EdgeList = z.infer<typeof EdgeListSchema>;
+
+// Write request shapes — backend immutability rule (#148): endpoints
+// (sourceNodeId, destNodeId) are immutable on update. Re-targeting an
+// edge means delete + recreate.
+export type CreateEdgeRequest = {
+  sourceNodeId: number;
+  destNodeId: number;
+  directed?: boolean;
+  color?: string;
+  label?: string;
+  description?: string;
+};
+export type UpdateEdgeRequest = {
+  directed?: boolean;
+  color?: string;
+  label?: string;
+  description?: string;
+};
 
 // ─── Visibility groups (#85 / #98) ───────────────────────────────────────────
 
