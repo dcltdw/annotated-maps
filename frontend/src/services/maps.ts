@@ -18,6 +18,8 @@ import {
   PlotRecordSchema,
   PlotListSchema,
   PlotMembersSchema,
+  EdgeRecordSchema,
+  EdgeListSchema,
   type MapRecord,
   type MapList,
   type NodeRecord,
@@ -48,6 +50,8 @@ import {
   type PlotMembers,
   type CreatePlotRequest,
   type UpdatePlotRequest,
+  type EdgeRecord,
+  type EdgeList,
 } from '@/api/schemas';
 import type {
   Tenant,
@@ -568,5 +572,31 @@ export const plotsService = {
       `${tenantBase(tenantId)}/maps/${mapId}/notes/${noteId}/plots`,
     );
     return PlotListSchema.parse(res.data);
+  },
+};
+
+// ─── Edges (#148, Wave 4) ─────────────────────────────────────────────────────
+// Read-only methods for #198 (rendering layer); write methods land in #199.
+
+export const edgesService = {
+  async listEdges(mapId: number, tenantId?: number): Promise<EdgeList> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}/edges`);
+    return EdgeListSchema.parse(res.data);
+  },
+
+  async getEdge(mapId: number, edgeId: number, tenantId?: number): Promise<EdgeRecord> {
+    const res = await apiClient.get(`${tenantBase(tenantId)}/maps/${mapId}/edges/${edgeId}`);
+    return EdgeRecordSchema.parse(res.data);
+  },
+
+  async listEdgesForNode(
+    mapId: number,
+    nodeId: number,
+    tenantId?: number,
+  ): Promise<EdgeList> {
+    const res = await apiClient.get(
+      `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/edges`
+    );
+    return EdgeListSchema.parse(res.data);
   },
 };
