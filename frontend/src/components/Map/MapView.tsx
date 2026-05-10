@@ -1,17 +1,18 @@
-import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, useMap as useLeafletMap } from 'react-leaflet';
+import { useEffect, useMemo, useState } from 'react';
+import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, CircleMarker, useMap as useLeafletMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
-import { nodesService, nodeMediaService } from '@/services/maps';
+import { nodesService, nodeMediaService, edgesService } from '@/services/maps';
 import { useAuthStore } from '@/store/authStore';
 import type {
   MapRecord,
   NodeRecord,
   NodeMediaRecord,
   GeoJsonGeometry,
+  EdgeRecord,
 } from '@/types';
 
 // Fix for leaflet's default icon paths breaking under Vite's bundler.
@@ -147,6 +148,55 @@ function NodeLayer({ node, media, onClick }: NodeLayerProps) {
   return null;
 }
 
+// ─── Per-edge renderer (#198) ────────────────────────────────────────────────
+// Renders an edge as a Leaflet polyline from sourceNode's center to
+// destNode's center. Both endpoints must have a Point geometry (the
+// "center" of a node). Edges where either endpoint lacks a Point are
+// skipped silently — the underlying data still exists, just not
+// rendered (could be enhanced to use centroid for line/polygon nodes
+// in a follow-up).
+//
+// Z-order: rendered BEFORE node markers in the JSX tree so node
+// markers stay clickable on top.
+//
+// "Directed" indicator: a small CircleMarker at the dest endpoint.
+// A real arrowhead would need leaflet-arrowheads or hand-rolled
+// L.polylineDecorator geometry; the CircleMarker is a lightweight
+// stand-in for v1 that conveys direction without a new dependency.
+// (Filed as future polish in #199 / #200 if a real arrow is wanted.)
+
+interface EdgeLayerProps {
+  edge: EdgeRecord;
+  sourceNode: NodeRecord;
+  destNode: NodeRecord;
+}
+
+function EdgeLayer({ edge, sourceNode, destNode }: EdgeLayerProps) {
+  if (!sourceNode.geoJson || sourceNode.geoJson.type !== 'Point') return null;
+  if (!destNode.geoJson   || destNode.geoJson.type   !== 'Point') return null;
+
+  const src = pointLatLng(sourceNode.geoJson);
+  const dst = pointLatLng(destNode.geoJson);
+  if (!src || !dst) return null;
+
+  const color = edge.color ?? '#888';
+  return (
+    <>
+      <Polyline
+        positions={[src, dst]}
+        pathOptions={{ color, weight: 3, opacity: 0.85 }}
+      />
+      {edge.directed && (
+        <CircleMarker
+          center={dst}
+          radius={6}
+          pathOptions={{ color, fillColor: color, fillOpacity: 1 }}
+        />
+      )}
+    </>
+  );
+}
+
 // ─── MapView (dispatches on coordinateSystem.type) ───────────────────────────
 
 interface MapViewProps {
@@ -175,11 +225,20 @@ function PanController({ target }: { target: [number, number] | null | undefined
 
 export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [edges, setEdges] = useState<EdgeRecord[]>([]);
   const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const isOwner = currentUserId !== undefined && currentUserId === map.ownerId;
   const xrayActive = isOwner && map.ownerXray;
+
+  // Edge → endpoint nodes lookup. Built once per (nodes, edges) change so
+  // we don't recompute per-render.
+  const nodesById = useMemo(() => {
+    const m = new Map<number, NodeRecord>();
+    for (const n of nodes) m.set(n.id, n);
+    return m;
+  }, [nodes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,6 +266,13 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
       .catch(() => {
         if (!cancelled) setLoadError('Failed to load nodes for this map.');
       });
+
+    // Edges are best-effort — failure here doesn't block the map.
+    edgesService
+      .listEdges(map.id)
+      .then((es) => { if (!cancelled) setEdges(es); })
+      .catch(() => { /* render the map without edges; not a fatal */ });
+
     return () => {
       cancelled = true;
     };
@@ -224,6 +290,16 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   // numbers mean (x, y) but the swap is still correct.
 
   const cs = map.coordinateSystem;
+
+  // Edges render BEFORE node markers so node clicks aren't shadowed.
+  const renderEdgeLayers = () =>
+    edges.map((e) => {
+      const src = nodesById.get(e.sourceNodeId);
+      const dst = nodesById.get(e.destNodeId);
+      if (!src || !dst) return null;  // endpoint not loaded (filtered out by visibility)
+      return <EdgeLayer key={e.id} edge={e} sourceNode={src} destNode={dst} />;
+    });
+
   const renderNodeLayers = () =>
     nodes.map((n) => (
       <NodeLayer
@@ -260,6 +336,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           className="map-view-leaflet"
         >
           <ImageOverlay url={cs.image_url} bounds={bounds} />
+          {renderEdgeLayers()}
           {renderNodeLayers()}
           <PanController target={panTarget} />
         </MapContainer>
@@ -291,6 +368,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           maxBounds={maxBounds}
           className="map-view-leaflet map-view-blank"
         >
+          {renderEdgeLayers()}
           {renderNodeLayers()}
           <PanController target={panTarget} />
         </MapContainer>
@@ -313,6 +391,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
+        {renderEdgeLayers()}
         {renderNodeLayers()}
         <PanController target={panTarget} />
       </MapContainer>

@@ -42,6 +42,8 @@ export type {
   UpdateNodeRequest,
   CreateNoteRequest,
   UpdateNoteRequest,
+  EdgeRecord,
+  EdgeList,
 } from '@/api/schemas';
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
