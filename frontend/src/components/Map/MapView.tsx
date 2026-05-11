@@ -214,6 +214,21 @@ interface MapViewProps {
    * twice in the tree should re-center the map both times.
    */
   panTarget?: [number, number] | null;
+  /**
+   * Command to start the edge-create flow with a source already chosen
+   * (#200's "+ Edge from here" affordance in NodeDetailPanel). Each set
+   * to a new object identity triggers MapView to jump straight to
+   * pickingDest with `sourceNodeId` as source.
+   */
+  edgeStartFrom?: { sourceNodeId: number } | null;
+  /**
+   * Bump counter that signals an external edge mutation (e.g.,
+   * EdgesSection deleted an edge from the detail panel). On change,
+   * MapView refetches its edge list so the map rendering stays in
+   * sync with cross-component changes. Increment from MapDetailPage
+   * whenever a non-MapView code path mutates an edge.
+   */
+  edgesRefreshKey?: number;
 }
 
 // Mounted inside MapContainer so it has access to the leaflet map instance.
@@ -228,7 +243,13 @@ function PanController({ target }: { target: [number, number] | null | undefined
   return null;
 }
 
-export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
+export function MapView({
+  map,
+  onNodeClick,
+  panTarget,
+  edgeStartFrom,
+  edgesRefreshKey,
+}: MapViewProps) {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
   const [edges, setEdges] = useState<EdgeRecord[]>([]);
   const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
@@ -337,6 +358,20 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
     handleClickRef.current(nodeId);
   }).current;
 
+  // External command: "+ Edge from here" in NodeDetailPanel (#200).
+  // When the prop's object identity changes, jump straight to
+  // pickingDest with the supplied source. Only fires if currently idle
+  // — refuses to override an in-flight pick/edit.
+  useEffect(() => {
+    if (!edgeStartFrom) return;
+    if (!canEdit) return;
+    setEdgeMode((prev) =>
+      prev.kind === 'idle'
+        ? { kind: 'pickingDest', sourceId: edgeStartFrom.sourceNodeId }
+        : prev,
+    );
+  }, [edgeStartFrom, canEdit]);
+
   // Esc cancels mid-creation (any non-idle/non-modal state).
   useEffect(() => {
     if (edgeMode.kind !== 'pickingSource' && edgeMode.kind !== 'pickingDest') {
@@ -357,6 +392,17 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
       .then((es) => setEdges(es))
       .catch(() => { /* keep stale list; same posture as initial load */ });
   };
+
+  // External-mutation signal (#200). NodeDetailPanel's EdgesSection can
+  // delete an edge directly, bypassing this component's modal handlers.
+  // MapDetailPage bumps `edgesRefreshKey` on each such mutation; the
+  // effect below refetches so the map render stays in sync. Skip the
+  // initial undefined value (first mount).
+  useEffect(() => {
+    if (edgesRefreshKey === undefined) return;
+    refetchEdges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgesRefreshKey]);
 
   // Same staleness mitigation as handleClick — the EdgeLayer's onClick
   // is captured at first mount by react-leaflet, so without ref-stable

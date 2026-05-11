@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import {
   registerViaApi,
   createMapViaApi,
@@ -153,6 +153,64 @@ for (const { name, cs } of COORD_SYSTEMS) {
       await expect(
         page.getByRole('heading', { name: 'NodeForDetail' }),
       ).toBeVisible();
+    });
+
+    test(`${name}: edge create + delete (Wave 4 #200 lock-in)`, async ({ page, request }) => {
+      // Each coord system uses its own pointable coordinates. wgs84 +
+      // blank both accept [x, y] in the GeoJSON spec; pixel uses image
+      // pixels. The Point geometry shape is the same — the renderer
+      // interprets it per coord-system at view time.
+      const pointA: [number, number] =
+        name === 'pixel' ? [200, 200] :
+        name === 'blank' ? [100, 100] :
+        [0, 0];
+      const pointB: [number, number] =
+        name === 'pixel' ? [600, 400] :
+        name === 'blank' ? [400, 300] :
+        [10, 5];
+
+      const api = await registerViaApi(request, `${name}_edge_lockin`);
+      const map = await createMapViaApi(request, api, `${name} Edge Lockin`, cs);
+      await createNodeViaApi(request, api, map.id, {
+        name: 'NodeA',
+        geoJson: { type: 'Point', coordinates: pointA },
+      });
+      await createNodeViaApi(request, api, map.id, {
+        name: 'NodeB',
+        geoJson: { type: 'Point', coordinates: pointB },
+      });
+
+      await seedAuthInBrowser(page, api);
+      await page.goto(`/tenants/${api.tenantId}/maps/${map.id}`);
+
+      // Create the edge via the toolbar two-step pick. The same
+      // dispatchEvent trick used elsewhere — Leaflet's L.DomEvent
+      // listens for real native events; Playwright's synthetic
+      // .click() doesn't trigger it.
+      await page.getByRole('button', { name: /\+ edge/i }).click();
+      const dispatchClick = (loc: Locator) =>
+        loc.evaluate((el) =>
+          el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        );
+      const markers = page.locator('.leaflet-marker-icon');
+      await dispatchClick(markers.nth(0));
+      await dispatchClick(markers.nth(1));
+      await expect(page.getByRole('dialog')).toBeVisible();
+      await page.getByRole('button', { name: /^create$/i }).click();
+      await expect(page.getByRole('dialog')).not.toBeVisible();
+
+      // Polyline renders on this coord system.
+      await expect(
+        page.locator('.leaflet-overlay-pane svg path'),
+      ).toHaveCount(1, { timeout: 10000 });
+
+      // Delete via the polyline click → modal → Delete.
+      page.once('dialog', (d) => d.accept());
+      await dispatchClick(page.locator('.leaflet-overlay-pane svg path').first());
+      await page.getByRole('button', { name: /^delete$/i }).click();
+      await expect(
+        page.locator('.leaflet-overlay-pane svg path'),
+      ).toHaveCount(0);
     });
   });
 }
