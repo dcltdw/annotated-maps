@@ -52,6 +52,8 @@ import {
   type UpdatePlotRequest,
   type EdgeRecord,
   type EdgeList,
+  type CreateEdgeRequest,
+  type UpdateEdgeRequest,
 } from '@/api/schemas';
 import type {
   Tenant,
@@ -598,5 +600,42 @@ export const edgesService = {
       `${tenantBase(tenantId)}/maps/${mapId}/nodes/${nodeId}/edges`
     );
     return EdgeListSchema.parse(res.data);
+  },
+
+  // Write methods (#199). POST/PUT return the full canonical record per
+  // §4b — same #152 pattern as plots/nodes.
+  async createEdge(
+    mapId: number,
+    data: CreateEdgeRequest,
+    tenantId?: number,
+  ): Promise<EdgeRecord> {
+    const res = await apiClient.post(
+      `${tenantBase(tenantId)}/maps/${mapId}/edges`,
+      data,
+    );
+    return EdgeRecordSchema.parse(res.data);
+  },
+
+  async updateEdge(
+    mapId: number,
+    edgeId: number,
+    data: UpdateEdgeRequest,
+    tenantId?: number,
+  ): Promise<EdgeRecord> {
+    const res = await apiClient.put(
+      `${tenantBase(tenantId)}/maps/${mapId}/edges/${edgeId}`,
+      data,
+    );
+    return EdgeRecordSchema.parse(res.data);
+  },
+
+  async deleteEdge(
+    mapId: number,
+    edgeId: number,
+    tenantId?: number,
+  ): Promise<void> {
+    await apiClient.delete(
+      `${tenantBase(tenantId)}/maps/${mapId}/edges/${edgeId}`,
+    );
   },
 };
