@@ -3,6 +3,7 @@ import { nodesService, notesService } from '@/services/maps';
 import { extractApiError } from '@/utils/errors';
 import { VisibilityEditor } from '@/components/Visibility/VisibilityEditor';
 import { PlotsSection } from '@/components/Detail/PlotsSection';
+import { EdgesSection } from '@/components/Detail/EdgesSection';
 import { MediaSection } from '@/components/Detail/MediaSection';
 import type {
   NodeRecord,
@@ -27,12 +28,21 @@ interface NodeDetailPanelProps {
   mapId: number;
   selectedNodeId: number | null;
   onSelectNode: (nodeId: number) => void;
+  /** "+ Edge from here" in the Edges section relays through this callback
+   *  so the map-side toolbar state machine can jump to pickingDest with
+   *  the current node as source (#200). */
+  onStartEdgeFromNode?: (sourceNodeId: number) => void;
+  /** Fired when EdgesSection mutates an edge (currently: delete).
+   *  Parent bumps a counter so MapView can refetch its edge list. */
+  onEdgesChanged?: () => void;
 }
 
 export function NodeDetailPanel({
   mapId,
   selectedNodeId,
   onSelectNode,
+  onStartEdgeFromNode,
+  onEdgesChanged,
 }: NodeDetailPanelProps) {
   const [node, setNode] = useState<NodeRecord | null>(null);
   const [parent, setParent] = useState<NodeRecord | null>(null);
@@ -158,6 +168,18 @@ export function NodeDetailPanel({
       <section className="node-detail-plots">
         <PlotsSection mapId={mapId} kind="node" entityId={node.id} />
       </section>
+
+      {onStartEdgeFromNode && (
+        <section className="node-detail-edges">
+          <EdgesSection
+            mapId={mapId}
+            nodeId={node.id}
+            onSelectNode={onSelectNode}
+            onStartEdgeFromNode={onStartEdgeFromNode}
+            onChanged={onEdgesChanged}
+          />
+        </section>
+      )}
 
       <NotesList
         mapId={mapId}

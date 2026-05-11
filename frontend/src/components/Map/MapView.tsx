@@ -1,17 +1,19 @@
-import { useEffect, useState } from 'react';
-import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, useMap as useLeafletMap } from 'react-leaflet';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MapContainer, TileLayer, ImageOverlay, Marker, Polyline, Polygon, Popup, CircleMarker, useMap as useLeafletMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import iconUrl from 'leaflet/dist/images/marker-icon.png';
 import iconRetinaUrl from 'leaflet/dist/images/marker-icon-2x.png';
 import shadowUrl from 'leaflet/dist/images/marker-shadow.png';
-import { nodesService, nodeMediaService } from '@/services/maps';
+import { nodesService, nodeMediaService, edgesService } from '@/services/maps';
 import { useAuthStore } from '@/store/authStore';
+import { EdgeFormModal } from './EdgeFormModal';
 import type {
   MapRecord,
   NodeRecord,
   NodeMediaRecord,
   GeoJsonGeometry,
+  EdgeRecord,
 } from '@/types';
 
 // Fix for leaflet's default icon paths breaking under Vite's bundler.
@@ -147,6 +149,59 @@ function NodeLayer({ node, media, onClick }: NodeLayerProps) {
   return null;
 }
 
+// ─── Per-edge renderer (#198) ────────────────────────────────────────────────
+// Renders an edge as a Leaflet polyline from sourceNode's center to
+// destNode's center. Both endpoints must have a Point geometry (the
+// "center" of a node). Edges where either endpoint lacks a Point are
+// skipped silently — the underlying data still exists, just not
+// rendered (could be enhanced to use centroid for line/polygon nodes
+// in a follow-up).
+//
+// Z-order: rendered BEFORE node markers in the JSX tree so node
+// markers stay clickable on top.
+//
+// "Directed" indicator: a small CircleMarker at the dest endpoint.
+// A real arrowhead would need leaflet-arrowheads or hand-rolled
+// L.polylineDecorator geometry; the CircleMarker is a lightweight
+// stand-in for v1 that conveys direction without a new dependency.
+// (Filed as future polish in #199 / #200 if a real arrow is wanted.)
+
+interface EdgeLayerProps {
+  edge: EdgeRecord;
+  sourceNode: NodeRecord;
+  destNode: NodeRecord;
+  onClick?: (edgeId: number) => void;
+}
+
+function EdgeLayer({ edge, sourceNode, destNode, onClick }: EdgeLayerProps) {
+  if (!sourceNode.geoJson || sourceNode.geoJson.type !== 'Point') return null;
+  if (!destNode.geoJson   || destNode.geoJson.type   !== 'Point') return null;
+
+  const src = pointLatLng(sourceNode.geoJson);
+  const dst = pointLatLng(destNode.geoJson);
+  if (!src || !dst) return null;
+
+  const color = edge.color ?? '#888';
+  const handlers = onClick ? { click: () => onClick(edge.id) } : undefined;
+  return (
+    <>
+      <Polyline
+        positions={[src, dst]}
+        pathOptions={{ color, weight: 3, opacity: 0.85 }}
+        eventHandlers={handlers}
+      />
+      {edge.directed && (
+        <CircleMarker
+          center={dst}
+          radius={6}
+          pathOptions={{ color, fillColor: color, fillOpacity: 1 }}
+          eventHandlers={handlers}
+        />
+      )}
+    </>
+  );
+}
+
 // ─── MapView (dispatches on coordinateSystem.type) ───────────────────────────
 
 interface MapViewProps {
@@ -159,6 +214,21 @@ interface MapViewProps {
    * twice in the tree should re-center the map both times.
    */
   panTarget?: [number, number] | null;
+  /**
+   * Command to start the edge-create flow with a source already chosen
+   * (#200's "+ Edge from here" affordance in NodeDetailPanel). Each set
+   * to a new object identity triggers MapView to jump straight to
+   * pickingDest with `sourceNodeId` as source.
+   */
+  edgeStartFrom?: { sourceNodeId: number } | null;
+  /**
+   * Bump counter that signals an external edge mutation (e.g.,
+   * EdgesSection deleted an edge from the detail panel). On change,
+   * MapView refetches its edge list so the map rendering stays in
+   * sync with cross-component changes. Increment from MapDetailPage
+   * whenever a non-MapView code path mutates an edge.
+   */
+  edgesRefreshKey?: number;
 }
 
 // Mounted inside MapContainer so it has access to the leaflet map instance.
@@ -173,13 +243,45 @@ function PanController({ target }: { target: [number, number] | null | undefined
   return null;
 }
 
-export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
+export function MapView({
+  map,
+  onNodeClick,
+  panTarget,
+  edgeStartFrom,
+  edgesRefreshKey,
+}: MapViewProps) {
   const [nodes, setNodes] = useState<NodeRecord[]>([]);
+  const [edges, setEdges] = useState<EdgeRecord[]>([]);
   const [mediaByNode, setMediaByNode] = useState<Record<number, NodeMediaRecord[]>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const currentUserId = useAuthStore((s) => s.user?.id);
   const isOwner = currentUserId !== undefined && currentUserId === map.ownerId;
   const xrayActive = isOwner && map.ownerXray;
+  // Edit-permission gate for the edge toolbar (#199). The MapRecord's
+  // `permission` field is the caller's effective access. Owner + edit
+  // both qualify; view-only callers don't see the toolbar.
+  const canEdit = map.permission === 'edit' || map.permission === 'owner';
+
+  // ── Edge create / edit state machine (#199) ──────────────────────────────
+  // edgeMode: idle = no special interaction; pickingSource = waiting for
+  // the user to click the source node; pickingDest = source is captured,
+  // waiting for the dest. The state transitions on each node click and
+  // resets via Esc or after a successful create.
+  type EdgeMode =
+    | { kind: 'idle' }
+    | { kind: 'pickingSource' }
+    | { kind: 'pickingDest'; sourceId: number }
+    | { kind: 'creating'; sourceId: number; destId: number }
+    | { kind: 'editing'; edge: EdgeRecord };
+  const [edgeMode, setEdgeMode] = useState<EdgeMode>({ kind: 'idle' });
+
+  // Edge → endpoint nodes lookup. Built once per (nodes, edges) change so
+  // we don't recompute per-render.
+  const nodesById = useMemo(() => {
+    const m = new Map<number, NodeRecord>();
+    for (const n of nodes) m.set(n.id, n);
+    return m;
+  }, [nodes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,14 +309,114 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
       .catch(() => {
         if (!cancelled) setLoadError('Failed to load nodes for this map.');
       });
+
+    // Edges are best-effort — failure here doesn't block the map.
+    edgesService
+      .listEdges(map.id)
+      .then((es) => { if (!cancelled) setEdges(es); })
+      .catch(() => { /* render the map without edges; not a fatal */ });
+
     return () => {
       cancelled = true;
     };
   }, [map.id]);
 
-  const handleClick = (nodeId: number) => {
+  // react-leaflet captures `eventHandlers` at marker-mount time and
+  // doesn't always re-attach when the prop's identity changes — so a
+  // closure-based handler always runs against the FIRST render's state
+  // (idle), which broke the edge create flow until this ref-based
+  // indirection. Pattern: keep a ref pointed at the latest "real"
+  // handler, expose a stable wrapper that delegates to it. The wrapper's
+  // identity never changes, so react-leaflet keeps the original binding;
+  // each call re-reads the live ref and runs against current state.
+  const handleClickRef = useRef<(nodeId: number) => void>(() => {});
+  handleClickRef.current = (nodeId: number) => {
+    // Edge create flow intercepts node clicks. In picking-source mode,
+    // the click captures the source. In picking-dest mode, it captures
+    // the dest (rejecting same-node-as-source) and opens the create
+    // modal. Outside those modes, fall through to the default
+    // selection callback.
+    if (edgeMode.kind === 'pickingSource') {
+      setEdgeMode({ kind: 'pickingDest', sourceId: nodeId });
+      return;
+    }
+    if (edgeMode.kind === 'pickingDest') {
+      if (nodeId === edgeMode.sourceId) {
+        // Self-loop attempt — backend would 400; refuse early.
+        return;
+      }
+      setEdgeMode({
+        kind: 'creating',
+        sourceId: edgeMode.sourceId,
+        destId: nodeId,
+      });
+      return;
+    }
     onNodeClick?.(nodeId);
   };
+  const handleClick = useRef((nodeId: number) => {
+    handleClickRef.current(nodeId);
+  }).current;
+
+  // External command: "+ Edge from here" in NodeDetailPanel (#200).
+  // When the prop's object identity changes, jump straight to
+  // pickingDest with the supplied source. Only fires if currently idle
+  // — refuses to override an in-flight pick/edit.
+  useEffect(() => {
+    if (!edgeStartFrom) return;
+    if (!canEdit) return;
+    setEdgeMode((prev) =>
+      prev.kind === 'idle'
+        ? { kind: 'pickingDest', sourceId: edgeStartFrom.sourceNodeId }
+        : prev,
+    );
+  }, [edgeStartFrom, canEdit]);
+
+  // Esc cancels mid-creation (any non-idle/non-modal state).
+  useEffect(() => {
+    if (edgeMode.kind !== 'pickingSource' && edgeMode.kind !== 'pickingDest') {
+      return;
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setEdgeMode({ kind: 'idle' });
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [edgeMode.kind]);
+
+  // After create / update / delete, refetch edges so the rendering
+  // layer reflects the latest state. Cheaper than splicing the local
+  // array and avoids drift if the response shape changes.
+  const refetchEdges = () => {
+    edgesService.listEdges(map.id)
+      .then((es) => setEdges(es))
+      .catch(() => { /* keep stale list; same posture as initial load */ });
+  };
+
+  // External-mutation signal (#200). NodeDetailPanel's EdgesSection can
+  // delete an edge directly, bypassing this component's modal handlers.
+  // MapDetailPage bumps `edgesRefreshKey` on each such mutation; the
+  // effect below refetches so the map render stays in sync. Skip the
+  // initial undefined value (first mount).
+  useEffect(() => {
+    if (edgesRefreshKey === undefined) return;
+    refetchEdges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edgesRefreshKey]);
+
+  // Same staleness mitigation as handleClick — the EdgeLayer's onClick
+  // is captured at first mount by react-leaflet, so without ref-stable
+  // wrapping the latest `edges` and `edgeMode` would never be visible.
+  const handleEdgeClickRef = useRef<(edgeId: number) => void>(() => {});
+  handleEdgeClickRef.current = (edgeId: number) => {
+    if (edgeMode.kind !== 'idle') return;  // mid-flow; ignore
+    if (!canEdit) return;                  // view-only; no edit modal
+    const e = edges.find((x) => x.id === edgeId);
+    if (e) setEdgeMode({ kind: 'editing', edge: e });
+  };
+  const handleEdgeClick = useRef((edgeId: number) => {
+    handleEdgeClickRef.current(edgeId);
+  }).current;
 
   // All three renderers share the same node-layer rendering; the only
   // difference is the MapContainer's CRS + base layer (or lack thereof).
@@ -224,6 +426,126 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   // numbers mean (x, y) but the swap is still correct.
 
   const cs = map.coordinateSystem;
+
+  // Edges render BEFORE node markers so node clicks aren't shadowed.
+  // Pass onClick only when canEdit AND not mid-creation — mid-creation
+  // node clicks would otherwise compete with edge clicks for the same
+  // gesture.
+  const edgeLayerOnClick = canEdit && edgeMode.kind === 'idle'
+    ? handleEdgeClick
+    : undefined;
+  const renderEdgeLayers = () =>
+    edges.map((e) => {
+      const src = nodesById.get(e.sourceNodeId);
+      const dst = nodesById.get(e.destNodeId);
+      if (!src || !dst) return null;  // endpoint not loaded (filtered out by visibility)
+      return (
+        <EdgeLayer
+          key={e.id}
+          edge={e}
+          sourceNode={src}
+          destNode={dst}
+          onClick={edgeLayerOnClick}
+        />
+      );
+    });
+
+  // Toolbar + status hint shown above the map. Toolbar visible only
+  // when caller has edit access; hint reflects the current mode so the
+  // user knows what to do next (mirrors MapBox / OSM iD draw flows).
+  const renderToolbar = () => {
+    if (!canEdit) return null;
+    const startEdgeCreate = () => setEdgeMode({ kind: 'pickingSource' });
+    const cancelEdgeCreate = () => setEdgeMode({ kind: 'idle' });
+    if (edgeMode.kind === 'idle') {
+      return (
+        <div className="map-view-toolbar">
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={startEdgeCreate}
+          >
+            + Edge
+          </button>
+        </div>
+      );
+    }
+    if (edgeMode.kind === 'pickingSource') {
+      return (
+        <div className="map-view-toolbar map-view-toolbar-active">
+          <span>Click the source node (Esc to cancel)</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={cancelEdgeCreate}>
+            Cancel
+          </button>
+        </div>
+      );
+    }
+    if (edgeMode.kind === 'pickingDest') {
+      return (
+        <div className="map-view-toolbar map-view-toolbar-active">
+          <span>Click the destination node (Esc to cancel)</span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={cancelEdgeCreate}>
+            Cancel
+          </button>
+        </div>
+      );
+    }
+    return null;  // creating / editing — modal is the affordance
+  };
+
+  const renderEdgeModal = () => {
+    if (edgeMode.kind === 'creating') {
+      const src = nodesById.get(edgeMode.sourceId);
+      const dst = nodesById.get(edgeMode.destId);
+      if (!src || !dst) {
+        // Race: a node disappeared between picking and modal mount;
+        // bail back to idle.
+        setEdgeMode({ kind: 'idle' });
+        return null;
+      }
+      return (
+        <EdgeFormModal
+          mode="create"
+          mapId={map.id}
+          sourceNode={src}
+          destNode={dst}
+          onSaved={() => {
+            setEdgeMode({ kind: 'idle' });
+            refetchEdges();
+          }}
+          onClose={() => setEdgeMode({ kind: 'idle' })}
+        />
+      );
+    }
+    if (edgeMode.kind === 'editing') {
+      const src = nodesById.get(edgeMode.edge.sourceNodeId);
+      const dst = nodesById.get(edgeMode.edge.destNodeId);
+      if (!src || !dst) {
+        setEdgeMode({ kind: 'idle' });
+        return null;
+      }
+      return (
+        <EdgeFormModal
+          mode="edit"
+          mapId={map.id}
+          sourceNode={src}
+          destNode={dst}
+          initial={edgeMode.edge}
+          onSaved={() => {
+            setEdgeMode({ kind: 'idle' });
+            refetchEdges();
+          }}
+          onDeleted={() => {
+            setEdgeMode({ kind: 'idle' });
+            refetchEdges();
+          }}
+          onClose={() => setEdgeMode({ kind: 'idle' })}
+        />
+      );
+    }
+    return null;
+  };
+
   const renderNodeLayers = () =>
     nodes.map((n) => (
       <NodeLayer
@@ -247,6 +569,8 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
     return (
       <div className="map-view">
         {loadError && <div className="alert alert-error">{loadError}</div>}
+        {renderToolbar()}
+        {renderEdgeModal()}
         {xrayActive && (
           <div className="alert alert-xray" role="status">
             🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
@@ -260,6 +584,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           className="map-view-leaflet"
         >
           <ImageOverlay url={cs.image_url} bounds={bounds} />
+          {renderEdgeLayers()}
           {renderNodeLayers()}
           <PanController target={panTarget} />
         </MapContainer>
@@ -278,6 +603,8 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
     return (
       <div className="map-view">
         {loadError && <div className="alert alert-error">{loadError}</div>}
+        {renderToolbar()}
+        {renderEdgeModal()}
         {xrayActive && (
           <div className="alert alert-xray" role="status">
             🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
@@ -291,6 +618,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           maxBounds={maxBounds}
           className="map-view-leaflet map-view-blank"
         >
+          {renderEdgeLayers()}
           {renderNodeLayers()}
           <PanController target={panTarget} />
         </MapContainer>
@@ -303,6 +631,8 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
   return (
     <div className="map-view">
       {loadError && <div className="alert alert-error">{loadError}</div>}
+      {renderToolbar()}
+      {renderEdgeModal()}
       {xrayActive && (
         <div className="alert alert-xray" role="status">
           🔍 Owner X-ray active — you can see all nodes regardless of visibility tagging.
@@ -313,6 +643,7 @@ export function MapView({ map, onNodeClick, panTarget }: MapViewProps) {
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
         />
+        {renderEdgeLayers()}
         {renderNodeLayers()}
         <PanController target={panTarget} />
       </MapContainer>

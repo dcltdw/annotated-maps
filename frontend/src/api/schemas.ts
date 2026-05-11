@@ -161,6 +161,46 @@ export type NoteRecord = z.infer<typeof NoteRecordSchema>;
 export const NoteListSchema = z.array(NoteRecordSchema);
 export type NoteList = z.infer<typeof NoteListSchema>;
 
+// ─── Edges (#148, Wave 4) ────────────────────────────────────────────────────
+// Graph layer alongside the per-map node tree. Connects two nodes for
+// relational use cases (trade routes, ferry connections, quest deps).
+
+export const EdgeRecordSchema = z.object({
+  id: z.number().int(),
+  mapId: z.number().int(),
+  sourceNodeId: z.number().int(),
+  destNodeId: z.number().int(),
+  directed: z.boolean(),
+  color: z.string().nullable(),
+  label: z.string().nullable(),
+  description: z.string(),
+  createdBy: z.number().int(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type EdgeRecord = z.infer<typeof EdgeRecordSchema>;
+
+export const EdgeListSchema = z.array(EdgeRecordSchema);
+export type EdgeList = z.infer<typeof EdgeListSchema>;
+
+// Write request shapes — backend immutability rule (#148): endpoints
+// (sourceNodeId, destNodeId) are immutable on update. Re-targeting an
+// edge means delete + recreate.
+export type CreateEdgeRequest = {
+  sourceNodeId: number;
+  destNodeId: number;
+  directed?: boolean;
+  color?: string;
+  label?: string;
+  description?: string;
+};
+export type UpdateEdgeRequest = {
+  directed?: boolean;
+  color?: string;
+  label?: string;
+  description?: string;
+};
+
 // ─── Visibility groups (#85 / #98) ───────────────────────────────────────────
 
 export const VisibilityGroupSchema = z.object({
