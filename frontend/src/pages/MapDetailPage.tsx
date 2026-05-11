@@ -32,6 +32,16 @@ export function MapDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<number | null>(null);
   const [panTarget, setPanTarget] = useState<[number, number] | null>(null);
+  // "+ Edge from here" cross-component command (#200). NodeDetailPanel
+  // fires this; MapView reads it via prop. Object identity changes per
+  // command so MapView's effect re-fires even when the same node is
+  // chosen twice.
+  const [edgeStartFrom, setEdgeStartFrom] =
+    useState<{ sourceNodeId: number } | null>(null);
+  // Bump counter for external edge mutations (e.g., EdgesSection delete
+  // from the detail panel). MapView's effect on this prop refetches so
+  // the map render stays in sync.
+  const [edgesRefreshKey, setEdgesRefreshKey] = useState(0);
   const [xraySaving, setXraySaving] = useState(false);
   const [xrayError, setXrayError] = useState<string | null>(null);
   const [showSharing, setShowSharing] = useState(false);
@@ -149,12 +159,16 @@ export function MapDetailPage() {
           map={activeMap}
           onNodeClick={setSelectedNodeId}
           panTarget={panTarget}
+          edgeStartFrom={edgeStartFrom}
+          edgesRefreshKey={edgesRefreshKey}
         />
       </div>
       <NodeDetailPanel
         mapId={activeMap.id}
         selectedNodeId={selectedNodeId}
         onSelectNode={setSelectedNodeId}
+        onStartEdgeFromNode={(nodeId) => setEdgeStartFrom({ sourceNodeId: nodeId })}
+        onEdgesChanged={() => setEdgesRefreshKey((k) => k + 1)}
       />
       <button className="btn btn-ghost" onClick={() => navigate(`/tenants/${tenantId}/maps`)}>
         Back to maps
