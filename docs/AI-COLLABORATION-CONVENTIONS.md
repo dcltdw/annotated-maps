@@ -26,8 +26,9 @@ agent instructions:
 3. **Add every new issue to the project's default board** (whichever board
    represents "what we're working on now").
 4. **Every PR body must include the following sections** (each detailed
-   below): `Files changed` (§4a, alphabetical), docs/tests updates verified
-   (§4b, with §4b-1 cross-cutting docs and §4b-2 E2E for new CRUD pages),
+   below): `Files changed` (§4a, alphabetical), docs/tests/specs updates
+   verified (§4b, with §4b-1 cross-cutting docs, §4b-2 E2E for new CRUD
+   pages, §4b-3 agent-spec files in `docs/agent-spec/`),
    `Test expectations` table only when failures are expected (§4c),
    `Work breakdown` mirroring the agent's task-tracker (§4d), and
    `Operational impact` (§4e, restart / rebuild / migration needs, or
@@ -435,6 +436,21 @@ schema (Zod `.parse()` on the modal save response) had no E2E coverage.
 When a PR adds a new page that does CRUD on an entity through the UI,
 ship a Playwright spec covering at minimum: create → list → edit → delete
 through the UI, asserting the response renders without error.
+
+**§4b-3. Agent-spec files alongside code.** When a PR adds, removes, or
+changes behaviour covered by an `F-NNN` or `NF-NNN` spec in
+[docs/agent-spec/](../docs/agent-spec/), the SAME PR must update that
+spec. For new capabilities, the PR also lands the new `F-NNN`/`NF-NNN`
+file (status transitions to `in-progress` when the PR opens, `shipped`
+when it merges, with `pr:` populated and `last_updated` bumped). The
+agent-spec format exists so that an AI agent can reliably grep a fixed
+schema for behaviours; that guarantee dies if specs drift from code,
+which is why the same agent that changes the code is responsible for
+updating the spec in the same diff. See
+[docs/agent-spec/schema.md](../docs/agent-spec/schema.md) for the
+contract. Note: the project board is authoritative for live status; the
+spec's frontmatter `status` is "current as of `last_updated`" and is
+expected to briefly lag mid-PR — both converge when the PR merges.
 
 **Verify lint/typecheck per-file on the touched files**, not just by
 running the project-wide command. ESLint's daemon and watcher caches can
