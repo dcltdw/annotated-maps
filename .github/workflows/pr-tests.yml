@@ -75,6 +75,10 @@ jobs:
           file: backend/Dockerfile
           load: true
           tags: annotated-maps-backend:scan
+          # Force the runtime stage (which runs apt-get install) to rebuild
+          # every time so Trivy scans against fresh upstream packages, not a
+          # stale cached layer. Builder stage stays cached — no compile penalty.
+          no-cache-filters: runtime
           cache-from: |
             type=gha,scope=backend-compile
             type=gha,scope=backend
