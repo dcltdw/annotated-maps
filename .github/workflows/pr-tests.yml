@@ -75,6 +75,10 @@ jobs:
           file: backend/Dockerfile
           load: true
           tags: annotated-maps-backend:scan
+          # Force the runtime stage (which runs apt-get install) to rebuild
+          # every time so Trivy scans against fresh upstream packages, not a
+          # stale cached layer. Builder stage stays cached — no compile penalty.
+          no-cache-filters: runtime
           cache-from: |
             type=gha,scope=backend-compile
             type=gha,scope=backend
@@ -211,21 +215,31 @@ jobs:
           CURL_TIMEOUT: "30"
 
       # ── E2E (Playwright) ────────────────────────────────────────────────────
-      # Runs the full E2E suite. The frontend container is part of the compose
-      # stack started above. Node.js + npm ci already ran before the stack
-      # started (see comment there for the ordering rationale).
+      # Runs the full E2E suite inside the official Playwright Docker image
+      # (mcr.microsoft.com/playwright:v<pinned>-jammy). The image ships with
+      # Chromium + every X11/audio/font dep prebaked at /ms-playwright/, so
+      # there is NO `npx playwright install` step on the runner.
       #
-      # We do NOT cache ~/.cache/ms-playwright. The cache is workflow-trigger
-      # scoped: this workflow only runs on `pull_request`, so each PR has its
-      # own scope and can never read another PR's cache → every first run is
-      # a MISS and uploads ~265 MB on cleanup. The Azure-blob upload was
-      # observed to stall at ~75% indefinitely in PR #72, hanging the job
-      # until timeout. Saving ~30s on chromium reinstall isn't worth that.
-      - name: Install Playwright + system deps
-        if: always() && steps.db_tests.outcome != 'skipped'
-        run: npx playwright install --with-deps chromium
-        working-directory: frontend
-
+      # Why containerized (mid-2026): both prior approaches hung the runner
+      # to the 20-min job timeout on this paused repo:
+      #   - `npx playwright install --with-deps chromium` hangs on the
+      #     internal `sudo apt-get install` (suspected `unattended-upgrades`
+      #     holding the apt lock on ubuntu-latest).
+      #   - `npx playwright install chromium` (no deps) hangs even on the
+      #     Chromium download from cdn.playwright.dev.
+      # The Docker image bypasses both: image pull is one HTTPS GET against
+      # mcr.microsoft.com (separate CDN), Chromium is already on disk inside
+      # the image, no apt step ever runs.
+      #
+      # IMPORTANT: keep the image tag's Playwright version aligned with
+      # frontend/package.json's @playwright/test version. The pin matches
+      # ^1.59.1 there → v1.59.1-jammy here. Future Playwright bumps need
+      # this tag updated in the same PR.
+      #
+      # We do NOT cache ~/.cache/ms-playwright. PR #72 observed the GHA
+      # Azure-blob upload stall at ~75% indefinitely on a 265 MB cleanup
+      # upload, hanging the job until timeout. Containerized approach
+      # sidesteps this entirely since browsers live in the image layer.
       - name: Wait for frontend
         if: always() && steps.db_tests.outcome != 'skipped'
         run: |
@@ -243,11 +257,14 @@ jobs:
         id: e2e_tests
         if: always() && steps.db_tests.outcome != 'skipped'
         run: |
-          npm run test:e2e 2>&1 | tee /tmp/e2e-tests.log
+          docker run --rm \
+            --network=host \
+            -v ${{ github.workspace }}/frontend:/work \
+            -w /work \
+            -e CI=true \
+            mcr.microsoft.com/playwright:v1.59.1-jammy \
+            npx playwright test 2>&1 | tee /tmp/e2e-tests.log
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
-        working-directory: frontend
-        env:
-          CI: "true"
 
       - name: Upload Playwright report on failure
         if: always() && steps.e2e_tests.outputs.exit_code != '0' && steps.e2e_tests.outputs.exit_code != ''
