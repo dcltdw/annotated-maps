@@ -1,5 +1,7 @@
 # AI-Agent Collaboration Conventions
 
+> **Repo status (2026-05-11): paused.** Active development has moved to [annotated-maps-sp](https://github.com/dcltdw/annotated-maps-sp), a greenfield rebuild on the [Superpowers](https://github.com/obra/superpowers) framework. These conventions are **frozen** here; the `-sp` repo uses Superpowers' skills instead. Agents reading this file in `annotated-maps`: the rules below still describe how this repo was built, but **no new feature work belongs here** — direct the user to `-sp` for new requests. See [#264](https://github.com/dcltdw/annotated-maps/issues/264).
+
 Process conventions for working with an AI coding agent (e.g., Claude Code,
 Cursor, Aider) on a real software project. Distilled from the `nodes-rebuild`
 work on annotated-maps; the rules are written portably so they transfer to
