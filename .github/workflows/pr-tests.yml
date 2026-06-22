@@ -225,9 +225,20 @@ jobs:
       # a MISS and uploads ~265 MB on cleanup. The Azure-blob upload was
       # observed to stall at ~75% indefinitely in PR #72, hanging the job
       # until timeout. Saving ~30s on chromium reinstall isn't worth that.
-      - name: Install Playwright + system deps
+      #
+      # We do NOT pass --with-deps. Observed mid-2026 on this paused repo:
+      # Playwright's internal `sudo apt-get install` hangs the runner to the
+      # 20-min job timeout (suspected `unattended-upgrades` holding the apt
+      # lock on ubuntu-latest). ubuntu-latest ships with the libnss3 /
+      # libnspr4 / libatk* / libcairo2 / libpango* / libasound2 / libxkbcommon
+      # / libxcomposite / libxdamage / libxrandr / libxfixes / libgbm /
+      # libgtk-3 set Chromium needs preinstalled, so skipping --with-deps is
+      # safe in practice. If a future Playwright version adds a genuinely-
+      # missing dep, E2E fails with a clear "missing library" error and we
+      # preinstall it explicitly here.
+      - name: Install Playwright
         if: always() && steps.db_tests.outcome != 'skipped'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install chromium
         working-directory: frontend
 
       - name: Wait for frontend
