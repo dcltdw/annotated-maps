@@ -1,5 +1,9 @@
 # Annotated Maps
 
+> ## Status: paused (2026-05-11)
+>
+> Active development has moved to **[annotated-maps-sp](https://github.com/dcltdw/annotated-maps-sp)**, a greenfield rebuild using the [Superpowers](https://github.com/obra/superpowers) skills framework. This repo is the reference implementation; no new features are planned here. Security fixes may still land. The pause will be re-evaluated after the trial reaches its first checkpoint. See [#264](https://github.com/dcltdw/annotated-maps/issues/264) for the full notice.
+
 A multi-tenant, collaborative map annotation platform. Users create
 maps, mark places as a tree of *nodes*, attach *notes* and media,
 group nodes and notes into narrative *plots* across maps, and control
